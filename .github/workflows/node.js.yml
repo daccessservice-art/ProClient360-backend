@@ -1,0 +1,33 @@
+name: Node.js CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    strategy:
+      matrix:
+        node-version: [20.19.6] # Updated to match your local v20.19.6
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - run: npm ci
+    
+    - name: Setup Environment
+      run: |
+        touch .env
+        echo '${{ secrets.ProClient360_ENV }}' > .env
+        
+    - name: Restart Server
+      # This tries to restart, and if it's not running, it starts it fresh
+      run: pm2 restart server || pm2 start server.js --name "server"
