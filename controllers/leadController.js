@@ -81,6 +81,7 @@ exports.getLeads = async (req, res) => {
     const allLeadsCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id) });
     const notFeasibleCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'not-feasible'});
     const feasibleCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'feasible' });
+    const callUnansweredCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'call-unanswered'}); // New count
 
     res.status(200).json({
       success: true,
@@ -88,6 +89,7 @@ exports.getLeads = async (req, res) => {
       allLeadsCount,
       notFeasibleCount,
       feasibleCount,
+      callUnansweredCount, // Added to response
       pagination: {
         currentPage: page,
         totalPages,
@@ -343,7 +345,8 @@ exports.assignLead = async (req, res) => {
       assignedBy: lead.assignedBy
     });
 
-    if (feasibility === 'feasible' || feasibility === 'not-feasible') {
+    // Update to handle call-unanswered
+    if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') {
       lead.feasibility = feasibility;
     } else {
       lead.feasibility = 'feasible';
@@ -698,5 +701,3 @@ exports.deleteLead = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
-
-  

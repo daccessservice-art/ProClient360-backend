@@ -41,7 +41,7 @@ const leadSchema = new Schema({
     },
     feasibility: {
         type: String,
-        enum: ['feasible', 'not-feasible', 'none'],
+        enum: ['feasible', 'not-feasible', 'call-unanswered', 'none'],
         default: 'none'
     },
     customerType: {
