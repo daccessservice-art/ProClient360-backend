@@ -121,49 +121,77 @@ exports.createPurchaseOrder = async (req, res) => {
     const user = req.user;
     const poData = req.body;
 
-    // Check if order number already exists
-    const existingPO = await PurchaseOrder.findOne({
-      company: user.company ? user.company : user._id,
-      orderNumber: poData.orderNumber,
-    });
-
-    if (existingPO) {
-      return res.status(409).json({ 
-        success: false, 
-        error: "Purchase order with this order number already exists" 
-      });
+    // Validate payment terms
+    if (poData.paymentTerms) {
+      const { advance, payAgainstDelivery, payAfterCompletion } = poData.paymentTerms;
+      const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
+      
+      if (totalPayment > 100) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "The total payment percentage cannot exceed 100%" 
+        });
+      }
     }
 
+    // Create new purchase order
     const newPurchaseOrder = new PurchaseOrder({
       ...poData,
       company: user.company ? user.company : user._id,
       createdBy: user._id,
     });
 
-    if (newPurchaseOrder) {
-      await newPurchaseOrder.save();
-      
+    // Save with retry logic for duplicate key errors
+    let savedPO = null;
+    let retryCount = 0;
+    const maxRetries = 3;
+
+    while (!savedPO && retryCount < maxRetries) {
+      try {
+        savedPO = await newPurchaseOrder.save();
+      } catch (saveError) {
+        if (saveError.code === 11000 && saveError.keyPattern && saveError.keyPattern.orderNumber) {
+          // Duplicate key error for orderNumber, regenerate and retry
+          console.log(`Duplicate order number detected, retrying... (Attempt ${retryCount + 1}/${maxRetries})`);
+          
+          // Clear the order number to trigger regeneration
+          newPurchaseOrder.orderNumber = undefined;
+          retryCount++;
+          
+          if (retryCount >= maxRetries) {
+            throw saveError;
+          }
+        } else {
+          throw saveError; // Re-throw if it's not a duplicate key error
+        }
+      }
+    }
+
+    if (savedPO) {
       // Create history record
       await new PurchaseOrderHistory({
-        purchaseOrder: newPurchaseOrder._id,
+        purchaseOrder: savedPO._id,
         updatedBy: user._id,
         updateType: 'CREATE',
         description: 'Purchase order created',
-        newValues: { ...poData }
+        newValues: { ...poData, orderNumber: savedPO.orderNumber }
       }).save();
       
       res.status(201).json({
         success: true,
         message: "Purchase order created successfully",
-      });
-    } else {
-      res.status(400).json({ 
-        success: false,
-        error: "Invalid purchase order data" 
+        orderNumber: savedPO.orderNumber
       });
     }
   } catch (error) {
-    if (error.name === "ValidationError") {
+    console.error("Error creating purchase order:", error);
+    
+    if (error.code === 11000) {
+      res.status(409).json({ 
+        success: false, 
+        error: "Duplicate order number generated. Please try again." 
+      });
+    } else if (error.name === "ValidationError") {
       res.status(400).json({ 
         success: false, 
         error: error.message 
@@ -215,6 +243,19 @@ exports.updatePurchaseOrder = async (req, res) => {
       });
     }
 
+    // Validate payment terms
+    if (updatedData.paymentTerms) {
+      const { advance, payAgainstDelivery, payAfterCompletion } = updatedData.paymentTerms;
+      const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
+      
+      if (totalPayment > 100) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "The total payment percentage cannot exceed 100%" 
+        });
+      }
+    }
+
     // Store previous values for history
     const previousValues = { ...existingPO._doc };
     
@@ -224,31 +265,10 @@ exports.updatePurchaseOrder = async (req, res) => {
     // Check if items are being updated
     const itemsChanged = JSON.stringify(existingPO.items) !== JSON.stringify(updatedData.items);
     
-    // Check if price is being updated
-    let priceChanged = false;
-    let priceChangeDetails = [];
-    
-    if (itemsChanged) {
-      const prevItemsMap = new Map(existingPO.items.map(item => [`${item.brandName}-${item.modelNo}`, item]));
-      const newItemsMap = new Map(updatedData.items.map(item => [`${item.brandName}-${item.modelNo}`, item]));
-      
-      // Check for price changes in existing items
-      for (const [key, newItem] of newItemsMap) {
-        const prevItem = prevItemsMap.get(key);
-        if (prevItem && prevItem.price !== newItem.price) {
-          priceChanged = true;
-          priceChangeDetails.push({
-            brandName: newItem.brandName,
-            modelNo: newItem.modelNo,
-            previousPrice: prevItem.price,
-            newPrice: newItem.price,
-            changeAmount: newItem.price - prevItem.price,
-            changePercent: ((newItem.price - prevItem.price) / prevItem.price * 100).toFixed(2)
-          });
-        }
-      }
-    }
+    // Check if payment terms are being updated
+    const paymentTermsChanged = JSON.stringify(existingPO.paymentTerms) !== JSON.stringify(updatedData.paymentTerms);
 
+    // Update purchase order
     const updatedPurchaseOrder = await PurchaseOrder.findByIdAndUpdate(
       id, 
       updatedData, 
@@ -265,9 +285,9 @@ exports.updatePurchaseOrder = async (req, res) => {
     if (statusChanged) {
       updateType = 'STATUS_CHANGE';
       description = `Status changed from ${existingPO.status} to ${updatedData.status}`;
-    } else if (priceChanged) {
-      updateType = 'ITEM_UPDATE';
-      description = 'Item prices updated';
+    } else if (paymentTermsChanged) {
+      updateType = 'PAYMENT_TERMS_UPDATE';
+      description = 'Payment terms updated';
     } else if (itemsChanged) {
       updateType = 'ITEM_UPDATE';
       description = 'Items updated';
@@ -283,8 +303,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       changes: {
         statusChanged,
         itemsChanged,
-        priceChanged,
-        priceChangeDetails
+        paymentTermsChanged
       }
     }).save();
 

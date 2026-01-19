@@ -29,7 +29,7 @@ exports.showAll = async (req, res) => {
       page = 1;
       query.$or = [
         { materialCode: { $regex: searchRegex } },
-        { hsmCode: { $regex: searchRegex } },
+        { productName: { $regex: searchRegex } },
         { materialName: { $regex: searchRegex } },
         { description: { $regex: searchRegex } }
       ];
@@ -143,7 +143,7 @@ exports.search = async (req, res) => {
       company: user.company ? user.company : user._id,
       $or: [
         { materialCode: { $regex: query, $options: 'i' } },
-        { hsmCode: { $regex: query, $options: 'i' } },
+        { productName: { $regex: query, $options: 'i' } },
         { materialName: { $regex: query, $options: 'i' } },
         { description: { $regex: query, $options: 'i' } }
       ]
@@ -185,19 +185,40 @@ exports.search = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const {
+      // Basic inventory fields
       materialCode,
-      hsmCode,
       materialName,
       category,
-      unit,
       unitPrice,
-      gstPercentage,
       currentStock,
       minStockLevel,
-      maxStockLevel,
       warehouseLocation,
       stockLocation,
-      description
+      openingDate, // New field
+      description,
+      
+      // Product fields
+      productName,
+      brandName,
+      model,
+      hsnCode,
+      productCategory,
+      baseUOM,
+      uomConversion,
+      mrp,
+      salesPrice,
+      purchasePrice,
+      minQtyLevel,
+      discountType,
+      discountValue,
+      
+      // Tax fields
+      taxType,
+      gstRate,
+      gstEffectiveDate,
+      
+      // Timestamp (if provided, otherwise use current time)
+      createdAt
     } = req.body;
     
     // Check if material code already exists
@@ -206,29 +227,46 @@ exports.create = async (req, res) => {
       return res.status(409).json({ success: false, error: "Material with this code already exists" });
     }
     
-    // Check if HSM code already exists
-    const existingHSM = await Inventory.findOne({ hsmCode });
-    if (existingHSM) {
-      return res.status(409).json({ success: false, error: "Material with this HSM code already exists" });
-    }
-    
     // Create new inventory item
     const newInventory = new Inventory({
+      // Basic inventory fields
       materialCode,
-      hsmCode,
       materialName,
       category,
-      unit,
       unitPrice,
-      gstPercentage,
       currentStock,
       minStockLevel,
-      maxStockLevel,
       warehouseLocation,
       stockLocation,
+      openingDate, // New field
       description,
+      
+      // Product fields
+      productName,
+      brandName,
+      model,
+      hsnCode,
+      productCategory,
+      baseUOM,
+      uomConversion,
+      mrp,
+      salesPrice,
+      purchasePrice,
+      minQtyLevel,
+      discountType,
+      discountValue,
+      
+      // Tax fields
+      taxType,
+      gstRate,
+      gstEffectiveDate,
+      
+      // Company and user references
       company: req.user.company || req.user._id,
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      
+      // Timestamp (if provided, otherwise use current time)
+      createdAt: createdAt || new Date()
     });
     
     if (newInventory) {
@@ -289,19 +327,38 @@ exports.updateInventory = async (req, res) => {
     }
     
     const {
+      // Basic inventory fields
       materialCode,
-      hsmCode,
       materialName,
       category,
-      unit,
       unitPrice,
-      gstPercentage,
       currentStock,
       minStockLevel,
-      maxStockLevel,
       warehouseLocation,
       stockLocation,
+      openingDate, // New field
       description,
+      
+      // Product fields
+      productName,
+      brandName,
+      model,
+      hsnCode,
+      productCategory,
+      baseUOM,
+      uomConversion,
+      mrp,
+      salesPrice,
+      purchasePrice,
+      minQtyLevel,
+      discountType,
+      discountValue,
+      
+      // Tax fields
+      taxType,
+      gstRate,
+      gstEffectiveDate,
+      
       // Transaction fields
       transaction
     } = req.body;
@@ -314,27 +371,39 @@ exports.updateInventory = async (req, res) => {
       }
     }
     
-    // Check if HSM code already exists (if it's being changed)
-    if (hsmCode && hsmCode !== originalData.hsmCode) {
-      const existingHSM = await Inventory.findOne({ hsmCode });
-      if (existingHSM) {
-        return res.status(409).json({ success: false, error: "Material with this HSM code already exists" });
-      }
-    }
-    
     const updateData = {
+      // Basic inventory fields
       materialCode,
-      hsmCode,
       materialName,
       category,
-      unit,
       unitPrice,
-      gstPercentage,
       minStockLevel,
-      maxStockLevel,
       warehouseLocation,
       stockLocation,
+      openingDate, // New field
       description,
+      
+      // Product fields
+      productName,
+      brandName,
+      model,
+      hsnCode,
+      productCategory,
+      baseUOM,
+      uomConversion,
+      mrp,
+      salesPrice,
+      purchasePrice,
+      minQtyLevel,
+      discountType,
+      discountValue,
+      
+      // Tax fields
+      taxType,
+      gstRate,
+      gstEffectiveDate,
+      
+      // User reference
       lastUpdatedBy: req.user._id
     };
     

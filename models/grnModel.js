@@ -1,5 +1,29 @@
 const mongoose = require('mongoose');
 
+// Counter schema embedded in the GRN model file
+const counterSchema = new mongoose.Schema({
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: true
+  },
+  financialYear: {
+    type: String,
+    required: true
+  },
+  sequence: {
+    type: Number,
+    default: 0
+  }
+}, {
+  timestamps: true
+});
+
+// Compound index to ensure uniqueness per company per financial year
+counterSchema.index({ company: 1, financialYear: 1 }, { unique: true });
+
+const Counter = mongoose.model('Counter', counterSchema);
+
 const grnItemSchema = new mongoose.Schema({
   brandName: {
     type: String,
@@ -179,47 +203,38 @@ const grnSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-grnSchema.pre('save', async function(next) {
-  if (!this.grnNumber) {
-    const grnDate = new Date(this.grnDate);
-    const currentYear = grnDate.getFullYear();
-    const nextYear = currentYear + 1;
-    const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
-    
-    const startOfYear = new Date(currentYear, 3, 1);
-    const endOfYear = new Date(nextYear, 2, 31); 
-    
-    try {
-      const latestGRN = await mongoose.model('GRN').findOne({
-        grnDate: {
-          $gte: startOfYear,
-          $lte: endOfYear
-        }
-      }).sort({ grnNumber: -1 });
-      
-      let serialNumber = 1;
-      if (latestGRN && latestGRN.grnNumber) {
-        const parts = latestGRN.grnNumber.split('/');
-        if (parts.length === 3) {
-          const lastSerial = parseInt(parts[2], 10);
-          if (!isNaN(lastSerial)) {
-            serialNumber = lastSerial + 1;
-          }
-        }
-      }
-      
-      const formattedSerial = String(serialNumber).padStart(3, '0');
-      this.grnNumber = `GRN/${financialYear}/${formattedSerial}`;
-      
-      next();
-    } catch (error) {
-      next(error);
-    }
+// Helper function to get financial year
+function getFinancialYear(date) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  
+  if (month >= 3) { // April onwards
+    return `${year}-${(year + 1).toString().slice(-2)}`;
   } else {
-    next();
+    return `${year - 1}-${year.toString().slice(-2)}`;
   }
-});
+}
 
+// Static method to generate unique GRN number
+grnSchema.statics.generateGRNNumber = async function(companyId, grnDate) {
+  const financialYear = getFinancialYear(grnDate);
+  
+  // Use findOneAndUpdate with atomic operations
+  const counter = await Counter.findOneAndUpdate(
+    { company: companyId, financialYear },
+    { $inc: { sequence: 1 } },
+    { 
+      new: true, 
+      upsert: true,
+      setDefaultsOnInsert: true 
+    }
+  );
+  
+  const formattedSerial = String(counter.sequence).padStart(3, '0');
+  return `GRN/${financialYear}/${formattedSerial}`;
+};
+
+// Export both models
 const GRN = mongoose.model('GRN', grnSchema);
 
-module.exports = GRN;
+module.exports = { GRN, Counter };

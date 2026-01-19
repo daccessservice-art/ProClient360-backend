@@ -14,7 +14,7 @@ const purchaseOrderHistorySchema = new mongoose.Schema({
   updateType: {
     type: String,
     required: true,
-    enum: ['CREATE', 'UPDATE', 'STATUS_CHANGE', 'ITEM_ADD', 'ITEM_REMOVE', 'ITEM_UPDATE'],
+    enum: ['CREATE', 'UPDATE', 'STATUS_CHANGE', 'ITEM_ADD', 'ITEM_REMOVE', 'ITEM_UPDATE', 'PAYMENT_TERMS_UPDATE'],
   },
   description: {
     type: String,

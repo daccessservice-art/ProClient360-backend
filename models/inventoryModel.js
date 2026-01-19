@@ -28,6 +28,7 @@ const transactionSchema = new mongoose.Schema({
 }, { _id: true });
 
 const inventorySchema = new mongoose.Schema({
+  // Basic inventory fields
   materialCode: {
     type: String,
     required: [true, 'Material code is required'],
@@ -35,61 +36,31 @@ const inventorySchema = new mongoose.Schema({
     trim: true,
     maxlength: [50, 'Material code cannot exceed 50 characters'],
   },
-  hsmCode: {
-    type: String,
-    required: [true, 'HSM code is required'],
-    unique: true,
-    trim: true,
-    maxlength: [50, 'HSM code cannot exceed 50 characters'],
-  },
   materialName: {
     type: String,
-    required: [true, 'Material name is required'],
     trim: true,
     maxlength: [100, 'Material name cannot exceed 100 characters'],
   },
   category: {
     type: String,
-    required: [true, 'Category is required'],
     enum: {
-      values: ['Raw Material', 'Finished Goods', 'Repairing Material', 'Scrap'],
-      message: 'Category must be one of: Raw Material, Finished Goods, Repairing Material, Scrap',
+      values: ['Raw Material', 'Finished Goods', 'Repairing Material', 'Scrap', 'Asset'], // Added 'Asset'
+      message: 'Category must be one of: Raw Material, Finished Goods, Repairing Material, Scrap, Asset',
     },
     trim: true,
   },
-  unit: {
-    type: String,
-    required: [true, 'Unit is required'],
-    enum: {
-      values: ['Pcs', 'Kg', 'Ltr', 'Mtr', 'Box', 'Set', 'Pair', 'Roll', 'Sheet', 'Bag'],
-      message: 'Unit must be one of: Pcs, Kg, Ltr, Mtr, Box, Set, Pair, Roll, Sheet, Bag',
-    },
-    default: 'Pcs',
-  },
   unitPrice: {
     type: Number,
-    required: [true, 'Unit price is required'],
     min: [0, 'Unit price cannot be negative'],
-  },
-  gstPercentage: {
-    type: Number,
-    required: [true, 'GST Percentage is required'],
-    min: [0, 'GST Percentage cannot be negative'],
   },
   currentStock: {
     type: Number,
-    required: [true, 'Current stock is required'],
     min: [0, 'Current stock cannot be negative'],
     default: 0,
   },
   minStockLevel: {
     type: Number,
-    required: [true, 'Minimum stock level is required'],
     min: [0, 'Minimum stock level cannot be negative'],
-  },
-  maxStockLevel: {
-    type: Number,
-    min: [0, 'Maximum stock level cannot be negative'],
   },
   warehouseLocation: {
     type: String,
@@ -103,8 +74,99 @@ const inventorySchema = new mongoose.Schema({
     maxlength: [100, 'Location cannot exceed 100 characters'],
     default: '',
   },
-
+  openingDate: { // New field
+    type: Date,
+    default: Date.now,
+  },
+  description: {
+    type: String,
+    trim: true,
+    maxlength: [500, 'Description cannot exceed 500 characters'],
+    default: '',
+  },
+  
+  // Product fields
+  productName: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Product name cannot exceed 100 characters'],
+  },
+  brandName: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Brand name cannot exceed 100 characters'],
+  },
+  model: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Model cannot exceed 100 characters'],
+  },
+  hsnCode: {
+    type: String,
+    trim: true,
+    maxlength: [8, 'HSN code cannot exceed 8 characters'],
+  },
+  productCategory: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Product category cannot exceed 100 characters'],
+  },
+  baseUOM: {
+    type: String,
+    trim: true,
+    maxlength: [50, 'Base UOM cannot exceed 50 characters'],
+  },
+  uomConversion: {
+    type: Number,
+    default: 1,
+    min: [0, 'UOM conversion cannot be negative'],
+  },
+  mrp: {
+    type: Number,
+    min: [0, 'MRP cannot be negative'],
+  },
+  salesPrice: {
+    type: Number,
+    min: [0, 'Sales price cannot be negative'],
+  },
+  purchasePrice: {
+    type: Number,
+    min: [0, 'Purchase price cannot be negative'],
+  },
+  minQtyLevel: {
+    type: Number,
+    min: [0, 'Min quantity level cannot be negative'],
+  },
+  discountType: {
+    type: String,
+    enum: ['Zero Discount', 'In percentage', 'In Value'],
+    default: 'Zero Discount',
+  },
+  discountValue: {
+    type: Number,
+    min: [0, 'Discount value cannot be negative'],
+    default: 0,
+  },
+  
+  // Tax fields
+  taxType: {
+    type: String,
+    enum: ['none', 'gst'],
+    default: 'none',
+  },
+  gstRate: {
+    type: Number,
+    min: [0, 'GST rate cannot be negative'],
+    default: 0,
+  },
+  gstEffectiveDate: {
+    type: Date,
+  },
+  
+  // Transaction history
   transactions: [transactionSchema],
+  
+  // Company and user references
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
@@ -137,17 +199,10 @@ inventorySchema.virtual('totalValue').get(function() {
   return this.currentStock * this.unitPrice;
 });
 
-// Pre-save middleware to validate max stock level
-inventorySchema.pre('save', function(next) {
-  if (this.maxStockLevel && this.maxStockLevel <= this.minStockLevel) {
-    return next(new Error('Maximum stock level must be greater than minimum stock level'));
-  }
-  next();
-});
-
 // Indexes for faster searches
 inventorySchema.index({ materialCode: 1 });
 inventorySchema.index({ materialName: 1 });
+inventorySchema.index({ productName: 1 });
 inventorySchema.index({ category: 1 });
 inventorySchema.index({ currentStock: 1 });
 inventorySchema.index({ company: 1 });

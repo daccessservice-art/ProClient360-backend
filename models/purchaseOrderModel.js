@@ -3,13 +3,11 @@ const mongoose = require('mongoose');
 const purchaseOrderItemSchema = new mongoose.Schema({
   brandName: {
     type: String,
-    required: [true, 'Brand name is required'],
     trim: true,
     maxlength: [200, 'Brand name cannot exceed 200 characters'],
   },
   modelNo: {
     type: String,
-    required: [true, 'Model number is required'],
     trim: true,
     maxlength: [200, 'Model number cannot exceed 200 characters'],
   },
@@ -20,19 +18,21 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   },
   unit: {
     type: String,
-    required: [true, 'Unit is required'],
     trim: true,
     maxlength: [50, 'Unit cannot exceed 50 characters'],
     default: 'pcs'
   },
+  baseUOM: {
+    type: String,
+    trim: true,
+    maxlength: [50, 'Base UOM cannot exceed 50 characters'],
+  },
   quantity: {
     type: Number,
-    required: [true, 'Quantity is required'],
     min: [1, 'Quantity must be at least 1'],
   },
   price: {
     type: Number,
-    required: [true, 'Price is required'],
     min: [0, 'Price cannot be negative'],
   },
   discountPercent: {
@@ -49,7 +49,6 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   },
   netValue: {
     type: Number,
-    required: [true, 'Net value is required'],
   },
 });
 
@@ -67,11 +66,9 @@ const purchaseOrderSchema = new mongoose.Schema({
   vendor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Vendor',
-    required: [true, 'Vendor is required'],
   },
   orderDate: {
     type: Date,
-    required: [true, 'Order date is required'],
   },
   orderNumber: {
     type: String,
@@ -81,7 +78,6 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   transactionType: {
     type: String,
-    required: [true, 'Transaction type is required'],
     enum: {
       values: ['B2B', 'SEZ', 'Import', 'Asset'],
       message: 'Transaction type must be one of: B2B, SEZ, Import, Asset',
@@ -89,7 +85,6 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   purchaseType: {
     type: String,
-    required: [true, 'Purchase type is required'],
     enum: {
       values: ['Project Purchase', 'Stock'],
       message: 'Purchase type must be either Project Purchase or Stock',
@@ -98,17 +93,11 @@ const purchaseOrderSchema = new mongoose.Schema({
   project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
-    required: function() {
-      return this.purchaseType === 'Project Purchase';
-    },
   },
   warehouseLocation: {
     type: String,
     trim: true,
     maxlength: [200, 'Warehouse location cannot exceed 200 characters'],
-    required: function() {
-      return this.purchaseType === 'Stock';
-    },
   },
   deliveryAddress: {
     type: String,
@@ -131,33 +120,14 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   totalAmount: {
     type: Number,
-    required: true,
     min: [0, 'Total amount cannot be negative'],
   },
   totalTax: {
     type: Number,
-    required: true,
     min: [0, 'Total tax cannot be negative'],
-  },
-  transportCharges: {
-    type: Number,
-    default: 0,
-    min: [0, 'Transport charges cannot be negative'],
-  },
-  packagingCharges: {
-    type: Number,
-    default: 0,
-    min: [0, 'Packaging charges cannot be negative'],
-  },
-  taxOnTransport: {
-    type: Number,
-    default: 18,
-    min: [0, 'Tax on transport cannot be negative'],
-    max: [100, 'Tax on transport cannot exceed 100%'],
   },
   grandTotal: {
     type: Number,
-    required: true,
     min: [0, 'Grand total cannot be negative'],
   },
   remark: {
@@ -169,16 +139,23 @@ const purchaseOrderSchema = new mongoose.Schema({
     type: String,
     trim: true,
   }],
-  delivery: {
-    type: String,
-    enum: ['Free', 'Chargable', 'At actual'],
-    default: 'Free',
-  },
   paymentTerms: {
     advance: {
       type: Number,
       min: [0, 'Advance percentage cannot be negative'],
       max: [100, 'Advance percentage cannot exceed 100%'],
+      default: 0,
+    },
+    payAgainstDelivery: {
+      type: Number,
+      min: [0, 'Pay against delivery percentage cannot be negative'],
+      max: [100, 'Pay against delivery percentage cannot exceed 100%'],
+      default: 0,
+    },
+    payAfterCompletion: {
+      type: Number,
+      min: [0, 'Pay after completion percentage cannot be negative'],
+      max: [100, 'Pay after completion percentage cannot exceed 100%'],
       default: 0,
     },
     creditPeriod: {
@@ -187,10 +164,12 @@ const purchaseOrderSchema = new mongoose.Schema({
       default: 0,
     },
   },
-  packagingInstructions: {
-    type: String,
-    trim: true,
-    maxlength: [500, 'Packaging instructions cannot exceed 500 characters'],
+  // New fields for terms and conditions
+  deliveryDate: {
+    type: Date,
+  },
+  materialFollowupDate: {
+    type: Date,
   },
   status: {
     type: String,
@@ -201,25 +180,45 @@ const purchaseOrderSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+// Pre-save hook to generate order number
 purchaseOrderSchema.pre('save', async function(next) {
+  // Only generate order number if it's not already set
   if (!this.orderNumber) {
     const orderDate = new Date(this.orderDate);
     const currentYear = orderDate.getFullYear();
     const nextYear = currentYear + 1;
     const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
     
-    const startOfYear = new Date(currentYear, 3, 1); 
-    const endOfYear = new Date(nextYear, 2, 31); 
+    // Calculate financial year start and end dates
+    let startOfYear, endOfYear;
     
-    const count = await mongoose.model('PurchaseOrder').countDocuments({
-      orderDate: {
-        $gte: startOfYear,
-        $lte: endOfYear
-      }
-    });
+    // Financial year starts from April 1st
+    if (orderDate.getMonth() >= 3) { // Month is 3-based (0=Jan, 3=Apr)
+      startOfYear = new Date(currentYear, 3, 1); // April 1st of current year
+      endOfYear = new Date(nextYear, 2, 31); // March 31st of next year
+    } else {
+      startOfYear = new Date(currentYear - 1, 3, 1); // April 1st of previous year
+      endOfYear = new Date(currentYear, 2, 31); // March 31st of current year
+    }
     
-    const serialNumber = String(count + 1).padStart(3, '0');
-    this.orderNumber = `DA/${financialYear}/${serialNumber}`;
+    try {
+      // Count existing orders for this financial year
+      const count = await mongoose.model('PurchaseOrder').countDocuments({
+        orderDate: {
+          $gte: startOfYear,
+          $lte: endOfYear
+        },
+        company: this.company // Ensure count is per company
+      });
+      
+      // Generate serial number with leading zeros
+      const serialNumber = String(count + 1).padStart(3, '0');
+      this.orderNumber = `DA/${financialYear}/${serialNumber}`;
+    } catch (error) {
+      console.error('Error generating order number:', error);
+      // Fallback to timestamp if there's an error
+      this.orderNumber = `DA/${financialYear}/${Date.now().toString().slice(-6)}`;
+    }
   }
   next();
 });
