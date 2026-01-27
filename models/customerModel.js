@@ -1,15 +1,20 @@
 const mongoose = require('mongoose');
 
-
 const customerSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Employee', 
+    ref: 'Employee',
+  },
+  ownedBy: {
+    type: String, // Changed from ObjectId to String to allow manual input
+    required: [true, 'Owner name is required'],
+    trim: true,
+    maxlength: [100, 'Owner name cannot exceed 100 characters'],
   },
   email: {
     type: String,
     required: [true, 'Email is required'],
-    trim:true,
+    trim: true,
     unique: true,
     lowercase: true,
     maxlength: [100, 'Email cannot exceed 100 characters'],
@@ -17,45 +22,45 @@ const customerSchema = new mongoose.Schema({
   },
   custName: {
     type: String,
-        required: [true, 'Customer Name is required'],
-        trim: true,
-        minlength: [2, 'Customer name must be at least 2 characters long'],
-        maxlength: [300, 'Customer name cannot exceed 300 characters'],
+    required: [true, 'Customer Name is required'],
+    trim: true,
+    minlength: [2, 'Customer name must be at least 2 characters long'],
+    maxlength: [300, 'Customer name cannot exceed 300 characters'],
   },
-  billingAddress:{
-    add:{
-      type:String,
+  billingAddress: {
+    add: {
+      type: String,
       maxlength: [500, 'Address cannot exceed 500 characters'],
-      required:[true, 'Address is required'],
-  },
-  city:{
-      type:String,
+      required: [true, 'Address is required'],
+    },
+    city: {
+      type: String,
       maxLength: [50, 'City cannot exceed 50 characters'],
-      required:[true, 'City is required'],
-  },
-  state:{
-      type:String,
+      required: [true, 'City is required'],
+    },
+    state: {
+      type: String,
       maxLength: [50, 'State cannot exceed 50 characters'],
-      required:[true, 'State is required'],
-  },
-  country:{
-      type:String,
+      required: [true, 'State is required'],
+    },
+    country: {
+      type: String,
       maxLength: [50, 'Country cannot exceed 50 characters'],
-      required:[true, 'Country is required'],
-  },
-  pincode:{
-      type:Number,
+      required: [true, 'Country is required'],
+    },
+    pincode: {
+      type: Number,
       maxLength: [6, 'Pincode cannot exceed 6 digits'],
-      required:[true, 'Pincode is required'],
+      required: [true, 'Pincode is required'],
+    },
   },
-  },
-  company:{
+  company: {
     type: mongoose.Schema.Types.ObjectId,
-    ref:'Company'
+    ref: 'Company'
   },
-  GSTNo:{
-    type:String,
-    required:[true, 'GST number is required'],
+  GSTNo: {
+    type: String,
+    required: [true, 'GST number is required'],
     maxLength: [15, 'GST number cannot exceed 15 characters'],
   },
   customerContactPersonName1: {
@@ -80,7 +85,7 @@ const customerSchema = new mongoose.Schema({
     maxlength: [11, 'Phone number cannot exceed 11 digits'],
     match: [/^\d+$/, 'Invalid Phone number, It must contain only numbers'],
   },
-  zone:{
+  zone: {
     type: String,
     required: [true, 'Zone is required'],
     enum: {
@@ -91,7 +96,6 @@ const customerSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
-
 
 const Customer = mongoose.model('Customer', customerSchema);
 

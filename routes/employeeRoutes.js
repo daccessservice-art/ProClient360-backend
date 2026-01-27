@@ -8,6 +8,7 @@ router.get('/dashboard',isLoggedIn, employeeController.dashboard);
 
 router.get('/',permissionMiddleware(['viewEmployee']),employeeController.showAll);
 
+router.get('/all',permissionMiddleware(['viewEmployee']), employeeController.getAllEmployees); // New route added
 
 router.get('/search',permissionMiddleware(['viewEmployee']), employeeController.search);
 

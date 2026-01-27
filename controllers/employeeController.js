@@ -10,8 +10,25 @@ const TaskSheet = require('../models/taskSheetModel');
 const Service = require('../models/serviceModel');
 const { newUserMail } = require('../mailsService/newEmpCreation');
 
-
-
+exports.getAllEmployees = async (req, res) => {
+  try {
+    const user = req.user;
+    const employees = await Employee.find({
+      company: user.company ? user.company : user._id,
+      status: 'active' // Only get active employees
+    }).select('_id name email');
+    
+    res.status(200).json({
+      success: true,
+      employees
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error fetching employees: " + error.message
+    });
+  }
+};
 
 exports.showAll = async (req, res) => {
   try {
@@ -192,7 +209,7 @@ exports.create=async (req, res) => {
     const hashPassword=await bcrypt.hash(password,salt);
   
     const boyProfilePic = `https://avatar.iran.liara.run/public/boy?username=${email}`;
-		const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${email}`;
+        const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${email}`;
     const otherProfilePic= `https://avatar.iran.liara.run/username?username=${name}`;
     const newEmp=Employee({
       name,
@@ -316,4 +333,3 @@ exports.updateEmployee = async (req, res) => {
     res.status(400).json({ error: 'Error while updating Employee: ' + error.message });
   }
 };
-
