@@ -140,6 +140,14 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Remarks cannot exceed 500 characters'],
   },
+  // New fields for tracking vendors registered from links
+  registeredFromLink: {
+    type: Boolean,
+    default: false
+  },
+  linkId: {
+    type: String
+  }
 }, {
   timestamps: true,
 });
