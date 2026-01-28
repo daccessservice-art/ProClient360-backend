@@ -7,6 +7,7 @@ const path = require('path');
 // const { Server } = require('socket.io');
 
 const dotenv = require('dotenv');
+dotenv.config();
 
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
 
@@ -21,7 +22,7 @@ const taskRoutes = require('./routes/taskRoutes');
 const departmentRoutes = require('./routes/departmentRoutes');
 const designationRoutes = require('./routes/designationRoutes');
 const actionRoutes = require('./routes/actionRoutes');
-const ticketRoutes = require('./routes/ticketRoutes');
+const ticketRoutes = require('./routes/tickRoutes');
 const serviceRoutes = require('./routes/serviceRoutes')
 const feedbackRoutes = require('./routes/feedbackRoutes');
 const serviceActionRoutes = require('./routes/serviceActionRoutes');
@@ -46,8 +47,6 @@ const qcRoutes = require('./routes/qcRoutes');
 const dcRoutes = require('./routes/dcRoutes');
 
 const mrfRoutes = require('./routes/mrfRoutes');
-
-dotenv.config();
 
 
 const app = express();
