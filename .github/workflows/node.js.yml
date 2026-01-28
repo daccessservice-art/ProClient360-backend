@@ -27,10 +27,13 @@ jobs:
     - name: Deploy to Production Directory
       run: |
         # Create production directory if it doesn't exist
-        mkdir -p /home/vicky/production/proclient-backend
+        sudo mkdir -p /home/vicky/production/proclient-backend
+        
+        # Remove old node_modules to avoid permission issues
+        sudo rm -rf /home/vicky/production/proclient-backend/node_modules
         
         # Copy all files except node_modules, .env, and serviceAccountKey.json
-        rsync -av --delete \
+        sudo rsync -av --delete \
           --exclude 'node_modules' \
           --exclude '.env' \
           --exclude 'serviceAccountKey.json' \
@@ -38,17 +41,17 @@ jobs:
           ./ /home/vicky/production/proclient-backend/
         
         # Copy node_modules
-        cp -r node_modules /home/vicky/production/proclient-backend/
+        sudo cp -r node_modules /home/vicky/production/proclient-backend/
     
     - name: Setup Environment Files
       run: |
         cd /home/vicky/production/proclient-backend
         
         # Create .env file
-        echo '${{ secrets.PROCLIENT360_BACK_ENV }}' > .env
+        sudo bash -c "echo '${{ secrets.PROCLIENT360_BACK_ENV }}' > .env"
         
         # Create serviceAccountKey.json file
-        echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}' > serviceAccountKey.json
+        sudo bash -c "echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}' > serviceAccountKey.json"
     
     - name: Set Correct Permissions
       run: |
