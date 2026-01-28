@@ -11,7 +11,7 @@ const actionSchema = new Schema({
     action: {
         type: String,
         maxlength: [500, 'Action cannot exceed 500 characters'],
-        required: [true, 'Action required'],
+        required: [true, 'Action Is required'],
         lowercase: true,
     },
     actionBy:{
