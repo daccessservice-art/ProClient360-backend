@@ -67,9 +67,18 @@ jobs:
     
     - name: Check Deployment Status
       run: |
-        sleep 3
+        sleep 5
         sudo -u vicky pm2 list
         sudo -u vicky pm2 logs proclient-backend --lines 10 --nostream
         
-        # Test if server is responding
-        curl -f http://localhost:5443/api || exit 1
+        # Test if server is responding (retry a few times)
+        for i in {1..5}; do
+          if curl -f http://localhost:5443/api; then
+            echo "Server is responding!"
+            exit 0
+          fi
+          echo "Attempt $i failed, retrying..."
+          sleep 2
+        done
+        echo "Server failed to respond after 5 attempts"
+        exit 1
