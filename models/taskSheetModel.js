@@ -1,21 +1,19 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
-
-
 const taskSheetSchema = new Schema({
-  project:{
+  project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project'
   },
-  employees:[ {
+  employees: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Employee',
     required: [true, 'At least one employee is required for the task sheet']
   }],
-  company:{
+  company: {
     type: mongoose.Schema.Types.ObjectId,
-    ref:'Company'
+    ref: 'Company'
   },
   taskName: {
     type: mongoose.Schema.Types.ObjectId,
@@ -26,37 +24,56 @@ const taskSheetSchema = new Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Employee"
   },
+  // NEW: Add priority field
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium',
+    required: [true, 'Priority is required']
+  },
   taskStatus: {
     type: String,
-    enum: ['stuck','inprocess', 'completed', 'upcomming'],
+    enum: ['stuck', 'inprocess', 'completed', 'upcomming'],
     default: 'upcomming'
   },
   startDate: {
     type: Date,
     required: [true, 'Start date is required'],
-
-},
-endDate: {
-  type: Date,
-  validate: {
-      validator: function (value) {
-          // Skip validation if endDate is null (ongoing without a set end)
-          if (!value) return true;
-
-          // Ensure that the startDate is available in the context
-          const startDate = this.startDate; // Access startDate from the document context
-
-          return value instanceof Date && !isNaN(value) && value >= startDate;
+    validate: {
+      validator: function(value) {
+        // Ensure start date is not before today
+        return !value || value >= new Date(new Date().setHours(0, 0, 0, 0));
       },
-      message: 'End date must be a valid date and after start date',
+      message: 'Start date cannot be before today'
+    }
   },
-},
-  actualEndDate:{
+  endDate: {
+    type: Date,
+    required: [true, 'End date is required'],
+    validate: [
+      {
+        validator: function(value) {
+          // Ensure end date is not before today
+          return !value || value >= new Date(new Date().setHours(0, 0, 0, 0));
+        },
+        message: 'End date cannot be before today'
+      },
+      {
+        validator: function(value) {
+          // Ensure end date is after or equal to start date
+          if (!value || !this.startDate) return true;
+          return value >= this.startDate;
+        },
+        message: 'End date must be after or equal to start date'
+      }
+    ]
+  },
+  actualEndDate: {
     type: Date,
   },
   remark: {
     type: String,
-    maxlength: 200,
+    maxlength: 2000, // Updated from 200 to 2000
     lowercase: true,
   },
   taskLevel: {
@@ -68,8 +85,10 @@ endDate: {
   workCompletionPhoto: {
     type: String 
   }
+}, {
+  timestamps: true // Add timestamps for createdAt and updatedAt
 });
 
 const TaskSheet = mongoose.model('TaskSheet', taskSheetSchema);
 
-module.exports = TaskSheet; 
+module.exports = TaskSheet;

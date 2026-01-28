@@ -1,20 +1,25 @@
 const express = require('express');
-const router= express.Router();
+const router = express.Router();
 
-const taskSheetController= require('../controllers/taskSheetController');
+const taskSheetController = require('../controllers/taskSheetController');
 const { permissionMiddleware } = require('../middlewares/auth');
 
+// Get all task sheets
+router.get('/', permissionMiddleware(['viewTaskSheet']), taskSheetController.showAll);
 
-router.get('/',permissionMiddleware(['viewTaskSheet']), taskSheetController.showAll);
-
+// Get task sheet by project ID
 router.get('/:id', permissionMiddleware(['viewTaskSheet']), taskSheetController.getTaskSheet);
 
-router.get('/my/:projectId',permissionMiddleware(['viewTaskSheet']), taskSheetController.myTask);
+// Get my tasks for a project
+router.get('/my/:projectId', permissionMiddleware(['viewTaskSheet']), taskSheetController.myTask);
 
-router.post('/',permissionMiddleware(['createTaskSheet']),taskSheetController.create);
+// Create new task sheet
+router.post('/', permissionMiddleware(['createTaskSheet']), taskSheetController.create);
 
+// Update task sheet
 router.put('/:id', permissionMiddleware(['updateTaskSheet']), taskSheetController.update);
 
-router.delete('/:id',permissionMiddleware(['deleteTaskSheet']), taskSheetController.delete);
+// Delete task sheet
+router.delete('/:id', permissionMiddleware(['deleteTaskSheet']), taskSheetController.delete);
 
-module.exports= router;
+module.exports = router;
