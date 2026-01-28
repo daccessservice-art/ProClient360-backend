@@ -47,11 +47,15 @@ jobs:
       run: |
         cd /home/vicky/production/proclient-backend
         
-        # Create .env file
-        sudo bash -c "echo '${{ secrets.PROCLIENT360_BACK_ENV }}' > .env"
+        # Create .env file using cat with heredoc
+        sudo tee .env > /dev/null << 'ENVEOF'
+        ${{ secrets.PROCLIENT360_BACK_ENV }}
+        ENVEOF
         
-        # Create serviceAccountKey.json file
-        sudo bash -c "echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}' > serviceAccountKey.json"
+        # Create serviceAccountKey.json file using cat with heredoc
+        sudo tee serviceAccountKey.json > /dev/null << 'JSONEOF'
+        ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+        JSONEOF
     
     - name: Set Correct Permissions
       run: |
@@ -60,11 +64,7 @@ jobs:
     
     - name: Restart PM2 as vicky user
       run: |
-        sudo -u vicky bash << 'EOF'
-        cd /home/vicky/production/proclient-backend
-        pm2 restart proclient-backend || pm2 start server.js --name proclient-backend
-        pm2 save
-        EOF
+        sudo -u vicky bash -c 'cd /home/vicky/production/proclient-backend && pm2 restart proclient-backend || pm2 start server.js --name proclient-backend && pm2 save'
     
     - name: Check Deployment Status
       run: |
