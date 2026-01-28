@@ -21,15 +21,25 @@ jobs:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
     
-    - name: Setup Environment
+    - name: Setup Environment Files
       run: |
+        # Create .env file
         touch .env
         echo '${{ secrets.PROCLIENT360_BACK_ENV }}' > .env
+        
+        # Create serviceAccountKey.json file
+        echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}' > serviceAccountKey.json
     
     - name: Install dependencies
       run: npm ci
     
     - name: Restart PM2 Server
       run: |
-        pm2 restart server || pm2 start server.js --name server
+        # Restart the correct PM2 process name
+        pm2 restart proclient-backend || pm2 start server.js --name proclient-backend
         pm2 save
+        
+    - name: Check PM2 Status
+      run: |
+        pm2 list
+        pm2 logs proclient-backend --lines 10 --nostream
