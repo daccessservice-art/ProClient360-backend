@@ -64,14 +64,23 @@ const startSever= async () =>{
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
-
+// Standard CORS configuration for regular API requests
 app.use(cors({
   origin: ["https://pms-front-qvyb.onrender.com", "http://localhost:3000","https://proclient360.com" ],
   credentials: true,
-  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
   allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Content-Disposition", "X-Total-Count"]
 }));
 
+// Special CORS configuration for export endpoints (blob responses)
+app.use('/api/customer/export', cors({
+  origin: ["https://pms-front-qvyb.onrender.com", "http://localhost:3000","https://proclient360.com" ],
+  credentials: true,
+  methods: "GET,OPTIONS",
+  allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Content-Disposition"]
+}));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));

@@ -352,9 +352,26 @@ exports.exportCustomersPDF = async (req, res) => {
     
     const filename = `customers_export_${new Date().toISOString().split('T')[0]}.pdf`;
     
-    // Set response headers
+    // Set response headers - Updated for production compatibility
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
+    // Handle errors during PDF generation
+    doc.on('error', (err) => {
+      console.error('PDF generation error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          success: false, 
+          error: "Error generating PDF: " + err.message 
+        });
+      }
+    });
     
     // Pipe the PDF to the response
     doc.pipe(res);
@@ -499,10 +516,12 @@ exports.exportCustomersPDF = async (req, res) => {
     doc.end();
   } catch (error) {
     console.error('PDF export error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: "Error generating PDF: " + error.message 
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        error: "Error generating PDF: " + error.message 
+      });
+    }
   }
 };
 
@@ -655,28 +674,27 @@ exports.exportCustomersExcel = async (req, res) => {
       { state: 'frozen', xSplit: 0, ySplit: 1 }
     ];
     
-    // Set response headers
+    // Set response headers - Updated for production compatibility
     const filename = `customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
     // Write the file to response and handle errors
-    workbook.xlsx.write(res)
-      .then(() => {
-        res.end();
-      })
-      .catch(err => {
-        console.error('Excel write error:', err);
-        res.status(500).json({ 
-          success: false, 
-          error: "Error writing Excel file: " + err.message 
-        });
-      });
+    await workbook.xlsx.write(res);
+    res.end();
   } catch (error) {
     console.error('Excel export error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: "Error generating Excel: " + error.message 
-    });
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        success: false, 
+        error: "Error generating Excel: " + error.message 
+      });
+    }
   }
 };
