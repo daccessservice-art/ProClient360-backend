@@ -1,3 +1,4 @@
+
 const mongoose= require('mongoose');
 const Schema = mongoose.Schema;
 
@@ -10,7 +11,7 @@ const actionSchema = new Schema({
     action: {
         type: String,
         maxlength: [500, 'Action cannot exceed 500 characters'],
-        required: [true, 'Action is required'],
+        required: [true, 'Action required'],
         lowercase: true,
     },
     actionBy:{
