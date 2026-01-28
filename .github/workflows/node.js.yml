@@ -21,25 +21,53 @@ jobs:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
     
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Deploy to Production Directory
+      run: |
+        # Create production directory if it doesn't exist
+        mkdir -p /home/vicky/production/proclient-backend
+        
+        # Copy all files except node_modules, .env, and serviceAccountKey.json
+        rsync -av --delete \
+          --exclude 'node_modules' \
+          --exclude '.env' \
+          --exclude 'serviceAccountKey.json' \
+          --exclude 'uploads' \
+          ./ /home/vicky/production/proclient-backend/
+        
+        # Copy node_modules
+        cp -r node_modules /home/vicky/production/proclient-backend/
+    
     - name: Setup Environment Files
       run: |
+        cd /home/vicky/production/proclient-backend
+        
         # Create .env file
-        touch .env
         echo '${{ secrets.PROCLIENT360_BACK_ENV }}' > .env
         
         # Create serviceAccountKey.json file
         echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}' > serviceAccountKey.json
     
-    - name: Install dependencies
-      run: npm ci
-    
-    - name: Restart PM2 Server
+    - name: Set Correct Permissions
       run: |
-        # Restart the correct PM2 process name
+        sudo chown -R vicky:vicky /home/vicky/production/proclient-backend
+        sudo chmod -R 755 /home/vicky/production/proclient-backend
+    
+    - name: Restart PM2 as vicky user
+      run: |
+        sudo -u vicky bash << 'EOF'
+        cd /home/vicky/production/proclient-backend
         pm2 restart proclient-backend || pm2 start server.js --name proclient-backend
         pm2 save
-        
-    - name: Check PM2 Status
+        EOF
+    
+    - name: Check Deployment Status
       run: |
-        pm2 list
-        pm2 logs proclient-backend --lines 10 --nostream
+        sleep 3
+        sudo -u vicky pm2 list
+        sudo -u vicky pm2 logs proclient-backend --lines 10 --nostream
+        
+        # Test if server is responding
+        curl -f http://localhost:5443/api || exit 1
