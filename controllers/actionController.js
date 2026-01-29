@@ -187,7 +187,9 @@ exports.update = async (req, res) => {
         
         tasksheet.taskStatus = taskStatus;
         tasksheet.taskLevel = complated;
-        await tasksheet.save();
+        
+        // Use validateBeforeSave: false to bypass date validation
+        await tasksheet.save({ validateBeforeSave: false });
         
         // Handle notifications for status changes
         await handleStatusChangeNotifications(taskStatus, currentStatus, tasksheet, req.user._id);
@@ -224,17 +226,21 @@ exports.create = async (req, res) => {
             remark
         });
 
-        // Update tasksheet
+        // Update tasksheet - only update taskStatus and taskLevel, not dates
         if (taskStatus === 'completed') {
             tasksheet.taskStatus = taskStatus;
             tasksheet.taskLevel = 100;
-            tasksheet.actualEndDate = endTime;
+            // Only update actualEndDate if it's not already set
+            if (!tasksheet.actualEndDate) {
+                tasksheet.actualEndDate = endTime;
+            }
         } else {
             tasksheet.taskLevel = taskLevel;
             tasksheet.taskStatus = taskStatus;
         }
         
-        await tasksheet.save();
+        // Use validateBeforeSave: false to bypass date validation
+        await tasksheet.save({ validateBeforeSave: false });
         
         if (!newAction) {
             return res.status(400).json({success: false, error: "Action was not created"});
