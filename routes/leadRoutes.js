@@ -6,6 +6,7 @@ const { permissionMiddleware, isLoggedIn } = require('../middlewares/auth');
 
 router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
 router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
+router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads); // New route
 router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
 router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLead);
 router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);

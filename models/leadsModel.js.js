@@ -141,6 +141,34 @@ const leadSchema = new Schema({
         type: String,
         trim: true,
     },
+    // New field to track call history by day and attempt
+    callHistory: [{
+        day: {
+            type: Number,
+            required: true
+        },
+        attempt: {
+            type: Number,
+            required: true
+        },
+        date: {
+            type: Date,
+            default: Date.now
+        },
+        status: {
+            type: String,
+            enum: ['attempted', 'answered'],
+            default: 'attempted'
+        },
+        remarks: {
+            type: String,
+            default: ''
+        },
+        attemptedBy: {
+            type: Schema.Types.ObjectId,
+            ref: 'Employee'
+        }
+    }],
     previousActions: [{
         _id: {
             type: Schema.Types.ObjectId,

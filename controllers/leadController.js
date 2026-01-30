@@ -81,7 +81,7 @@ exports.getLeads = async (req, res) => {
     const allLeadsCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id) });
     const notFeasibleCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'not-feasible'});
     const feasibleCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'feasible' });
-    const callUnansweredCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'call-unanswered'}); // New count
+    const callUnansweredCount = await Lead.countDocuments({ company: new Types.ObjectId(user.company || user._id), feasibility: 'call-unanswered'});
 
     res.status(200).json({
       success: true,
@@ -89,7 +89,7 @@ exports.getLeads = async (req, res) => {
       allLeadsCount,
       notFeasibleCount,
       feasibleCount,
-      callUnansweredCount, // Added to response
+      callUnansweredCount,
       pagination: {
         currentPage: page,
         totalPages,
@@ -101,6 +101,91 @@ exports.getLeads = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching leads:', error);
+    res.status(500).json({ error: 'Internal Server Error: ' + error.message });
+  }
+};
+
+exports.getCallUnansweredLeads = async (req, res) => {
+  const user = req.user;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const query = {
+    company: new Types.ObjectId(user.company || user._id),
+    feasibility: "call-unanswered"
+  };
+  const { source, date } = req.query;
+
+  try {
+    const validSources = [
+      'TradeIndia',
+      'IndiaMart',
+      'Google',
+      'Tender',
+      'Exhibitions',
+      'JustDial',
+      'Facebook',
+      'LinkedIn',
+      'Twitter',
+      'YouTube',
+      'WhatsApp',
+      'Referral',
+      'Email Campaign',
+      'Cold Call',
+      'Website',
+      'Walk-In',
+      'Direct',
+      'Other'
+    ];
+
+    if (source && validSources.includes(source)) {
+      query.SOURCE = source;
+    }
+
+    if (date) {
+      const inputDate = new Date(date);
+      if (isNaN(inputDate.getTime())) {
+        return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+      }
+
+      const startOfDay = new Date(inputDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(inputDate.setHours(23, 59, 59, 999));
+
+      query.createdAt = {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      };
+    }
+
+    const leads = await Lead.find(query)
+      .populate('company', 'name')
+      .populate('assignedBy', 'name')
+      .populate('assignedTo', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const totalRecords = await Lead.countDocuments(query);
+    const totalPages = Math.ceil(totalRecords / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
+    res.status(200).json({
+      success: true,
+      leads,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalRecords,
+        limit,
+        hasNextPage,
+        hasPrevPage,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching call unanswered leads:', error);
     res.status(500).json({ error: 'Internal Server Error: ' + error.message });
   }
 };
@@ -254,7 +339,6 @@ exports.getMyLeads = async (req, res) => {
       }
     });
 
-    // NEW: Calculate quotation funnel data
     const activeQuotationLeads = await Lead.find({
       ...baseQuery,
       quotation: { $gt: 0 },
@@ -319,7 +403,7 @@ exports.assignLead = async (req, res) => {
   try {
     const user = req.user;
     const leadId = req.params.id;
-    const { feasibility, remark, assignedTo } = req.body;
+    const { feasibility, remark, assignedTo, callHistory } = req.body;
 
     console.log('=== ASSIGN LEAD CALLED ===');
     console.log('Lead ID:', leadId);
@@ -342,10 +426,11 @@ exports.assignLead = async (req, res) => {
       _id: lead._id,
       feasibility: lead.feasibility,
       assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy
+      assignedBy: lead.assignedBy,
+      callHistory: lead.callHistory
     });
 
-    // Update to handle call-unanswered
+    // Update feasibility
     if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') {
       lead.feasibility = feasibility;
     } else {
@@ -362,11 +447,39 @@ exports.assignLead = async (req, res) => {
     lead.assignedTime = new Date();
     lead.remark = remark || 'Reason not provided';
 
+    // Handle call history if provided
+    if (callHistory && Array.isArray(callHistory)) {
+      // Ensure attemptedBy is an ObjectId for each call history entry
+      lead.callHistory = callHistory.map(call => {
+        const callEntry = { ...call };
+        if (callEntry.attemptedBy && typeof callEntry.attemptedBy === 'string') {
+          if (Types.ObjectId.isValid(callEntry.attemptedBy)) {
+            callEntry.attemptedBy = new Types.ObjectId(callEntry.attemptedBy);
+          } else {
+            callEntry.attemptedBy = new Types.ObjectId(user._id);
+          }
+        } else if (!callEntry.attemptedBy) {
+          callEntry.attemptedBy = new Types.ObjectId(user._id);
+        }
+        return callEntry;
+      });
+      
+      // Check if there are 9 calls or calls on 3 different days
+      const uniqueDays = [...new Set(callHistory.map(call => call.day))];
+      if (callHistory.length >= 9 || uniqueDays.length >= 3) {
+        lead.feasibility = 'call-unanswered';
+        if (!remark) {
+          lead.remark = 'Automatically marked as call-unanswered after 3 days of call attempts';
+        }
+      }
+    }
+
     console.log('Lead before save:', {
       _id: lead._id,
       feasibility: lead.feasibility,
       assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy
+      assignedBy: lead.assignedBy,
+      callHistory: lead.callHistory
     });
 
     await lead.save();
@@ -375,15 +488,20 @@ exports.assignLead = async (req, res) => {
       _id: lead._id,
       feasibility: lead.feasibility,
       assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy
+      assignedBy: lead.assignedBy,
+      callHistory: lead.callHistory
     });
    
-    const savedLead = await Lead.findById(lead._id);
+    const savedLead = await Lead.findById(lead._id)
+      .populate('assignedTo', 'name')
+      .populate('assignedBy', 'name');
+    
     console.log('Verified saved lead:', {
       _id: savedLead._id,
       feasibility: savedLead.feasibility,
       assignedTo: savedLead.assignedTo,
-      assignedBy: savedLead.assignedBy
+      assignedBy: savedLead.assignedBy,
+      callHistory: savedLead.callHistory
     });
 
     const salesMasterQuery = {
@@ -404,7 +522,8 @@ exports.assignLead = async (req, res) => {
       data: {
         feasibility: savedLead.feasibility,
         assignedTo: savedLead.assignedTo,
-        wouldAppearInSalesMaster: !!wouldAppearInSalesMaster
+        wouldAppearInSalesMaster: !!wouldAppearInSalesMaster,
+        callHistory: savedLead.callHistory
       }
     });
   } catch (error) {
@@ -527,6 +646,7 @@ exports.createLead = async (req, res) => {
       SOURCE: QUERY_SOURCES_NAME || 'Direct',
       company: new Types.ObjectId(user.company || user._id),
       callLeads: callLeads || 'Warm Leads',
+      callHistory: []
     };
 
     leadData.feasibility = feasibility || 'none';
@@ -574,7 +694,8 @@ exports.createLead = async (req, res) => {
       assignedTo: lead.assignedTo,
       assignedBy: lead.assignedBy,
       company: lead.company,
-      callLeads: lead.callLeads
+      callLeads: lead.callLeads,
+      callHistory: lead.callHistory
     });
 
     const populatedLead = await Lead.findById(lead._id)
