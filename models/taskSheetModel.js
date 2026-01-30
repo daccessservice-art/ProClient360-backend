@@ -24,7 +24,6 @@ const taskSheetSchema = new Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Employee"
   },
-  // NEW: Add priority field
   priority: {
     type: String,
     enum: ['low', 'medium', 'high'],
@@ -33,8 +32,8 @@ const taskSheetSchema = new Schema({
   },
   taskStatus: {
     type: String,
-    enum: ['stuck', 'inprocess', 'completed', 'upcomming'],
-    default: 'upcomming'
+    enum: ['stuck', 'inprocess', 'completed', 'upcoming'],
+    default: 'upcoming'
   },
   startDate: {
     type: Date,
@@ -73,7 +72,7 @@ const taskSheetSchema = new Schema({
   },
   remark: {
     type: String,
-    maxlength: 2001, // Updated from 200 to 2000
+    maxlength: [2000, 'Remark cannot exceed 2000 characters'],
     lowercase: true,
   },
   taskLevel: {
