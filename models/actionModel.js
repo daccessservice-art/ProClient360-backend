@@ -50,7 +50,7 @@ const actionSchema = new Schema({
     },
     remark:{
         type: String,
-        maxlength: [200, 'Remark cannot exceed 200 characters'],
+        maxlength: [2000, 'Remark cannot exceed 2000 characters'],
         lowercase: true,
     }
 });
