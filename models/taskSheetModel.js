@@ -73,7 +73,7 @@ const taskSheetSchema = new Schema({
   },
   remark: {
     type: String,
-    maxlength: 2000, // Updated from 200 to 2000
+    maxlength: 2001, // Updated from 200 to 2000
     lowercase: true,
   },
   taskLevel: {
