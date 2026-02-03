@@ -3,6 +3,7 @@ const connectDB = require('./config/db');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const path = require('path');
+const cron = require('node-cron');
 
 // const { Server } = require('socket.io');
 
@@ -10,6 +11,8 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
+
+const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
 const employeeRoutes = require('./routes/employeeRoutes');
 const authRoutes = require('./routes/authRoutes');
@@ -53,13 +56,31 @@ const app = express();
 
 const PORT = process.env.PORT || 5443;
 
-
 const startSever= async () =>{
-
   await connectDB();
-   // Initialize the daily lead report scheduler after database connection
+  // Initialize the daily lead report scheduler after database connection
   console.log('Initializing daily lead report scheduler...');
   initializeDailyLeadReportScheduler();
+  // Schedule auto-mark stale leads job - runs every day at 2 AM
+  console.log('Initializing auto-mark stale leads scheduler...');
+  cron.schedule('0 2 * * *', async () => {
+    console.log('Running scheduled auto-mark stale leads job...');
+    try {
+      const result = await autoMarkStaleLeads();
+      console.log('Scheduled auto-mark result:', result);
+    } catch (error) {
+      console.error('Error in scheduled auto-mark job:', error);
+    }
+  });
+
+  // Also run once on startup
+  console.log('Running initial auto-mark stale leads check...');
+  try {
+    const result = await autoMarkStaleLeads();
+    console.log('Initial auto-mark result:', result);
+  } catch (error) {
+    console.error('Error in initial auto-mark:', error);
+  }
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
@@ -151,31 +172,31 @@ app.use('/api/dc', dcRoutes);
 app.use('/api/mrf', mrfRoutes);
 
 // const io = new Server(server, {
-//   cors: {
-//     origin: '*',
-//   },
+// cors: {
+// origin: '*',
+// },
 // });
 // app.set('io', io);
 
 // io.use(authenticateSocket);
 
 // io.on('connection', (socket) => {
-//   console.log('A user connected');
+// console.log('A user connected');
 
-//   // Join the user to a room with their userId
-//   const userId = socket.user.userId;
-//   socket.join(userId);
+// // Join the user to a room with their userId
+// const userId = socket.user.userId;
+// socket.join(userId);
 
-//   // Handle disconnection
-//   socket.on('disconnect', () => {
-//     console.log('User disconnected');
-//   });
+// // Handle disconnection
+// socket.on('disconnect', () => {
+// console.log('User disconnected');
+// });
 // });
 
 app.use((err, req, res, next) => {
-    console.error(err);
-    res.status(500).json({ error: 'Internal Server Error:'+err.message });
-  });
+  console.error(err);
+  res.status(500).json({ error: 'Internal Server Error:' + err.message });
+});
 
 app.use('*', (req, res, next) => {
   res.status(404).json({ error: 'Page Not Found' });
