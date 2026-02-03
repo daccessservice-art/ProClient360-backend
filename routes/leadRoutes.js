@@ -7,7 +7,11 @@ const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel.js');
 const { autoMarkStaleLeads } = require('../scripts/autoMarkStaleLeads');
 
-// FIXED: Route to handle saving individual call attempts - ONLY requires login, no special permissions
+// IMPORTANT: SPECIFIC ROUTES MUST COME BEFORE GENERIC ROUTES
+// The /call-attempt/:id route MUST be defined BEFORE /:id routes
+// Otherwise Express will match /:id first and return 404
+
+// Route to handle saving individual call attempts - ONLY requires login, no special permissions
 router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   try {
     console.log('=== CALL ATTEMPT API CALLED ===');
@@ -145,28 +149,6 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   }
 });
 
-// ... rest of your routes
-router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
-router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
-router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
-router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
-router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLead);
-router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);
-
-// Marketing to Sales assignment - THIS is where feasibility changes happen
-router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.assignLead);
-
-// Sales to Sales assignment
-router.put('/reassign/:id', permissionMiddleware(['updateLead']), leadController.assignLead);
-
-router.put('/submit-enquiry/:id', isLoggedIn, leadController.submiEnquiry);
-
-// Sales Manager Master routes
-router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
-router.get('/sales-managers', permissionMiddleware(['viewLead']), salesManagerController.getSalesManagers);
-router.get('/employee-leads/:employeeId', permissionMiddleware(['viewLead']), salesManagerController.getManagerTeamLeads);
-router.get('/all-leads', permissionMiddleware(['viewLead']), salesManagerController.getAllLeads);
-
 // New route to manually trigger the stale lead processing
 router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req, res) => {
   try {
@@ -193,5 +175,31 @@ router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req,
     });
   }
 });
+
+// ROUTES WITH SPECIFIC PATHS (BEFORE GENERIC /:id ROUTES)
+
+router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
+router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
+router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
+router.get('/sales-managers', permissionMiddleware(['viewLead']), salesManagerController.getSalesManagers);
+router.get('/all-leads', permissionMiddleware(['viewLead']), salesManagerController.getAllLeads);
+
+// Marketing to Sales assignment - THIS is where feasibility changes happen
+router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.assignLead);
+
+// Sales to Sales assignment
+router.put('/reassign/:id', permissionMiddleware(['updateLead']), leadController.assignLead);
+
+router.put('/submit-enquiry/:id', isLoggedIn, leadController.submiEnquiry);
+
+// Sales Manager specific route
+router.get('/employee-leads/:employeeId', permissionMiddleware(['viewLead']), salesManagerController.getManagerTeamLeads);
+
+// GENERIC ROUTES (MUST COME AFTER SPECIFIC ROUTES)
+
+router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
+router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
+router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLead);
+router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);
 
 module.exports = router;
