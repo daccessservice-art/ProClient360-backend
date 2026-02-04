@@ -7,14 +7,68 @@ const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel.js');
 const { autoMarkStaleLeads } = require('../scripts/autoMarkStaleLeads');
 
-// IMPORTANT: SPECIFIC ROUTES MUST COME BEFORE GENERIC ROUTES
-// The /call-attempt/:id route MUST be defined BEFORE /:id routes
+
+// CRITICAL: ROUTE ORDERING MATTERS!
+// Specific routes MUST come BEFORE generic /:id routes
 // Otherwise Express will match /:id first and return 404
 
-// Route to handle saving individual call attempts - ONLY requires login, no special permissions
+
+console.log('📋 Registering Lead Routes...');
+
+
+// SPECIFIC ROUTES (NO :id PARAMETER) - MUST BE FIRST
+
+
+// Manual stale lead processing
+router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req, res) => {
+  try {
+    console.log('Manual trigger for processing stale leads');
+    const result = await autoMarkStaleLeads();
+    
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        message: `Successfully processed stale leads. Marked ${result.markedCount} leads as not-feasible.`,
+        data: result
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('Error in manual stale lead processing:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal Server Error: ' + error.message
+    });
+  }
+});
+
+// Get my leads
+router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
+
+// Get call unanswered leads
+router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
+
+// Get sales employees
+router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
+
+// Get sales managers
+router.get('/sales-managers', permissionMiddleware(['viewLead']), salesManagerController.getSalesManagers);
+
+// Get all leads
+router.get('/all-leads', permissionMiddleware(['viewLead']), salesManagerController.getAllLeads);
+
+// CALL ATTEMPT ROUTE - CRITICAL: MUST BE BEFORE /:id ROUTES
+
+console.log('✅ Registering /call-attempt/:id route');
+
 router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   try {
     console.log('=== CALL ATTEMPT API CALLED ===');
+    console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Lead ID:', req.params.id);
     console.log('Request body:', JSON.stringify(req.body, null, 2));
     console.log('User:', req.user ? { 
@@ -23,6 +77,8 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
       permissions: req.user.permissions,
       userType: req.user.user 
     } : 'No user');
+    console.log('Request URL:', req.originalUrl);
+    console.log('Request Method:', req.method);
 
     const user = req.user;
     const leadId = req.params.id;
@@ -77,7 +133,7 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
     );
 
     if (existingCallIndex !== -1) {
-      console.error('Call attempt already exists:', { day, attempt });
+      console.error('❌ Call attempt already exists:', { day, attempt });
       return res.status(400).json({
         success: false,
         error: `Day ${day} - Attempt ${attempt} is already recorded`
@@ -97,14 +153,14 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
       attemptedBy: attemptedBy || user._id
     };
 
-    console.log('Adding new call attempt:', newCall);
+    console.log('➕ Adding new call attempt:', newCall);
 
     lead.callHistory.push(newCall);
 
     // Set the first call date if this is the first call
     if (isFirstCall) {
       lead.firstCallDate = new Date();
-      console.log('Setting first call date:', lead.firstCallDate);
+      console.log('📅 Setting first call date:', lead.firstCallDate);
     }
 
     // Sort the call history by day and attempt
@@ -149,57 +205,54 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   }
 });
 
-// New route to manually trigger the stale lead processing
-router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req, res) => {
-  try {
-    console.log('Manual trigger for processing stale leads');
-    const result = await autoMarkStaleLeads();
-    
-    if (result.success) {
-      res.status(200).json({
-        success: true,
-        message: `Successfully processed stale leads. Marked ${result.markedCount} leads as not-feasible.`,
-        data: result
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        error: result.error
-      });
-    }
-  } catch (error) {
-    console.error('Error in manual stale lead processing:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal Server Error: ' + error.message
-    });
-  }
-});
+console.log('✅ /call-attempt/:id route registered successfully');
 
-// ROUTES WITH SPECIFIC PATHS (BEFORE GENERIC /:id ROUTES)
+// ROUTES WITH :id IN THE PATH - MUST COME AFTER /call-attempt/:id
 
-router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
-router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
-router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
-router.get('/sales-managers', permissionMiddleware(['viewLead']), salesManagerController.getSalesManagers);
-router.get('/all-leads', permissionMiddleware(['viewLead']), salesManagerController.getAllLeads);
 
-// Marketing to Sales assignment - THIS is where feasibility changes happen
+// Marketing to Sales assignment
 router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.assignLead);
 
-// Sales to Sales assignment
+// Sales to Sales reassignment
 router.put('/reassign/:id', permissionMiddleware(['updateLead']), leadController.assignLead);
 
+// Submit enquiry
 router.put('/submit-enquiry/:id', isLoggedIn, leadController.submiEnquiry);
 
-// Sales Manager specific route
+// Sales Manager specific route - get employee leads
 router.get('/employee-leads/:employeeId', permissionMiddleware(['viewLead']), salesManagerController.getManagerTeamLeads);
 
-// GENERIC ROUTES (MUST COME AFTER SPECIFIC ROUTES)
-
-router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
-router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
+// Update lead
 router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLead);
+
+// Delete lead
 router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);
+
+// GENERIC ROUTES (NO PARAMETERS) - CAN BE ANYWHERE
+
+// Get all marketing leads
+router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
+
+// Create new lead
+router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
+
+console.log(' All lead routes registered successfully');
+
+// DEBUG ROUTE - ONLY FOR DEVELOPMENT/TESTING
+
+if (process.env.NODE_ENV !== 'production') {
+  router.get('/debug-routes', (req, res) => {
+    const routes = [];
+    router.stack.forEach((middleware) => {
+      if (middleware.route) {
+        routes.push({
+          path: middleware.route.path,
+          methods: Object.keys(middleware.route.methods)
+        });
+      }
+    });
+    res.json({ routes });
+  });
+}
 
 module.exports = router;
