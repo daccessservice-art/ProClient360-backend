@@ -4,6 +4,7 @@ const CustomerHistory = require("../models/customerHistoryModel");
 const Project = require("../models/projectModel");
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
+const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
 exports.getCustomer = async (req, res) => {
   try {
@@ -101,7 +102,12 @@ exports.showAll = async (req, res) => {
 
 exports.createCustomer = async (req, res) => {
   try {
+    console.log('=== CREATE CUSTOMER START ===');
     const user = req.user;
+    console.log('User ID:', user._id);
+    console.log('User Name:', user.name);
+    console.log('Request body:', req.body);
+    
     const {
       custName,
       billingAddress,
@@ -112,26 +118,30 @@ exports.createCustomer = async (req, res) => {
       customerContactPersonName2,
       phoneNumber2,
       zone,
-      ownedBy, // Add this new field
+      ownedBy,
     } = req.body;
 
-    const customer = await Customer.find({
+    // Check if customer already exists
+    const existingCustomer = await Customer.findOne({
       company: user.company ? user.company : user._id,
       email: email,
     });
-    if (customer.length > 0) {
+    
+    if (existingCustomer) {
+      console.log('Customer already exists');
       return res
         .status(409)
         .json({ success: false, error: "Customer already exist please use different email Id" });
     }
 
-    const newCust = Customer({
+    // Create new customer
+    const newCust = new Customer({
       custName,
       GSTNo,
       company: user.company ? user.company : user._id,
       email: email.toLowerCase().trim(),
-      createdBy: user._id, // Set createdBy to current user
-      ownedBy: ownedBy || user.name, // Set ownedBy to provided name or current user's name if not specified
+      createdBy: user._id,
+      ownedBy: ownedBy || user.name,
       customerContactPersonName1,
       phoneNumber1,
       customerContactPersonName2,
@@ -140,19 +150,32 @@ exports.createCustomer = async (req, res) => {
       zone,
     });
 
-    if (newCust) {
-      await newCust.save();
-      res.status(201).json({
-        success: true,
-        message: "Customer created successfully",
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        error: "Invalid customer data"
-      });
+    console.log('New customer object:', newCust);
+
+    // Save the customer
+    const savedCustomer = await newCust.save();
+    console.log('Customer saved to database:', savedCustomer._id);
+    
+    // *** LOG ACTIVITY - Make sure this is working ***
+    console.log('About to log customer creation...');
+    console.log('Saved Customer:', savedCustomer);
+    console.log('User:', user);
+    
+    try {
+      const logResult = await logCreation(savedCustomer, user, req, 'Customer');
+      console.log('Customer creation logged successfully:', logResult);
+    } catch (logError) {
+      console.error('Error logging customer creation:', logError);
+      // Don't fail the request if logging fails
     }
+    
+    res.status(201).json({
+      success: true,
+      message: "Customer created successfully",
+      customer: savedCustomer
+    });
   } catch (error) {
+    console.error('Error in createCustomer:', error);
     if (error.name === "ValidationError") {
       res.status(400).json({
         success: false,
@@ -168,6 +191,7 @@ exports.createCustomer = async (req, res) => {
 
 exports.deleteCustomer = async (req, res) => {
   try {
+    const user = req.user;
     const customerId = req.params.id;
 
     // Check if there are any projects associated with the customer
@@ -180,12 +204,18 @@ exports.deleteCustomer = async (req, res) => {
       });
     }
 
-    // Proceed to delete the customer if no projects are found
-    const customer = await Customer.findByIdAndDelete(customerId);
+    // Find the customer before deletion
+    const customer = await Customer.findById(customerId);
 
     if (!customer) {
       return res.status(404).json({ success: false, error: "Customer Not Found!!" });
     }
+
+    // *** LOG ACTIVITY BEFORE DELETION ***
+    await logDeletion(customer, user, req, 'Customer');
+
+    // Proceed to delete the customer
+    await Customer.findByIdAndDelete(customerId);
 
     res.status(200).json({ success: true, message: "Customer deleted successfully" });
   } catch (error) {
@@ -198,6 +228,7 @@ exports.deleteCustomer = async (req, res) => {
 
 exports.updateCustomer = async (req, res) => {
   try {
+    const user = req.user;
     const { id } = req.params;
     const updatedData = req.body;
 
@@ -207,6 +238,27 @@ exports.updateCustomer = async (req, res) => {
     if (!existingCustomer) {
       return res.status(404).json({ success: false, error: "Customer not found" });
     }
+
+    // *** STORE OLD DATA FOR LOGGING - Convert to plain object ***
+    const oldCustomerData = {
+      custName: existingCustomer.custName,
+      email: existingCustomer.email,
+      phoneNumber1: existingCustomer.phoneNumber1,
+      phoneNumber2: existingCustomer.phoneNumber2,
+      GSTNo: existingCustomer.GSTNo,
+      customerContactPersonName1: existingCustomer.customerContactPersonName1,
+      customerContactPersonName2: existingCustomer.customerContactPersonName2,
+      billingAddress: existingCustomer.billingAddress ? {
+        add: existingCustomer.billingAddress.add,
+        city: existingCustomer.billingAddress.city,
+        state: existingCustomer.billingAddress.state,
+        country: existingCustomer.billingAddress.country,
+        pincode: existingCustomer.billingAddress.pincode
+      } : {},
+      zone: existingCustomer.zone,
+      ownedBy: existingCustomer.ownedBy,
+      _id: existingCustomer._id
+    };
 
     // Prepare an array to store changes
     let changes = [];
@@ -249,6 +301,7 @@ exports.updateCustomer = async (req, res) => {
       existingCustomer.phoneNumber2,
       updatedData.phoneNumber2
     );
+    trackChanges("zone", existingCustomer.zone, updatedData.zone);
 
     // Compare nested objects like billingAddress and deliveryAddress
     if (updatedData.billingAddress) {
@@ -308,17 +361,45 @@ exports.updateCustomer = async (req, res) => {
     }
 
     // Save the updated customer record
-    const updatedCustomer = await Customer.findByIdAndUpdate(id, updatedData, {
+    const updatedCustomerDoc = await Customer.findByIdAndUpdate(id, updatedData, {
       new: true,
       runValidators: true,
     }).populate("createdBy", "name email");
+
+    // *** CONVERT MONGOOSE DOCUMENT TO PLAIN OBJECT ***
+    const updatedCustomer = {
+      custName: updatedCustomerDoc.custName,
+      email: updatedCustomerDoc.email,
+      phoneNumber1: updatedCustomerDoc.phoneNumber1,
+      phoneNumber2: updatedCustomerDoc.phoneNumber2,
+      GSTNo: updatedCustomerDoc.GSTNo,
+      customerContactPersonName1: updatedCustomerDoc.customerContactPersonName1,
+      customerContactPersonName2: updatedCustomerDoc.customerContactPersonName2,
+      billingAddress: updatedCustomerDoc.billingAddress ? {
+        add: updatedCustomerDoc.billingAddress.add,
+        city: updatedCustomerDoc.billingAddress.city,
+        state: updatedCustomerDoc.billingAddress.state,
+        country: updatedCustomerDoc.billingAddress.country,
+        pincode: updatedCustomerDoc.billingAddress.pincode
+      } : {},
+      zone: updatedCustomerDoc.zone,
+      ownedBy: updatedCustomerDoc.ownedBy,
+      _id: updatedCustomerDoc._id
+    };
 
     // Save the changes to the customerHistory collection if there are any
     if (changes.length > 0) {
       await CustomerHistory.insertMany(changes);
     }
 
-    res.status(200).json({ success: true, message: "Customer updated successfully", updatedCustomer });
+    // *** LOG ACTIVITY WITH COMPLETE DATA ***
+    await logUpdate(oldCustomerData, updatedCustomer, user, req, 'Customer');
+
+    res.status(200).json({ 
+      success: true, 
+      message: "Customer updated successfully", 
+      updatedCustomer: updatedCustomerDoc  // Return the full Mongoose doc with populated fields
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, error: "Error updating customer: " + error.message });

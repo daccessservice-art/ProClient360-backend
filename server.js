@@ -52,6 +52,8 @@ const dcRoutes = require('./routes/dcRoutes');
 
 const mrfRoutes = require('./routes/mrfRoutes');
 
+const activityLogRoutes = require('./routes/activityLogRoutes');
+
 
 const app = express();
 
@@ -59,19 +61,15 @@ const PORT = process.env.PORT || 5443;
 
 const startServer = async () => {
   try {
-    console.log('=================================================');
     console.log('Starting Server...');
     console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Port:', PORT);
-    console.log('=================================================');
 
     await connectDB();
     
-    // Initialize the daily lead report scheduler after database connection
     console.log('Initializing daily lead report scheduler...');
     initializeDailyLeadReportScheduler();
     
-    // Schedule auto-mark stale leads job - runs every day at 2 AM
     console.log('Initializing auto-mark stale leads scheduler...');
     cron.schedule('0 2 * * *', async () => {
       console.log('Running scheduled auto-mark stale leads job...');
@@ -83,7 +81,6 @@ const startServer = async () => {
       }
     });
 
-    // Also run once on startup
     console.log('Running initial auto-mark stale leads check...');
     try {
       const result = await autoMarkStaleLeads();
@@ -93,9 +90,8 @@ const startServer = async () => {
     }
 
     app.listen(PORT, () => {
-      console.log('=================================================');
       console.log(`Server running on port ${PORT}`);
-      console.log('=================================================');
+      
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -103,7 +99,6 @@ const startServer = async () => {
   }
 };
 
-// Standard CORS configuration for regular API requests
 app.use(cors({
   origin: ["https://pms-front-qvyb.onrender.com", "http://localhost:3000", "https://proclient360.com"],
   credentials: true,
@@ -112,7 +107,6 @@ app.use(cors({
   exposedHeaders: ["Content-Disposition", "X-Total-Count"]
 }));
 
-// Special CORS configuration for export endpoints (blob responses)
 app.use('/api/customer/export', cors({
   origin: ["https://pms-front-qvyb.onrender.com", "http://localhost:3000", "https://proclient360.com"],
   credentials: true,
@@ -125,19 +119,13 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(cookieParser());
 
-// Request logging middleware for debugging
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   next();
 });
 
-// Serve static files from the React frontend app
 app.use(express.static(path.join(__dirname, 'frontend/build')));
 
-// API routes here
-console.log('=================================================');
-console.log('📋 Registering API Routes...');
-console.log('=================================================');
 
 app.get('/api', (req, res) => {
   res.json({ message: 'Server is Up and Running...' });
@@ -181,6 +169,11 @@ console.log('Registering /api/leads routes...');
 app.use('/api/leads', leadsRoutes);
 console.log('Lead routes registered at /api/leads');
 
+// *** ACTIVITY LOG ROUTES - ADDED ***
+console.log('Registering /api/activity routes...');
+app.use('/api/activity', activityLogRoutes);
+console.log('Activity routes registered at /api/activity');
+
 app.use('/api/tradeIndia', require('./routes/tradeIndiaRoutes'));
 app.use('/api/amc', amcRoutes);
 app.use('/api/inventory', inventoryRoutes);
@@ -192,17 +185,12 @@ app.use('/api/qc', qcRoutes);
 app.use('/api/dc', dcRoutes);
 app.use('/api/mrf', mrfRoutes);
 
-console.log('=================================================');
-console.log('✅ All API routes registered successfully');
-console.log('=================================================');
 
-// Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal Server Error: ' + err.message });
 });
 
-// 404 handler for API routes
 app.use('/api/*', (req, res, next) => {
   console.error('API Route Not Found:', req.originalUrl);
   res.status(404).json({ 
@@ -212,13 +200,10 @@ app.use('/api/*', (req, res, next) => {
   });
 });
 
-// The "catchall" handler: for any request that doesn't
-// match one above, send back the React app.
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'frontend/build', 'index.html')); 
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error('Unhandled Error:', err);
   res.status(500).json({

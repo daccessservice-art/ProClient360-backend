@@ -6,8 +6,9 @@ const Designation = require("../models/designationModel");
 const Tasksheet = require("../models/taskSheetModel");
 const ProjectHistory = require("../models/projectHistoryModel");
 const TaskSheet = require("../models/taskSheetModel");
-const Customer = require("../models/customerModel"); // Make sure to import Customer model
+const Customer = require("../models/customerModel");
 const {bucket} = require('../utils/firebase');
+const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
 exports.showAll = async (req, res) => {
   try {
@@ -16,7 +17,7 @@ exports.showAll = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const { status, search } = req.query; // Add search parameter
+    const { status, search } = req.query;
 
     const isCompany = user.company ? false : true;
     let query = { company: isCompany ? user._id : user.company,};
@@ -37,21 +38,16 @@ exports.showAll = async (req, res) => {
       query.projectStatus = status;
     }
     
-    // Add search functionality for customer name
     if (search && search.trim() !== "") {
-      // Find customers that match the search term
       const customers = await Customer.find({
         custName: { $regex: search, $options: "i" }
       }).select('_id');
       
-      // Get customer IDs
       const customerIds = customers.map(customer => customer._id);
       
-      // Add to query to find projects with these customer IDs
       if (customerIds.length > 0) {
         query.custId = { $in: customerIds };
       } else {
-        // If no customers match, return empty result
         return res.status(200).json({
           success: true,
           projects: [],
@@ -76,7 +72,7 @@ exports.showAll = async (req, res) => {
       .lean();
 
     if (projects.length <= 0) {
-      return res.status(200).json({ // Changed to 200 to allow empty results with search
+      return res.status(200).json({
         success: true,
         projects: [],
         pagination: {
@@ -115,7 +111,6 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// Rest of the controller remains the same...
 exports.getProject = async (req, res) => {
   try {
     const project = await Project.findById(req.params.id);
@@ -132,7 +127,7 @@ exports.getProject = async (req, res) => {
 
 exports.myProjects = async (req, res) => {
   try {
-  const user=req.user;
+    const user=req.user;
 
     const uniqueProjectIds = await TaskSheet.distinct("project", {
       company: user.company,
@@ -202,7 +197,6 @@ exports.create = async (req, res) => {
 
     completeLevel = completeLevel === undefined ? 0 : completeLevel;
 
-    // FIX: Address is already an object, no need to parse
     let address = Address;
     
     if(!address){
@@ -246,7 +240,7 @@ exports.create = async (req, res) => {
       }
     }
    
-    const newProject = await Project({
+    const newProject = new Project({
       custId,
       name,
       purchaseOrderNo,
@@ -261,7 +255,7 @@ exports.create = async (req, res) => {
       remark,
       completeLevel: completeLevel,
       POCopy: POCopyUrl,
-      Address: address, // Use the address object directly
+      Address: address,
       createdBy: user._id,
       retention,
       projectStatus:
@@ -271,21 +265,25 @@ exports.create = async (req, res) => {
           ? "Inprocess"
           : "Completed",
       company: user.company ? user.company : user._id,
-      createdAt: new Date() // Explicitly set creation date
+      createdAt: new Date()
     });
 
-    if (newProject) {
-      await newProject.save();
-      res.status(201).json({
-        success: true,
-        message: "Project Created Successfully",
-      });
-    }
+    const savedProject = await newProject.save();
+
+    // *** LOG ACTIVITY - Project Creation ***
+    await logCreation(savedProject, user, req, 'Project');
+
+    res.status(201).json({
+      success: true,
+      message: "Project Created Successfully",
+      project: savedProject
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Error while creating Project: " + error.message });
   }
 };
+
 exports.exportProjects = async (req, res) => {
   try {
     const user=req.user;
@@ -411,6 +409,7 @@ exports.exportProjects = async (req, res) => {
 exports.delete = async (req, res) => {
   try {
     const projectId = req.params.id;
+    const user = req.user;
 
     const project = await Project.findById(projectId);
     if (!project) {
@@ -419,8 +418,10 @@ exports.delete = async (req, res) => {
         .json({ success: false, error: "Project not found" });
     }
 
-    await Tasksheet.deleteMany({ project: projectId });
+    // *** LOG ACTIVITY - Project Deletion ***
+    await logDeletion(project, user, req, 'Project');
 
+    await Tasksheet.deleteMany({ project: projectId });
     await Project.findByIdAndDelete(projectId);
 
     res
@@ -433,9 +434,9 @@ exports.delete = async (req, res) => {
   }
 };
 
-
 exports.updateProject = async (req, res) => {
   const { id } = req.params; 
+  const user = req.user;
   const {
     name,
     custId,
@@ -460,69 +461,116 @@ exports.updateProject = async (req, res) => {
     warrantyMonths
   } = req.body;
   
-  const originalData = await Project.findById(id);
-  
-  const updateData = {
-    name,
-    custId,
-    Address,
-    completeLevel,
-    purchaseOrderDate,
-    projectStatus,
-    purchaseOrderNo,
-    category,
-    startDate,
-    endDate,
-    advancePay,
-    payAgainstDelivery,
-    payAfterCompletion,
-    purchaseOrderValue,
-    remark,
-    retention
-  };
-  
   try {
-    let changes = [];
-
-    const trackChanges = (fieldName, oldValue, newValue) => {
-        // Skip tracking if oldValue is undefined (field didn't exist before)
-        if (oldValue === undefined) {
-            return;
-        }
-        
-        // Handle date fields
-        if (["startDate", "endDate", "purchaseOrderDate", "warrantyStartDate"].includes(fieldName)) {
-            oldValue = oldValue ? oldValue.toISOString() : null;
-            newValue = newValue ? new Date(newValue).toISOString() : null;
-        }
-        
-        // Handle object IDs
-        if (typeof newValue === "object" && newValue._id) {
-            newValue = new ObjectId(newValue._id);
-        }
-        
-        // Skip tracking if both old and new values are null/undefined
-        if ((oldValue === null || oldValue === undefined) && (newValue === null || newValue === undefined)) {
-            return;
-        }
-        
-        // Convert to strings for comparison, handling null/undefined
-        const oldValueStr = oldValue !== null && oldValue !== undefined ? oldValue.toString() : "";
-        const newValueStr = newValue !== null && newValue !== undefined ? newValue.toString() : "";
-        
-        if (oldValueStr !== newValueStr) {
-            changes.push({
-                projectId: id,
-                fieldName: fieldName,
-                oldValue: oldValue,
-                newValue: newValue,
-                changeReason: req.body.changeReason || "Updated via project edit",
-            });
-        }
-    };
-
+    const originalData = await Project.findById(id);
+    
     if (!originalData) {
       return res.status(404).json({ success: false, error: "Project not found" });
+    }
+
+    // Helper function to serialize Address object for comparison
+    const serializeAddress = (addr) => {
+      if (!addr) return null;
+      return JSON.stringify({
+        add: addr.add || null,
+        city: addr.city || null,
+        state: addr.state || null,
+        country: addr.country || null,
+        pincode: addr.pincode || null
+      });
+    };
+
+    // *** STORE OLD DATA FOR LOGGING - Convert to plain object ***
+    const oldProjectData = {
+      name: originalData.name,
+      custId: originalData.custId ? originalData.custId.toString() : null,
+      Address: serializeAddress(originalData.Address),
+      completeLevel: originalData.completeLevel,
+      purchaseOrderNo: originalData.purchaseOrderNo,
+      projectStatus: originalData.projectStatus,
+      purchaseOrderDate: originalData.purchaseOrderDate,
+      purchaseOrderValue: originalData.purchaseOrderValue,
+      category: originalData.category,
+      startDate: originalData.startDate,
+      endDate: originalData.endDate,
+      advancePay: originalData.advancePay,
+      payAgainstDelivery: originalData.payAgainstDelivery,
+      payAfterCompletion: originalData.payAfterCompletion,
+      remark: originalData.remark,
+      retention: originalData.retention,
+      POCopy: originalData.POCopy,
+      completionCertificate: originalData.completionCertificate,
+      warrantyCertificate: originalData.warrantyCertificate,
+      warrantyStartDate: originalData.warrantyStartDate,
+      warrantyMonths: originalData.warrantyMonths,
+      _id: originalData._id
+    };
+    
+    // *** BUILD UPDATE DATA - Include only fields that are provided ***
+    const updateData = {};
+    
+    // Only add fields to updateData if they are provided in the request
+    if (name !== undefined) updateData.name = name;
+    if (custId !== undefined) updateData.custId = custId;
+    if (Address !== undefined) updateData.Address = Address;
+    if (completeLevel !== undefined) updateData.completeLevel = completeLevel;
+    if (purchaseOrderNo !== undefined) updateData.purchaseOrderNo = purchaseOrderNo;
+    if (projectStatus !== undefined) updateData.projectStatus = projectStatus;
+    if (purchaseOrderValue !== undefined) updateData.purchaseOrderValue = purchaseOrderValue;
+    if (category !== undefined) updateData.category = category;
+    if (advancePay !== undefined) updateData.advancePay = advancePay;
+    if (payAgainstDelivery !== undefined) updateData.payAgainstDelivery = payAgainstDelivery;
+    if (payAfterCompletion !== undefined) updateData.payAfterCompletion = payAfterCompletion;
+    if (remark !== undefined) updateData.remark = remark;
+    if (retention !== undefined) updateData.retention = retention;
+    
+    // Handle date fields with validation
+    if (purchaseOrderDate !== undefined && purchaseOrderDate !== null && purchaseOrderDate !== '') {
+      const poDate = new Date(purchaseOrderDate);
+      if (!isNaN(poDate.getTime())) {
+        updateData.purchaseOrderDate = poDate;
+      }
+    }
+    
+    if (startDate !== undefined && startDate !== null && startDate !== '') {
+      const start = new Date(startDate);
+      if (!isNaN(start.getTime())) {
+        updateData.startDate = start;
+      }
+    }
+    
+    if (endDate !== undefined && endDate !== null && endDate !== '') {
+      const end = new Date(endDate);
+      if (!isNaN(end.getTime())) {
+        updateData.endDate = end;
+      }
+    }
+    
+    // Handle POCopy upload
+    if (POCopy) {
+      try {
+        let base64String = POCopy;
+        if (base64String.includes(',')) {
+          base64String = base64String.split(',')[1];
+        }
+        const buffer = Buffer.from(base64String, 'base64');
+        const fileName = `POCopy/${id}_${Date.now()}.pdf`;
+        const file = bucket.file(fileName);
+
+        await file.save(buffer, {
+          metadata: { contentType: 'application/pdf' },
+        });
+
+        await file.makePublic();
+        const POCopyUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        updateData.POCopy = POCopyUrl;
+      } catch (error) {
+        console.error('Error processing POCopy:', error);
+        return res.status(400).json({
+          success: false,
+          error: "Invalid file format for POCopy"
+        });
+      }
     }
 
     // Handle completion certificate upload
@@ -579,33 +627,77 @@ exports.updateProject = async (req, res) => {
       }
     }
 
-    // Add warranty fields if provided
-    if (warrantyStartDate) {
-      updateData.warrantyStartDate = new Date(warrantyStartDate);
+    // Handle warranty start date with validation
+    if (warrantyStartDate !== undefined && warrantyStartDate !== null && warrantyStartDate !== '') {
+      const warrantyDate = new Date(warrantyStartDate);
+      if (!isNaN(warrantyDate.getTime())) {
+        updateData.warrantyStartDate = warrantyDate;
+      }
     }
     
-    if (warrantyMonths) {
-      updateData.warrantyMonths = parseInt(warrantyMonths);
+    // Handle warranty months with validation
+    if (warrantyMonths !== undefined && warrantyMonths !== null && warrantyMonths !== '') {
+      const months = parseInt(warrantyMonths);
+      if (!isNaN(months)) {
+        updateData.warrantyMonths = months;
+      }
     }
 
-    // Track changes for all fields that exist in the original document
-    for (const key in updateData) {
-        // Skip if both values are undefined/null
-        if (updateData[key] === undefined && originalData[key] === undefined) {
-            continue;
-        }
-        
-        // Only track if the field exists in the original document
-        if (originalData[key] !== undefined && updateData[key] !== originalData[key]) {
-            trackChanges(key, originalData[key], updateData[key]);
-        }
+    const updatedProjectDoc = await Project.findByIdAndUpdate(
+      id, 
+      { $set: updateData }, 
+      { runValidators: true, new: true }
+    );
+
+    if (!updatedProjectDoc) {
+      return res.status(404).json({ success: false, error: "Project not found after update" });
     }
 
-    if (changes.length > 0) {
-      await ProjectHistory.insertMany(changes);
-    }
+    // *** CONVERT TO PLAIN OBJECT FOR LOGGING ***
+    const updatedProject = {
+      name: updatedProjectDoc.name,
+      custId: updatedProjectDoc.custId ? updatedProjectDoc.custId.toString() : null,
+      Address: serializeAddress(updatedProjectDoc.Address),
+      completeLevel: updatedProjectDoc.completeLevel,
+      purchaseOrderNo: updatedProjectDoc.purchaseOrderNo,
+      projectStatus: updatedProjectDoc.projectStatus,
+      purchaseOrderDate: updatedProjectDoc.purchaseOrderDate,
+      purchaseOrderValue: updatedProjectDoc.purchaseOrderValue,
+      category: updatedProjectDoc.category,
+      startDate: updatedProjectDoc.startDate,
+      endDate: updatedProjectDoc.endDate,
+      advancePay: updatedProjectDoc.advancePay,
+      payAgainstDelivery: updatedProjectDoc.payAgainstDelivery,
+      payAfterCompletion: updatedProjectDoc.payAfterCompletion,
+      remark: updatedProjectDoc.remark,
+      retention: updatedProjectDoc.retention,
+      POCopy: updatedProjectDoc.POCopy,
+      completionCertificate: updatedProjectDoc.completionCertificate,
+      warrantyCertificate: updatedProjectDoc.warrantyCertificate,
+      warrantyStartDate: updatedProjectDoc.warrantyStartDate,
+      warrantyMonths: updatedProjectDoc.warrantyMonths,
+      _id: updatedProjectDoc._id
+    };
 
-    await Project.findByIdAndUpdate(id, { $set: updateData }, {runValidators: true});
+    // *** DEBUGGING - Log the data being compared ***
+    console.log('=== DEBUGGING ACTIVITY LOG ===');
+    console.log('Old custId:', oldProjectData.custId);
+    console.log('New custId:', updatedProject.custId);
+    console.log('Old category:', oldProjectData.category);
+    console.log('New category:', updatedProject.category);
+    console.log('Old purchaseOrderValue:', oldProjectData.purchaseOrderValue);
+    console.log('New purchaseOrderValue:', updatedProject.purchaseOrderValue);
+    console.log('Old advancePay:', oldProjectData.advancePay);
+    console.log('New advancePay:', updatedProject.advancePay);
+    console.log('Old retention:', oldProjectData.retention);
+    console.log('New retention:', updatedProject.retention);
+    console.log('Old Address:', oldProjectData.Address);
+    console.log('New Address:', updatedProject.Address);
+    console.log('================================');
+
+    // *** LOG ACTIVITY - Project Update ***
+    await logUpdate(oldProjectData, updatedProject, user, req, 'Project');
+
     return res.status(200).json({ success: true, message: "Project Updated Successfully" });
   } catch (error) {
     console.error("Error updating project:", error);

@@ -1,6 +1,6 @@
 const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel.js');
-
+const { logLeadCreation, logLeadUpdate, logLeadDeletion, logLeadAssignment, logStatusChange, logCallAttempt } = require('../middlewares/activityLogger');
 exports.getLeads = async (req, res) => {
   const user = req.user;
   const page = parseInt(req.query.page) || 1;
@@ -405,32 +405,19 @@ exports.assignLead = async (req, res) => {
     const leadId = req.params.id;
     const { feasibility, remark, assignedTo, callHistory } = req.body;
 
-    console.log('=== ASSIGN LEAD CALLED ===');
-    console.log('Lead ID:', leadId);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
-    console.log('User:', JSON.stringify(user, null, 2));
-
     if (!Types.ObjectId.isValid(leadId)) {
-      console.error('Invalid lead ID format:', leadId);
       return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
     }
 
     const lead = await Lead.findOne({ _id: leadId, company: user.company || user._id });
 
     if (!lead) {
-      console.error('Lead not found:', leadId);
       return res.status(404).json({ success: false, error: 'Lead not found.' });
     }
 
-    console.log('Lead before assignment:', {
-      _id: lead._id,
-      feasibility: lead.feasibility,
-      assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy,
-      callHistory: lead.callHistory
-    });
+    // Store old assignedTo for logging
+    const oldAssignedTo = lead.assignedTo;
 
-    // Update feasibility
     if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') {
       lead.feasibility = feasibility;
     } else {
@@ -447,9 +434,7 @@ exports.assignLead = async (req, res) => {
     lead.assignedTime = new Date();
     lead.remark = remark || 'Reason not provided';
 
-    // Handle call history if provided
     if (callHistory && Array.isArray(callHistory)) {
-      // Ensure attemptedBy is an ObjectId for each call history entry
       lead.callHistory = callHistory.map(call => {
         const callEntry = { ...call };
         if (callEntry.attemptedBy && typeof callEntry.attemptedBy === 'string') {
@@ -464,7 +449,6 @@ exports.assignLead = async (req, res) => {
         return callEntry;
       });
       
-      // Check if there are 9 calls or calls on 3 different days
       const uniqueDays = [...new Set(callHistory.map(call => call.day))];
       if (callHistory.length >= 9 || uniqueDays.length >= 3) {
         lead.feasibility = 'call-unanswered';
@@ -474,55 +458,24 @@ exports.assignLead = async (req, res) => {
       }
     }
 
-    console.log('Lead before save:', {
-      _id: lead._id,
-      feasibility: lead.feasibility,
-      assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy,
-      callHistory: lead.callHistory
-    });
-
     await lead.save();
-   
-    console.log('Lead after save:', {
-      _id: lead._id,
-      feasibility: lead.feasibility,
-      assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy,
-      callHistory: lead.callHistory
-    });
+
+    // *** LOG ACTIVITY ***
+    if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) {
+      const assignedEmployee = await require('../models/employeeModel').findById(assignedTo);
+      await logLeadAssignment(lead, assignedEmployee, user, req);
+    }
    
     const savedLead = await Lead.findById(lead._id)
       .populate('assignedTo', 'name')
       .populate('assignedBy', 'name');
-    
-    console.log('Verified saved lead:', {
-      _id: savedLead._id,
-      feasibility: savedLead.feasibility,
-      assignedTo: savedLead.assignedTo,
-      assignedBy: savedLead.assignedBy,
-      callHistory: savedLead.callHistory
-    });
 
-    const salesMasterQuery = {
-      company: new Types.ObjectId(user.company || user._id),
-      feasibility: "feasible"
-    };
-   
-    if (user.company && user.user !== 'company') {
-      salesMasterQuery.assignedTo = new Types.ObjectId(user._id);
-    }
-   
-    const wouldAppearInSalesMaster = await Lead.findOne(salesMasterQuery);
-    console.log('Would lead appear in Sales Master?', !!wouldAppearInSalesMaster);
-   
     res.status(200).json({
       success: true,
       message: 'Lead assigned successfully.',
       data: {
         feasibility: savedLead.feasibility,
         assignedTo: savedLead.assignedTo,
-        wouldAppearInSalesMaster: !!wouldAppearInSalesMaster,
         callHistory: savedLead.callHistory
       }
     });
@@ -531,7 +484,6 @@ exports.assignLead = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
-
 exports.submiEnquiry = async (req, res) => {
   try {
     const user = req.user;
@@ -622,14 +574,6 @@ exports.createLead = async (req, res) => {
       callLeads
     } = req.body;
 
-    console.log('=== CREATE LEAD CALLED ===');
-    console.log('User ID:', user._id);
-    console.log('User Type:', user.user);
-    console.log('Request body feasibility:', feasibility);
-    console.log('Request body assignedTo:', assignedTo);
-    console.log('Request body assignedBy:', assignedBy);
-    console.log('Request body callLeads:', callLeads);
-
     const leadData = {
       SENDER_NAME,
       SENDER_EMAIL,
@@ -650,23 +594,17 @@ exports.createLead = async (req, res) => {
     };
 
     leadData.feasibility = feasibility || 'none';
-   
-    console.log('Setting feasibility to:', leadData.feasibility);
 
     if (assignedTo) {
       leadData.assignedTo = new Types.ObjectId(assignedTo);
-      console.log('Lead assigned to:', assignedTo);
     } else {
       leadData.assignedTo = new Types.ObjectId(user._id);
-      console.log('No assignedTo provided, assigning to current user:', user._id);
     }
 
     if (assignedBy) {
       leadData.assignedBy = new Types.ObjectId(assignedBy);
-      console.log('Lead assigned by:', assignedBy);
     } else {
       leadData.assignedBy = new Types.ObjectId(user._id);
-      console.log('No assignedBy provided, setting to current user:', user._id);
     }
 
     if (assignedTime) {
@@ -683,27 +621,16 @@ exports.createLead = async (req, res) => {
       leadData.customerId = new Types.ObjectId(customerId);
     }
 
-    console.log('Final lead data to save:', JSON.stringify(leadData, null, 2));
-
     const lead = new Lead(leadData);
     await lead.save();
 
-    console.log('Lead saved with values:', {
-      _id: lead._id,
-      feasibility: lead.feasibility,
-      assignedTo: lead.assignedTo,
-      assignedBy: lead.assignedBy,
-      company: lead.company,
-      callLeads: lead.callLeads,
-      callHistory: lead.callHistory
-    });
+    // *** LOG ACTIVITY ***
+    await logLeadCreation(lead, user, req);
 
     const populatedLead = await Lead.findById(lead._id)
       .populate('assignedTo', 'name email')
       .populate('assignedBy', 'name email')
       .populate('customerId', 'custName name');
-
-    console.log('Lead saved successfully. Lead ID:', lead._id);
 
     res.status(200).json({
       success: true,
@@ -715,7 +642,6 @@ exports.createLead = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
-
 exports.updateLead = async (req, res) => {
   try {
     const user = req.user;
@@ -733,6 +659,9 @@ exports.updateLead = async (req, res) => {
         error: `Cannot update a lead with status "${lead.STATUS}". This lead is already finalized.`
       });
     }
+
+    // *** STORE OLD DATA FOR LOGGING ***
+    const oldLeadData = lead.toObject();
 
     if (updateData.previousActions && Array.isArray(updateData.previousActions)) {
       updateData.previousActions = updateData.previousActions.map(action => {
@@ -778,6 +707,14 @@ exports.updateLead = async (req, res) => {
 
     await lead.save();
 
+    // *** LOG ACTIVITY ***
+    await logLeadUpdate(oldLeadData, updateData, user, req);
+
+    // If status changed, log separately
+    if (updateData.STATUS && oldLeadData.STATUS !== updateData.STATUS) {
+      await logStatusChange(lead, oldLeadData.STATUS, updateData.STATUS, user, req);
+    }
+
     const updatedLead = await Lead.findById(id)
       .populate('assignedTo', 'name email')
       .populate('assignedBy', 'name email');
@@ -793,7 +730,6 @@ exports.updateLead = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
-
 exports.deleteLead = async (req, res) => {
   try {
     const user = req.user;
@@ -815,7 +751,11 @@ exports.deleteLead = async (req, res) => {
       });
     }
 
+    // *** LOG ACTIVITY BEFORE DELETION ***
+    await logLeadDeletion(lead, user, req);
+
     await Lead.deleteOne({ _id: leadId, company: user.company || user._id });
+    
     res.status(200).json({ success: true, message: 'Lead deleted successfully.' });
   } catch (error) {
     console.error('Error deleting lead:', error);

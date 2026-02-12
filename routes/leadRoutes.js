@@ -7,17 +7,7 @@ const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel.js');
 const { autoMarkStaleLeads } = require('../scripts/autoMarkStaleLeads');
 
-
-// CRITICAL: ROUTE ORDERING MATTERS!
-// Specific routes MUST come BEFORE generic /:id routes
-// Otherwise Express will match /:id first and return 404
-
-
 console.log('📋 Registering Lead Routes...');
-
-
-// SPECIFIC ROUTES (NO :id PARAMETER) - MUST BE FIRST
-
 
 // Manual stale lead processing
 router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req, res) => {
@@ -61,25 +51,12 @@ router.get('/sales-managers', permissionMiddleware(['viewLead']), salesManagerCo
 // Get all leads
 router.get('/all-leads', permissionMiddleware(['viewLead']), salesManagerController.getAllLeads);
 
-// CALL ATTEMPT ROUTE - CRITICAL: MUST BE BEFORE /:id ROUTES
-
+// CALL ATTEMPT ROUTE
 console.log('✅ Registering /call-attempt/:id route');
 
 router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   try {
     console.log('=== CALL ATTEMPT API CALLED ===');
-    console.log('Environment:', process.env.NODE_ENV || 'development');
-    console.log('Lead ID:', req.params.id);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
-    console.log('User:', req.user ? { 
-      id: req.user._id, 
-      company: req.user.company,
-      permissions: req.user.permissions,
-      userType: req.user.user 
-    } : 'No user');
-    console.log('Request URL:', req.originalUrl);
-    console.log('Request Method:', req.method);
-
     const user = req.user;
     const leadId = req.params.id;
     const { day, attempt, date, status, remarks, attemptedBy } = req.body;
@@ -94,7 +71,6 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
       return res.status(401).json({ success: false, error: 'User not authenticated. Please log in.' });
     }
 
-    // Find the lead belonging to this company
     const lead = await Lead.findOne({
       _id: leadId,
       company: user.company || user._id
@@ -102,24 +78,12 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
 
     if (!lead) {
       console.error('Lead not found or access denied');
-      console.error('Search criteria:', {
-        _id: leadId,
-        company: user.company || user._id
-      });
       return res.status(404).json({ 
         success: false, 
         error: 'Lead not found or you do not have access to this lead.' 
       });
     }
 
-    console.log('Lead found:', {
-      id: lead._id,
-      company: lead.company,
-      currentCallHistoryLength: lead.callHistory.length,
-      currentFeasibility: lead.feasibility
-    });
-
-    // Validate required fields
     if (!day || !attempt) {
       return res.status(400).json({
         success: false,
@@ -127,7 +91,6 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
       });
     }
 
-    // Check if this call attempt already exists
     const existingCallIndex = lead.callHistory.findIndex(
       call => call.day === day && call.attempt === attempt
     );
@@ -140,10 +103,8 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
       });
     }
 
-    // Check if this is the first call attempt for this lead
     const isFirstCall = lead.callHistory.length === 0;
 
-    // Add the new call attempt
     const newCall = {
       day,
       attempt,
@@ -157,33 +118,22 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
 
     lead.callHistory.push(newCall);
 
-    // Set the first call date if this is the first call
     if (isFirstCall) {
       lead.firstCallDate = new Date();
       console.log('📅 Setting first call date:', lead.firstCallDate);
     }
 
-    // Sort the call history by day and attempt
     lead.callHistory.sort((a, b) => {
       if (a.day !== b.day) return a.day - b.day;
       return a.attempt - b.attempt;
     });
-
-    // CRITICAL: DO NOT CHANGE FEASIBILITY HERE
-    // The feasibility should only be changed when the user submits the form via /assign/:id
-    // Recording call attempts does NOT automatically mark as call-unanswered
-    // This keeps the lead on the marketing page with feasibility = 'none'
     
     console.log('Saving lead with call history...');
-    console.log('Feasibility remains:', lead.feasibility);
     
     await lead.save();
 
     console.log('=== LEAD SAVED SUCCESSFULLY ===');
-    console.log('Final call history length:', lead.callHistory.length);
-    console.log('Final feasibility (unchanged):', lead.feasibility);
 
-    // Return the saved call attempt
     const savedCall = lead.callHistory.find(
       call => call.day === day && call.attempt === attempt
     );
@@ -196,7 +146,6 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   } catch (error) {
     console.error('=== ERROR IN CALL ATTEMPT API ===');
     console.error('Error:', error);
-    console.error('Error Stack:', error.stack);
 
     res.status(500).json({
       success: false,
@@ -207,8 +156,7 @@ router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
 
 console.log('✅ /call-attempt/:id route registered successfully');
 
-// ROUTES WITH :id IN THE PATH - MUST COME AFTER /call-attempt/:id
-
+// ROUTES WITH :id IN THE PATH
 
 // Marketing to Sales assignment
 router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.assignLead);
@@ -228,7 +176,7 @@ router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLe
 // Delete lead
 router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);
 
-// GENERIC ROUTES (NO PARAMETERS) - CAN BE ANYWHERE
+// GENERIC ROUTES
 
 // Get all marketing leads
 router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
@@ -236,10 +184,9 @@ router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController
 // Create new lead
 router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
 
-console.log(' All lead routes registered successfully');
+console.log('✅ All lead routes registered successfully');
 
-// DEBUG ROUTE - ONLY FOR DEVELOPMENT/TESTING
-
+// DEBUG ROUTE
 if (process.env.NODE_ENV !== 'production') {
   router.get('/debug-routes', (req, res) => {
     const routes = [];

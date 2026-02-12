@@ -76,6 +76,15 @@ const designationSchema = new mongoose.Schema({
             "updateLead",
             "deleteLead",
 
+            "viewAnnualReport",
+            "createAnnualReport",
+            "updateAnnualReport",
+            "deleteAnnualReport",
+
+            "viewActivityLog",
+            "createActivityLog",
+            "updateActivityLog",
+            "deleteActivityLog",
     
             "viewAMC",
             "createAMC",
