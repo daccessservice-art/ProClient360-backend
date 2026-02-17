@@ -1,6 +1,7 @@
 const express = require('express');
 const { permissionMiddleware } = require('../middlewares/auth');
 const { showAll, createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder, getPurchaseOrder, getPurchaseOrderHistory } = require('../controllers/purchaseOrderController');
+const { downloadPurchaseOrderPDF } = require('../controllers/purchaseOrderPdfController');
 const upload = require('../middlewares/fileUpload');
 const { bucket } = require('../utils/firebase');
 const PurchaseOrder = require('../models/purchaseOrderModel');
@@ -11,6 +12,9 @@ const router = express.Router();
 router.get('/', permissionMiddleware(['viewPurchaseOrder']), showAll);
 router.get('/:id', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrder);
 router.get('/:id/history', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrderHistory);
+
+// ✅ NEW: PDF download route
+router.get('/:id/pdf', permissionMiddleware(['viewPurchaseOrder']), downloadPurchaseOrderPDF);
 
 router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.single('file'), async (req, res) => {
   try {
@@ -63,24 +67,19 @@ router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.sin
         savedPO = await newPurchaseOrder.save();
       } catch (saveError) {
         if (saveError.code === 11000 && saveError.keyPattern && saveError.keyPattern.orderNumber) {
-          // Duplicate key error for orderNumber, regenerate and retry
           console.log(`Duplicate order number detected, retrying... (Attempt ${retryCount + 1}/${maxRetries})`);
-          
-          // Clear the order number to trigger regeneration
           newPurchaseOrder.orderNumber = undefined;
           retryCount++;
-          
           if (retryCount >= maxRetries) {
             throw saveError;
           }
         } else {
-          throw saveError; // Re-throw if it's not a duplicate key error
+          throw saveError;
         }
       }
     }
 
     if (savedPO) {
-      // Create history record
       await new PurchaseOrderHistory({
         purchaseOrder: savedPO._id,
         updatedBy: user._id,
@@ -112,7 +111,7 @@ router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.sin
   }
 });
 
-// NEW: File upload route for UPDATE
+// File upload route for UPDATE
 router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -120,7 +119,6 @@ router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.
     const poData = JSON.parse(req.body.poData);
     const user = req.user;
 
-    // Find existing purchase order
     const existingPO = await PurchaseOrder.findById(id);
     if (!existingPO) {
       return res.status(404).json({ 
@@ -142,7 +140,6 @@ router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.
       }
     }
 
-    // Handle file upload to Firebase
     if (file) {
       const fileName = `purchaseOrders/${Date.now()}_${file.originalname}`;
       const fileUpload = bucket.file(fileName);
@@ -154,37 +151,32 @@ router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.
       await fileUpload.makePublic();
       const fileUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
       
-      // Add new file URL to attachments (keep existing ones)
       poData.attachments = [...(existingPO.attachments || []), fileUrl];
     }
 
-    // Store previous values for history
     const previousValues = { ...existingPO._doc };
     
-    // Check for changes
-    const statusChanged = existingPO.status !== poData.status;
-    const itemsChanged = JSON.stringify(existingPO.items) !== JSON.stringify(poData.items);
+    const statusChanged       = existingPO.status !== poData.status;
+    const itemsChanged        = JSON.stringify(existingPO.items) !== JSON.stringify(poData.items);
     const paymentTermsChanged = JSON.stringify(existingPO.paymentTerms) !== JSON.stringify(poData.paymentTerms);
     
-    // Update purchase order
     const updatedPurchaseOrder = await PurchaseOrder.findByIdAndUpdate(
       id, 
       poData, 
       { new: true, runValidators: true }
     );
 
-    // Create history record
-    let updateType = 'UPDATE';
+    let updateType  = 'UPDATE';
     let description = 'Purchase order updated';
     
     if (statusChanged) {
-      updateType = 'STATUS_CHANGE';
+      updateType  = 'STATUS_CHANGE';
       description = `Status changed from ${existingPO.status} to ${poData.status}`;
     } else if (paymentTermsChanged) {
-      updateType = 'PAYMENT_TERMS_UPDATE';
+      updateType  = 'PAYMENT_TERMS_UPDATE';
       description = 'Payment terms updated';
     } else if (itemsChanged) {
-      updateType = 'ITEM_UPDATE';
+      updateType  = 'ITEM_UPDATE';
       description = 'Items updated';
     }
     

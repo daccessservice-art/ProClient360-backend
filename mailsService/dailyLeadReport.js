@@ -54,13 +54,11 @@ const sendEmailInBatches = async (recipients, mailOptions, companyName) => {
 const sendDailyLeadReport = async (isScheduledRun = false) => {
   try {
     // Check if this is a scheduled run or if we're in production
-    // If it's not a scheduled run and we're in development, don't send emails
     if (!isScheduledRun && process.env.NODE_ENV === 'development') {
       console.log('🔍 Development mode detected. Skipping email sending to avoid hitting daily limit.');
       console.log('📊 Report would be generated but emails are not sent in development mode.');
     }
     
-    // In production, only send emails if this is a scheduled run
     if (process.env.NODE_ENV === 'production' && !isScheduledRun) {
       console.log('🔍 Production mode detected but not a scheduled run. Skipping email sending.');
       console.log('📊 Report would be generated but emails are not sent outside scheduled times.');
@@ -70,12 +68,18 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
     console.log('🔧 Environment:', process.env.NODE_ENV || 'Not set');
     console.log('📧 Email Sending:', isScheduledRun ? 'ENABLED (Scheduled Run)' : 'DISABLED (Manual Run)');
     
-    // Get today's date range
+    // ✅ Report sends at 10 AM today → shows YESTERDAY's leads
     const today = new Date();
-    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-    const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
 
-    // First, get the designation IDs for the target designations
+    const reportDate = yesterday; // The date being reported on
+    const startOfReportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate(), 0, 0, 0, 0);
+    const endOfReportDay   = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate(), 23, 59, 59, 999);
+
+    console.log(`📅 Report covers: ${startOfReportDay.toISOString()} → ${endOfReportDay.toISOString()}`);
+
+    // Get the designation IDs for the target designations
     const Designation = require('../models/designationModel');
     const targetDesignationNames = [
       'Director Customer Delight',
@@ -104,115 +108,43 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
       
       try {
         console.log(`Processing company ${i+1}/${companies.length}: ${companyId}`);
-        
-        // DEBUGGING: Check if IndiaMart leads exist in the database
-        // Use case-insensitive query to find any variations of "IndiaMart"
-        const allIndiaMartLeads = await Lead.find({ 
-          company: companyId,
-          SOURCE: { $regex: /IndiaMart/i } // Case-insensitive regex
-        }).lean();
-        
-        console.log(`🔍 DEBUG: Found ${allIndiaMartLeads.length} total IndiaMart leads for company ${companyId}`);
-        
-        // If in development mode and no IndiaMart leads exist, create some sample data
-        if (process.env.NODE_ENV === 'development' && allIndiaMartLeads.length === 0) {
-          console.log(`🔍 DEVELOPMENT MODE: No IndiaMart leads found for company ${companyId}. Creating sample data...`);
-          
-          // Create some sample IndiaMart leads for testing
-          const sampleLeads = [
-            {
-              company: companyId,
-              SENDER_COMPANY: 'Sample IndiaMart Company 1',
-              SENDER_NAME: 'John Doe',
-              SENDER_MOBILE: '9876543210',
-              QUERY_PRODUCT_NAME: 'Sample Product 1',
-              SOURCE: 'IndiaMart',
-              feasibility: 'feasible',
-              createdAt: new Date()
-            },
-            {
-              company: companyId,
-              SENDER_COMPANY: 'Sample IndiaMart Company 2',
-              SENDER_NAME: 'Jane Smith',
-              SENDER_MOBILE: '9876543211',
-              QUERY_PRODUCT_NAME: 'Sample Product 2',
-              SOURCE: 'IndiaMart',
-              feasibility: 'not-feasible',
-              remark: 'Out of service area',
-              createdAt: new Date()
-            },
-            {
-              company: companyId,
-              SENDER_COMPANY: 'Sample IndiaMart Company 3',
-              SENDER_NAME: 'Bob Johnson',
-              SENDER_MOBILE: '9876543212',
-              QUERY_PRODUCT_NAME: 'Sample Product 3',
-              SOURCE: 'IndiaMart',
-              feasibility: 'none',
-              createdAt: new Date()
-            }
-          ];
-          
-          await Lead.insertMany(sampleLeads);
-          console.log(`🔍 DEVELOPMENT MODE: Created ${sampleLeads.length} sample IndiaMart leads for company ${companyId}`);
-          
-          // Refresh the allIndiaMartLeads after creating sample data
-          const updatedIndiaMartLeads = await Lead.find({ 
-            company: companyId,
-            SOURCE: { $regex: /IndiaMart/i }
-          }).lean();
-          
-          console.log(`🔍 DEBUG: After creating samples, now have ${updatedIndiaMartLeads.length} IndiaMart leads for company ${companyId}`);
-        }
-        
-        // Get today's leads from TradeIndia, IndiaMart, and manually added (Direct)
-        // Use case-insensitive query for IndiaMart
-        const todayLeads = await Lead.find({
+
+        // ✅ Get YESTERDAY's leads from TradeIndia, IndiaMart, and Direct
+        const reportLeads = await Lead.find({
           company: companyId,
           createdAt: {
-            $gte: startOfToday,
-            $lt: endOfToday
+            $gte: startOfReportDay,
+            $lte: endOfReportDay
           },
           $or: [
             { SOURCE: 'TradeIndia' },
-            { SOURCE: { $regex: /IndiaMart/i } }, // Case-insensitive regex for IndiaMart
+            { SOURCE: { $regex: /IndiaMart/i } },
             { SOURCE: 'Direct' }
           ]
         }).lean();
 
-        // DEBUGGING: Check leads by source
-        const tradeIndiaLeads = todayLeads.filter(lead => 
+        // Group by source
+        const tradeIndiaLeads = reportLeads.filter(lead => 
           lead.SOURCE === 'TradeIndia' || lead.SOURCE === 'TradeIndia '
         );
-        const indiaMartLeads = todayLeads.filter(lead => 
-          lead.SOURCE && lead.SOURCE.match(/IndiaMart/i) // Case-insensitive match
+        const indiaMartLeads = reportLeads.filter(lead => 
+          lead.SOURCE && lead.SOURCE.match(/IndiaMart/i)
         );
-        const directLeads = todayLeads.filter(lead => 
+        const directLeads = reportLeads.filter(lead => 
           lead.SOURCE === 'Direct' || lead.SOURCE === 'Direct '
         );
         
-        console.log(`🔍 DEBUG: Today's leads for company ${companyId}:`);
+        console.log(`🔍 Yesterday's leads for company ${companyId}:`);
         console.log(`  - TradeIndia: ${tradeIndiaLeads.length} leads`);
         console.log(`  - IndiaMart: ${indiaMartLeads.length} leads`);
         console.log(`  - Direct: ${directLeads.length} leads`);
-        
-        // If no IndiaMart leads found today, check if there are any recent ones
-        if (indiaMartLeads.length === 0 && allIndiaMartLeads.length > 0) {
-          const recentIndiaMartLeads = allIndiaMartLeads
-            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-            .slice(0, 5);
-          
-          console.log(`🔍 DEBUG: Most recent IndiaMart leads for company ${companyId}:`);
-          recentIndiaMartLeads.forEach((lead, index) => {
-            console.log(`  ${index + 1}. ${lead.SENDER_COMPANY} - ${lead.createdAt} - SOURCE: "${lead.SOURCE}"`);
-          });
-        }
 
         // Count leads by feasibility
-        const allLeadsCount = todayLeads.length;
-        const feasibleLeads = todayLeads.filter(lead => lead.feasibility === 'feasible');
-        const notFeasibleLeads = todayLeads.filter(lead => lead.feasibility === 'not-feasible');
-        const pendingLeads = todayLeads.filter(lead => lead.feasibility === 'none');
+        const allLeadsCount        = reportLeads.length;
+        const feasibleLeads        = reportLeads.filter(lead => lead.feasibility === 'feasible');
+        const notFeasibleLeads     = reportLeads.filter(lead => lead.feasibility === 'not-feasible');
+        const pendingLeads         = reportLeads.filter(lead => lead.feasibility === 'none');
+        const callUnansweredLeads  = reportLeads.filter(lead => lead.feasibility === 'call-unanswered');
 
         // Get ONLY employees with the target designations and valid emails
         const recipients = await Employee.find({
@@ -245,6 +177,127 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           'Junior Software Developer': recipients.filter(r => r.designation && r.designation.name === 'Junior Software Developer')
         };
 
+        // Helper: format lead date/time — returns two-line date + time chip
+        const formatLeadTime = (date) => {
+          if (!date) return '<span style="color:#9ca3af;">N/A</span>';
+          const d = new Date(date);
+          const datePart = d.toLocaleDateString('en-IN', {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
+          });
+          const timePart = d.toLocaleTimeString('en-IN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          }).toUpperCase();
+          return `
+            <div style="line-height:1.5;">
+              <div style="font-size:12px; color:#374151; font-weight:600; white-space:nowrap;">
+                🗓 ${datePart}
+              </div>
+              <div style="font-size:12px; color:#6366f1; font-weight:600; white-space:nowrap; margin-top:2px;">
+                🕐 ${timePart}
+              </div>
+            </div>
+          `;
+        };
+
+        // Helper: build feasibility cell — shows reason inline for not-feasible & call-unanswered
+        const getFeasibilityCell = (lead) => {
+          if (lead.feasibility === 'feasible') {
+            return `<span class="feasibility-badge badge-feasible">✅ Feasible</span>`;
+          } else if (lead.feasibility === 'not-feasible') {
+            return `
+              <span class="feasibility-badge badge-not-feasible">❌ Not Feasible</span>
+              ${lead.remark ? `<div class="reason-text">📝 ${lead.remark}</div>` : ''}
+            `;
+          } else if (lead.feasibility === 'call-unanswered') {
+            const callCount  = lead.callHistory ? lead.callHistory.length : 0;
+            const uniqueDays = lead.callHistory
+              ? [...new Set(lead.callHistory.map(c => c.day))].length
+              : 0;
+            return `
+              <span class="feasibility-badge badge-call-unanswered">📵 Call Unanswered</span>
+              ${lead.remark ? `<div class="reason-text">📝 ${lead.remark}</div>` : ''}
+              <div class="reason-text">📞 ${callCount} call(s) over ${uniqueDays} day(s)</div>
+            `;
+          } else {
+            return `<span class="feasibility-badge badge-pending">⏳ Pending</span>`;
+          }
+        };
+
+        // Build lead table rows — includes time column + inline feasibility reason
+        const buildLeadRows = (leads) => leads.map(lead => `
+          <tr>
+            <td>${lead.SENDER_COMPANY || 'N/A'}</td>
+            <td>${lead.SENDER_NAME || 'N/A'}</td>
+            <td>${lead.QUERY_PRODUCT_NAME || 'N/A'}</td>
+            <td>${lead.SENDER_MOBILE || 'N/A'}</td>
+            <td style="min-width:110px;">${formatLeadTime(lead.createdAt)}</td>
+            <td>${getFeasibilityCell(lead)}</td>
+          </tr>
+        `).join('');
+
+        // Build Call Unanswered dedicated section
+        const buildCallUnansweredSection = (leads) => {
+          if (leads.length === 0) return '';
+          return `
+            <div>
+              <h2 class="section-title">📵 Call Unanswered Leads</h2>
+              <table class="lead-table">
+                <thead>
+                  <tr>
+                    <th>Company Name</th>
+                    <th>Contact Person</th>
+                    <th>Source</th>
+                    <th>Mobile</th>
+                    <th class="th-time">🕐 Lead Time</th>
+                    <th>Calls Made</th>
+                    <th>Remarks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${leads.map(lead => {
+                    const callCount  = lead.callHistory ? lead.callHistory.length : 0;
+                    const uniqueDays = lead.callHistory
+                      ? [...new Set(lead.callHistory.map(c => c.day))].length
+                      : 0;
+                    const lastCall = lead.callHistory && lead.callHistory.length > 0
+                      ? [...lead.callHistory].sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+                      : null;
+                    const lastCallPlain = lastCall
+                      ? new Date(lastCall.date).toLocaleString('en-IN', {
+                          day: '2-digit', month: 'short',
+                          hour: '2-digit', minute: '2-digit', hour12: true
+                        }).toUpperCase()
+                      : null;
+                    return `
+                      <tr>
+                        <td>${lead.SENDER_COMPANY || 'N/A'}</td>
+                        <td>${lead.SENDER_NAME || 'N/A'}</td>
+                        <td>${lead.SOURCE || 'N/A'}</td>
+                        <td>${lead.SENDER_MOBILE || 'N/A'}</td>
+                        <td style="min-width:110px;">${formatLeadTime(lead.createdAt)}</td>
+                        <td>
+                          <span class="feasibility-badge badge-call-unanswered">
+                            📞 ${callCount} call(s) / ${uniqueDays} day(s)
+                          </span>
+                          ${lastCallPlain
+                            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic;">Last attempt: ${lastCallPlain}</div>`
+                            : ''
+                          }
+                        </td>
+                        <td>${lead.remark || 'No remark provided'}</td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+        };
+
         // Create HTML email content
         const emailContent = `
           <!DOCTYPE html>
@@ -255,30 +308,47 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             <title>Daily Lead Report</title>
             <style>
               body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; }
-              .container { max-width: 900px; margin: 0 auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
+              .container { max-width: 960px; margin: 0 auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
               .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
               .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
               .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 16px; }
               .content { padding: 30px; }
-              .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-              .stat-card { background: white; border-radius: 8px; padding: 20px; text-align: center; border-left: 4px solid; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-              .stat-card.all { border-color: #3b82f6; }
-              .stat-card.feasible { border-color: #10b981; }
-              .stat-card.not-feasible { border-color: #ef4444; }
-              .stat-card.pending { border-color: #f59e0b; }
-              .stat-number { font-size: 36px; font-weight: bold; margin-bottom: 5px; }
-              .stat-label { color: #6b7280; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-              .section-title { font-size: 20px; font-weight: 600; margin: 30px 0 15px 0; color: #1f2937; }
+
+              /* ── Stat cards — 5 columns ── */
+              .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 30px; }
+              .stat-card { border-radius: 10px; padding: 18px 12px; text-align: center; }
+              .stat-card.all             { background-color: #EFF6FF; border-left: 4px solid #3b82f6; }
+              .stat-card.feasible        { background-color: #ECFDF5; border-left: 4px solid #10b981; }
+              .stat-card.not-feasible    { background-color: #FEF2F2; border-left: 4px solid #ef4444; }
+              .stat-card.pending         { background-color: #FFFBEB; border-left: 4px solid #f59e0b; }
+              .stat-card.call-unanswered { background-color: #FFF7ED; border-left: 4px solid #f97316; }
+              .stat-number { font-size: 32px; font-weight: bold; margin-bottom: 5px; }
+              .stat-card.all             .stat-number { color: #3b82f6; }
+              .stat-card.feasible        .stat-number { color: #10b981; }
+              .stat-card.not-feasible    .stat-number { color: #ef4444; }
+              .stat-card.pending         .stat-number { color: #f59e0b; }
+              .stat-card.call-unanswered .stat-number { color: #f97316; }
+              .stat-label { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
+              .section-title { font-size: 18px; font-weight: 600; margin: 30px 0 12px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
               .source-section { margin-bottom: 25px; }
               .source-name { font-weight: 600; color: #4b5563; margin-bottom: 10px; display: inline-block; background: #f3f4f6; padding: 5px 12px; border-radius: 20px; font-size: 14px; }
               .lead-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-              .lead-table th, .lead-table td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
-              .lead-table th { background-color: #f9fafb; font-weight: 600; color: #374151; }
+              .lead-table th, .lead-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #e5e7eb; font-size: 13px; vertical-align: middle; }
+              .lead-table th { background-color: #f9fafb; font-weight: 600; color: #374151; white-space: nowrap; }
               .lead-table tr:hover { background-color: #f9fafb; }
-              .feasibility-badge { padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-              .badge-feasible { background-color: #d1fae5; color: #065f46; }
-              .badge-not-feasible { background-color: #fee2e2; color: #991b1b; }
-              .badge-pending { background-color: #fed7aa; color: #92400e; }
+              .th-time { background-color: #ede9fe !important; color: #5b21b6 !important; }
+
+              /* ── Feasibility badges ── */
+              .feasibility-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+              .badge-feasible        { background-color: #d1fae5; color: #065f46; }
+              .badge-not-feasible    { background-color: #fee2e2; color: #991b1b; }
+              .badge-pending         { background-color: #fef9c3; color: #92400e; }
+              .badge-call-unanswered { background-color: #ffedd5; color: #9a3412; }
+
+              /* ── Inline reason shown below badge ── */
+              .reason-text { font-size: 11px; color: #6b7280; margin-top: 4px; font-style: italic; }
+
               .no-leads { text-align: center; color: #9ca3af; padding: 20px; font-style: italic; }
               .footer { background-color: #f9fafb; padding: 20px; text-align: center; font-size: 13px; color: #6b7280; border-top: 1px solid #e5e7eb; }
               .footer p { margin: 5px 0; }
@@ -293,7 +363,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             <div class="container">
               <div class="header">
                 <h1>📊 Daily Lead Report</h1>
-                <p>${companyName} - ${formatDate(today)}</p>
+                <p>${companyName} — ${formatDate(reportDate)}</p>
               </div>
               
               <div class="content">
@@ -312,6 +382,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                   </div>
                 </div>
                 
+                <!-- 5 stat cards including Call Unanswered -->
                 <div class="stats-grid">
                   <div class="stat-card all">
                     <div class="stat-number">${allLeadsCount}</div>
@@ -329,15 +400,20 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                     <div class="stat-number">${pendingLeads.length}</div>
                     <div class="stat-label">Pending Review</div>
                   </div>
+                  <div class="stat-card call-unanswered">
+                    <div class="stat-number">${callUnansweredLeads.length}</div>
+                    <div class="stat-label">Call Unanswered</div>
+                  </div>
                 </div>
                 
                 ${allLeadsCount > 0 ? `
+                  <!-- Lead details by source — Not-Feasible reason shown inline per lead -->
                   <div>
                     <h2 class="section-title">📋 Lead Details by Source</h2>
                     ${Object.entries(leadsBySource).map(([source, leads]) => `
                       ${leads.length > 0 ? `
                         <div class="source-section">
-                          <span class="source-name">${source} (${leads.length} leads)</span>
+                          <span class="source-name">${source} (${leads.length} lead${leads.length > 1 ? 's' : ''})</span>
                           <table class="lead-table">
                             <thead>
                               <tr>
@@ -345,69 +421,30 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                                 <th>Contact Person</th>
                                 <th>Product</th>
                                 <th>Mobile</th>
-                                <th>Feasibility</th>
+                                <th class="th-time">🕐 Lead Time</th>
+                                <th>Feasibility / Reason</th>
                               </tr>
                             </thead>
                             <tbody>
-                              ${leads.map(lead => `
-                                <tr>
-                                  <td>${lead.SENDER_COMPANY || 'N/A'}</td>
-                                  <td>${lead.SENDER_NAME || 'N/A'}</td>
-                                  <td>${lead.QUERY_PRODUCT_NAME || 'N/A'}</td>
-                                  <td>${lead.SENDER_MOBILE || 'N/A'}</td>
-                                  <td>
-                                    <span class="feasibility-badge ${
-                                      lead.feasibility === 'feasible' ? 'badge-feasible' : 
-                                      lead.feasibility === 'not-feasible' ? 'badge-not-feasible' : 
-                                      'badge-pending'
-                                    }">
-                                      ${lead.feasibility === 'feasible' ? '✅ Feasible' : 
-                                        lead.feasibility === 'not-feasible' ? '❌ Not Feasible' : 
-                                        '⏳ Pending'}
-                                    </span>
-                                  </td>
-                                </tr>
-                              `).join('')}
+                              ${buildLeadRows(leads)}
                             </tbody>
                           </table>
                         </div>
                       ` : ''}
                     `).join('')}
                   </div>
-                  
-                  ${notFeasibleLeads.length > 0 ? `
-                    <div>
-                      <h2 class="section-title">❌ Not Feasible Reasons</h2>
-                      <table class="lead-table">
-                        <thead>
-                          <tr>
-                            <th>Company Name</th>
-                            <th>Contact Person</th>
-                            <th>Source</th>
-                            <th>Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          ${notFeasibleLeads.map(lead => `
-                            <tr>
-                              <td>${lead.SENDER_COMPANY || 'N/A'}</td>
-                              <td>${lead.SENDER_NAME || 'N/A'}</td>
-                              <td>${lead.SOURCE || 'N/A'}</td>
-                              <td>${lead.remark || 'No reason provided'}</td>
-                            </tr>
-                          `).join('')}
-                        </tbody>
-                      </table>
-                    </div>
-                  ` : ''}
-                ` : '<div class="no-leads">No leads received today from TradeIndia, IndiaMart, or manual entry.</div>'}
+
+                  <!-- Call Unanswered dedicated section -->
+                  ${buildCallUnansweredSection(callUnansweredLeads)}
+
+                ` : `<div class="no-leads">No leads received on ${formatDate(reportDate)} from TradeIndia, IndiaMart, or Direct entry.</div>`}
               </div>
               
               <div class="footer">
                 <p>© ${new Date().getFullYear()} ProClient360. All rights reserved.</p>
-                <p>This automated report is sent at 10:00 AM and 6:00 PM daily. Last updated: ${new Date().toLocaleTimeString()}</p>
+                <p>This automated report is sent at <strong>10:00 AM daily</strong> and covers the previous day's leads.</p>
                 ${!isScheduledRun ? 
-                  '<p>🔍 Preview Mode - This is a preview of the report. No emails were sent.</p>' : 
+                  '<p>🔍 Preview Mode — This is a preview of the report. No emails were sent.</p>' : 
                   ''
                 }
               </div>
@@ -421,11 +458,11 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           .map(r => r.email)
           .filter(email => email && email.includes('@'));
         
-        // Only send emails if this is a scheduled run (both in development and production)
+        // Only send emails if this is a scheduled run
         if (recipientEmails.length > 0 && isScheduledRun) {
           const mailOptions = {
             from: `ProClient360 <${process.env.EMAIL}>`,
-            subject: `📊 Daily Lead Report - ${companyName} - ${formatDate(today)}`,
+            subject: `📊 Daily Lead Report - ${companyName} - ${formatDate(reportDate)}`,
             html: emailContent
           };
 
@@ -473,9 +510,8 @@ const initializeDailyLeadReportScheduler = () => {
     scheduledTask.destroy();
   }
   
-  // Schedule the daily lead report to run at 10:00 AM and 6:00 PM
-  // This will run at: 10:00 and 18:00 each day
-  scheduledTask = cron.schedule('0 10,18 * * *', async () => {
+  // ✅ ONLY 10:00 AM daily — 6 PM removed
+  scheduledTask = cron.schedule('0 10 * * *', async () => {
     console.log('⏰ CRON JOB: Running daily lead report scheduler at:', new Date().toISOString());
     const result = await sendDailyLeadReport(true); // Pass true to indicate this is a scheduled run
     if (result) {
@@ -485,17 +521,17 @@ const initializeDailyLeadReportScheduler = () => {
     }
   }, {
     scheduled: true,
-    timezone: "Asia/Kolkata" // Adjust timezone as needed
+    timezone: "Asia/Kolkata"
   });
   
-  console.log('📅 Daily lead report scheduler initialized to run at 10:00 AM and 6:00 PM daily.');
+  // ✅ Updated log message
+  console.log('📅 Daily lead report scheduler initialized to run at 10:00 AM daily (covers previous day leads).');
   
-  // Don't run at startup in production to avoid duplicate emails
-  // In development, we can still run it for testing if needed
+  // In development, run once at startup for testing
   if (process.env.NODE_ENV === 'development') {
     setTimeout(async () => {
       console.log('🚀 DEVELOPMENT MODE: Running initial daily lead report at startup for testing...');
-      const result = await sendDailyLeadReport(true); // Pass true to indicate this is a scheduled run
+      const result = await sendDailyLeadReport(true);
       if (result) {
         console.log('✅ DEVELOPMENT MODE: Initial daily lead report sent successfully.');
       }
