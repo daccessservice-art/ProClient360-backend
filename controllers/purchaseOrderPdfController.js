@@ -3,25 +3,67 @@ const PurchaseOrder = require('../models/purchaseOrderModel');
 const fs   = require('fs');
 const path = require('path');
 
-// ── Pre-load logo at startup ─────────────────────────────────────────────────
+// ── Pre-load logo — searches ALL common production + local paths ─────────────
 let LOGO_BUFFER = null;
+
 const LOGO_SEARCH_PATHS = [
+  // ── Your confirmed local path ──
   path.join(__dirname, '../../pms-front/public/static/assets/img/nav/DACCESS.png'),
+
+  // ── Common production layouts ──
+  path.join(__dirname, '../../../pms-front/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../../../pms-front/public/static/assets/img/nav/DACCESS.png'),
+
+  // ── If frontend is built into "client" folder ──
+  path.join(__dirname, '../../client/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../client/build/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../../client/public/static/assets/img/nav/DACCESS.png'),
+
+  // ── If frontend is built into "frontend" folder ──
+  path.join(__dirname, '../../frontend/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../frontend/build/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../../frontend/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../../frontend/build/static/assets/img/nav/DACCESS.png'),
+
+  // ── If backend serves static files from public/ ──
+  path.join(__dirname, '../public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../static/assets/img/nav/DACCESS.png'),
+
+  // ── From process.cwd() (project root) ──
+  path.join(process.cwd(), 'pms-front/public/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'frontend/public/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'frontend/build/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'client/public/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'client/build/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'public/static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'static/assets/img/nav/DACCESS.png'),
 ];
 
+// ── Log every path checked so you can see EXACTLY what's happening ──
+console.log('🔍 [PDF] __dirname       :', __dirname);
+console.log('🔍 [PDF] process.cwd()   :', process.cwd());
+console.log('🔍 [PDF] Searching for DACCESS.png...');
+
 for (const p of LOGO_SEARCH_PATHS) {
-  if (fs.existsSync(p)) {
+  const exists = fs.existsSync(p);
+  console.log(`   ${exists ? '✅ FOUND' : '❌ miss '} → ${p}`);
+  if (exists) {
     try {
       LOGO_BUFFER = fs.readFileSync(p);
-      console.log('✅ [PDF] Logo loaded from:', p);
+      console.log('✅ [PDF] Logo loaded successfully from:', p);
       break;
     } catch (e) {
-      console.warn('⚠️  [PDF] Could not read logo at:', p, e.message);
+      console.warn('⚠️  [PDF] Found but could not read:', p, e.message);
     }
   }
 }
+
 if (!LOGO_BUFFER) {
-  console.warn('⚠️  [PDF] Logo not found. Text fallback will be used.');
+  console.warn('⚠️  [PDF] Logo NOT found in any path — text fallback will be used.');
+  console.warn('    Run this on your server to find the file:');
+  console.warn('    find / -name "DACCESS.png" 2>/dev/null');
 }
 
 // ── Number to Words ──────────────────────────────────────────────────────────
@@ -115,18 +157,22 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     doc.pipe(res);
 
-    const PW = doc.page.width;   // 595
-    const PH = doc.page.height;  // 841
+    const PW = doc.page.width;
+    const PH = doc.page.height;
     const M  = 20;
-    const CW = PW - M * 2;       // 555
+    const CW = PW - M * 2;
 
     let y = M;
+
+    // ════════════════════════════════════════════════════════════
+    // 1. HEADER — Logo (left) | Title centered over full width
+    // ════════════════════════════════════════════════════════════
 
     const HEADER_H  = 50;
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
 
-    // ── Step 1: Draw logo in left zone (absolute position) ──
+    // Logo — absolute left position
     if (LOGO_BUFFER) {
       doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
     } else {
@@ -135,14 +181,13 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
          .text('D ACCESS', M + 8, y + 17);
     }
 
-    // ── Step 2: Draw "Purchase Order" centered across FULL page width ──
-    // vertically centered in header row
+    // "Purchase Order" — centered across full page width
     doc.font('Helvetica-Bold').fontSize(18).fillColor(COLOR_RED)
        .text('Purchase Order', M, y + 14, { width: CW, align: 'center' });
 
     y += HEADER_H;
 
-    // ── Company name (left) + GSTIN (right) ──
+    // Company name + GSTIN
     doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_BLACK)
        .text(COMPANY_NAME, M, y);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
@@ -150,13 +195,11 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     y += 14;
 
-    // ── Address ──
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
        .text(COMPANY_ADDRESS, M, y, { width: CW * 0.70 });
 
     y += 20;
 
-    // ── Divider ──
     doc.save().moveTo(M, y).lineTo(PW - M, y).lineWidth(0.5).stroke(COLOR_BORDER).restore();
     y += 6;
 
@@ -226,8 +269,8 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { key: 'rate',     label: 'RATE',           w: 47,  align: 'right'  },
       { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 57,  align: 'right'  },
       { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 65,  align: 'right'  },
-      { key: 'gst',      label: 'GST%/AMT.',      w: 48,  align: 'center' },
-      { key: 'net',      label: 'NET AMT.(Rs)',    w: 57,  align: 'right'  },
+      { key: 'gst',      label: 'GST%/AMT.',      w: 45,  align: 'center' },
+      { key: 'net',      label: 'NET AMT.(Rs)',    w: 55,  align: 'right'  },
     ];
 
     const rowH = 16;
@@ -380,7 +423,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       y += rowH;
     }
 
-    // HSN total row
     hx = M;
     const hsnTotalData = [
       { text: 'Total',             align: 'left',  bold: true },
@@ -398,7 +440,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       hx += col.w;
     });
 
-    // Totals summary — right side, aligned to HSN section start
     let sy = hsnSectionStartY;
     const summaryRows = [
       { label: 'Total Amount',       value: totalAmt.toFixed(2),    bold: false },
@@ -412,47 +453,40 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       const bg = row.bold ? '#EBEBEB' : '#FFFFFF';
       fillRect(doc, sumX, sy, sumW, rowH, bg);
       strokeRect(doc, sumX, sy, sumW, rowH);
-      // label on left
       doc.font(row.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(COLOR_BLACK)
-         .text(row.label, sumX + 4, sy + 5, { width: sumW * 0.60, align: 'left', lineBreak: false });
-      // value on right
+         .text(row.label, sumX + 4, sy + 5, { width: sumW * 0.60, align: 'left',  lineBreak: false });
       doc.font(row.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8).fillColor(COLOR_BLACK)
-         .text(row.value, sumX + 4, sy + 5, { width: sumW - 8, align: 'right', lineBreak: false });
+         .text(row.value, sumX + 4, sy + 5, { width: sumW - 8,    align: 'right', lineBreak: false });
       sy += rowH;
     });
 
     y += rowH + 4;
 
+    // ════════════════════════════════════════════════════════════
+    // 5. TOTAL IN WORDS  +  GRAND TOTAL
+    // ════════════════════════════════════════════════════════════
 
     const wordsW   = CW * 0.60;
     const totalBW  = CW - wordsW - 4;
     const totalBX  = M + wordsW + 4;
-    const wordRowH = 28;   // taller row so label + value both fit
+    const wordRowH = 28;
 
-    // Words box — LEFT side
+    // Words box — label on line 1, value on line 2
     strokeRect(doc, M, y, wordsW, wordRowH);
-
-    // Line 1: bold label
     doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
        .text('Total Amount in Words:', M + 4, y + 4, { width: wordsW - 8, lineBreak: false });
-
-    // Line 2: the actual words value — starts 12px below label
     doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_DARK_GREY)
        .text(numberToWords(grandTotal), M + 4, y + 16, {
          width: wordsW - 8, align: 'left', lineBreak: false, ellipsis: true,
        });
 
-    // Grand total box — RIGHT side (pink)
+    // Grand total pink box
     fillRect(doc, totalBX, y, totalBW, wordRowH, COLOR_PINK);
     strokeRect(doc, totalBX, y, totalBW, wordRowH);
-
-    // "Total Amount (Rs)" label — left inside box, vertically centered
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
        .text('Total Amount (Rs)', totalBX + 5, y + 9, {
          width: totalBW * 0.58, align: 'left', lineBreak: false,
        });
-
-    // Amount value — right inside box, vertically centered
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
        .text(grandTotal.toFixed(2), totalBX + 5, y + 9, {
          width: totalBW - 10, align: 'right', lineBreak: false,
@@ -460,6 +494,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     y += wordRowH + 4;
 
+    // ════════════════════════════════════════════════════════════
+    // 6. PAYMENT TERMS  +  SIGNATURE
+    // ════════════════════════════════════════════════════════════
 
     const footerH = 55;
     strokeRect(doc, M, y, CW, footerH);
