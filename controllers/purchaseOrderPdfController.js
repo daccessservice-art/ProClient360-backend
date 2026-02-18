@@ -1,77 +1,35 @@
 const PDFDocument = require('pdfkit');
 const PurchaseOrder = require('../models/purchaseOrderModel');
-const fs   = require('fs');
-const path = require('path');
+const https = require('https');
+const http  = require('http');
 
-// ── Pre-load logo — searches ALL common production + local paths ─────────────
+// ── Logo URL — fetched once at startup and cached ────────────────────────────
+const LOGO_URL = 'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png';
 let LOGO_BUFFER = null;
 
-const LOGO_SEARCH_PATHS = [
-  // ── PRIORITY: backend/src/assets (copy your logo here for guaranteed loading) ──
-  path.join(__dirname, '../assets/ENTERO.png'),
-  path.join(__dirname, './assets/ENTERO.png'),
-  path.join(__dirname, '../../assets/ENTERO.png'),
+const fetchLogoBuffer = (url) =>
+  new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    lib.get(url, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        return fetchLogoBuffer(res.headers.location).then(resolve).catch(reject);
+      }
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end',  () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
 
-  // ── Your confirmed local path ──
-  path.join(__dirname, '../../pms-front/public/static/assets/img/nav/ENTERO.png'),
-
-  // ── Common production layouts ──
-  path.join(__dirname, '../../../pms-front/public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../../../pms-front/public/static/assets/img/nav/ENTERO.png'),
-
-  // ── If frontend is built into "client" folder ──
-  path.join(__dirname, '../../client/public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../client/build/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../../client/public/static/assets/img/nav/ENTERO.png'),
-
-  // ── If frontend is built into "frontend" folder ──
-  path.join(__dirname, '../../frontend/public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../frontend/build/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../../frontend/public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../../frontend/build/static/assets/img/nav/ENTERO.png'),
-
-  // ── If backend serves static files from public/ ──
-  path.join(__dirname, '../public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../public/static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../static/assets/img/nav/ENTERO.png'),
-  path.join(__dirname, '../../static/assets/img/nav/ENTERO.png'),
-
-  // ── From process.cwd() (project root) ──
-  path.join(process.cwd(), 'pms-front/public/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'frontend/public/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'frontend/build/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'client/public/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'client/build/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'public/static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'static/assets/img/nav/ENTERO.png'),
-  path.join(process.cwd(), 'assets/ENTERO.png'),
-];
-
-// ── Log every path checked so you can see EXACTLY what's happening ──
-console.log('🔍 [PDF] __dirname       :', __dirname);
-console.log('🔍 [PDF] process.cwd()   :', process.cwd());
-console.log('🔍 [PDF] Searching for ENTERO.png...');
-
-for (const p of LOGO_SEARCH_PATHS) {
-  const exists = fs.existsSync(p);
-  console.log(`   ${exists ? '✅ FOUND' : '❌ miss '} → ${p}`);
-  if (exists) {
-    try {
-      LOGO_BUFFER = fs.readFileSync(p);
-      console.log('✅ [PDF] Logo loaded successfully from:', p);
-      break;
-    } catch (e) {
-      console.warn('⚠️  [PDF] Found but could not read:', p, e.message);
-    }
-  }
-}
-
-if (!LOGO_BUFFER) {
-  console.warn('⚠️  [PDF] Logo NOT found in any path — text fallback will be used.');
-  console.warn('    ✅ SOLUTION: Copy your logo into backend/src/assets/ENTERO.png');
-  console.warn('    Run this on your server to find the file:');
-  console.warn('    find / -name "ENTERO.png" 2>/dev/null');
-}
+// Pre-fetch logo at startup
+fetchLogoBuffer(LOGO_URL)
+  .then((buf) => {
+    LOGO_BUFFER = buf;
+    console.log('✅ [PDF] Entero logo loaded from URL, size:', buf.length, 'bytes');
+  })
+  .catch((err) => {
+    console.warn('⚠️  [PDF] Could not fetch logo from URL:', err.message);
+  });
 
 // ── Number to Words ──────────────────────────────────────────────────────────
 const numberToWords = (num) => {
@@ -125,6 +83,16 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // ── If logo not cached yet, try fetching again per-request ──
+    if (!LOGO_BUFFER) {
+      try {
+        LOGO_BUFFER = await fetchLogoBuffer(LOGO_URL);
+        console.log('✅ [PDF] Logo fetched on-demand');
+      } catch (e) {
+        console.warn('⚠️  [PDF] Logo fetch failed on-demand:', e.message);
+      }
+    }
+
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName address gstin phoneNumber1 email')
       .populate('project',   'name')
@@ -172,37 +140,30 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     let y = M;
 
     // ════════════════════════════════════════════════════════════
-    // 1. HEADER — Logo (left) | Title centered over full width
+    // 1. HEADER — Logo (left) | "Purchase Order" centered
     // ════════════════════════════════════════════════════════════
 
     const HEADER_H  = 50;
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
 
-    // ✅ FIXED: Logo rendering with try/catch — no more silent failures
     if (LOGO_BUFFER) {
       try {
         doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
-        console.log('✅ [PDF] Logo rendered successfully in PDF');
-      } catch (imgErr) {
-        console.error('❌ [PDF] Logo render failed:', imgErr.message);
-        // Text fallback if buffer exists but image fails (e.g. corrupted file)
-        doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_RED)
-           .text(COMPANY_NAME.split(' ')[0], M, y + 17);
+      } catch (e) {
+        doc.font('Helvetica-Bold').fontSize(20).fillColor(COLOR_RED)
+           .text('entero', M, y + 12, { lineBreak: false });
       }
     } else {
-      // No buffer found — show company name text instead of "D ACCESS" placeholder
-      doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_RED)
-         .text('ENTERO', M, y + 17);
+      doc.font('Helvetica-Bold').fontSize(20).fillColor(COLOR_RED)
+         .text('entero', M, y + 12, { lineBreak: false });
     }
 
-    // "Purchase Order" — centered across full page width
     doc.font('Helvetica-Bold').fontSize(18).fillColor(COLOR_RED)
        .text('Purchase Order', M, y + 14, { width: CW, align: 'center' });
 
     y += HEADER_H;
 
-    // Company name + GSTIN
     doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_BLACK)
        .text(COMPANY_NAME, M, y);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
@@ -272,21 +233,24 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += boxH + 6;
 
     // ════════════════════════════════════════════════════════════
-    // 3. ITEMS TABLE
+    // 3. ITEMS TABLE — now includes DISC.% column
     // ════════════════════════════════════════════════════════════
 
+    // ✅ Column widths adjusted to fit DISC.% — total must stay within CW (555pt)
     const itemCols = [
-      { key: 'sr',       label: 'SR.',            w: 24,  align: 'center' },
-      { key: 'item',     label: 'ITEM DETAILS',   w: 142, align: 'left'   },
-      { key: 'hsn',      label: 'HSN/SAC',        w: 47,  align: 'center' },
-      { key: 'uom',      label: 'UOM',            w: 32,  align: 'center' },
-      { key: 'qty',      label: 'QTY',            w: 34,  align: 'right'  },
-      { key: 'rate',     label: 'RATE',           w: 47,  align: 'right'  },
-      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 57,  align: 'right'  },
-      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 65,  align: 'right'  },
-      { key: 'gst',      label: 'GST%/AMT.',      w: 45,  align: 'center' },
-      { key: 'net',      label: 'NET AMT.(Rs)',    w: 55,  align: 'right'  },
+      { key: 'sr',       label: 'SR.',            w: 22,  align: 'center' },
+      { key: 'item',     label: 'ITEM DETAILS',   w: 120, align: 'left'   },
+      { key: 'hsn',      label: 'HSN/SAC',        w: 44,  align: 'center' },
+      { key: 'uom',      label: 'UOM',            w: 28,  align: 'center' },
+      { key: 'qty',      label: 'QTY',            w: 32,  align: 'right'  },
+      { key: 'rate',     label: 'RATE',           w: 44,  align: 'right'  },
+      { key: 'disc',     label: 'DISC.%',         w: 34,  align: 'center' }, // ✅ NEW
+      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 52,  align: 'right'  },
+      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 58,  align: 'right'  },
+      { key: 'gst',      label: 'GST%/AMT.',      w: 44,  align: 'center' },
+      { key: 'net',      label: 'NET AMT.(Rs)',   w: 77,  align: 'right'  },
     ];
+    // Sum = 22+120+44+28+32+44+34+52+58+44+77 = 555 ✅
 
     const rowH = 16;
     let cx = M;
@@ -316,6 +280,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
         const taxAmt  = lineAmt * taxPct / 100;
         const netVal  = lineAmt + taxAmt;
         const gstText = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
+        const discText = disc > 0 ? `${disc}%` : '-';
         const itemName = [item.brandName, item.description || item.modelNo].filter(Boolean).join('  ');
 
         const rowData = [
@@ -325,6 +290,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           { text: item.baseUOM || item.unit || '-', align: 'center' },
           { text: qty.toFixed(2),                   align: 'right'  },
           { text: rate.toFixed(2),                  align: 'right'  },
+          { text: discText,                          align: 'center' }, // ✅ DISC.%
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: gstText,                           align: 'center' },
@@ -359,6 +325,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { text: '',                     align: 'center' },
       { text: totalQty.toFixed(2),   align: 'right',  bold: true },
       { text: '',                     align: 'right'  },
+      { text: '',                     align: 'center' }, // DISC.% total blank
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalTax.toFixed(2),   align: 'right',  bold: true },
@@ -486,7 +453,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     const totalBX  = M + wordsW + 4;
     const wordRowH = 28;
 
-    // Words box — label on line 1, value on line 2
     strokeRect(doc, M, y, wordsW, wordRowH);
     doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
        .text('Total Amount in Words:', M + 4, y + 4, { width: wordsW - 8, lineBreak: false });
@@ -495,7 +461,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
          width: wordsW - 8, align: 'left', lineBreak: false, ellipsis: true,
        });
 
-    // Grand total pink box
     fillRect(doc, totalBX, y, totalBW, wordRowH, COLOR_PINK);
     strokeRect(doc, totalBX, y, totalBW, wordRowH);
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
