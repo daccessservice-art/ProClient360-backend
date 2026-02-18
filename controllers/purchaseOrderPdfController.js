@@ -7,6 +7,11 @@ const path = require('path');
 let LOGO_BUFFER = null;
 
 const LOGO_SEARCH_PATHS = [
+  // ── PRIORITY: backend/src/assets (copy your logo here for guaranteed loading) ──
+  path.join(__dirname, '../assets/ENTERO.png'),
+  path.join(__dirname, './assets/ENTERO.png'),
+  path.join(__dirname, '../../assets/ENTERO.png'),
+
   // ── Your confirmed local path ──
   path.join(__dirname, '../../pms-front/public/static/assets/img/nav/ENTERO.png'),
 
@@ -39,6 +44,7 @@ const LOGO_SEARCH_PATHS = [
   path.join(process.cwd(), 'client/build/static/assets/img/nav/ENTERO.png'),
   path.join(process.cwd(), 'public/static/assets/img/nav/ENTERO.png'),
   path.join(process.cwd(), 'static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'assets/ENTERO.png'),
 ];
 
 // ── Log every path checked so you can see EXACTLY what's happening ──
@@ -62,6 +68,7 @@ for (const p of LOGO_SEARCH_PATHS) {
 
 if (!LOGO_BUFFER) {
   console.warn('⚠️  [PDF] Logo NOT found in any path — text fallback will be used.');
+  console.warn('    ✅ SOLUTION: Copy your logo into backend/src/assets/ENTERO.png');
   console.warn('    Run this on your server to find the file:');
   console.warn('    find / -name "ENTERO.png" 2>/dev/null');
 }
@@ -172,13 +179,21 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
 
-    // Logo — absolute left position
+    // ✅ FIXED: Logo rendering with try/catch — no more silent failures
     if (LOGO_BUFFER) {
-      doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
+      try {
+        doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
+        console.log('✅ [PDF] Logo rendered successfully in PDF');
+      } catch (imgErr) {
+        console.error('❌ [PDF] Logo render failed:', imgErr.message);
+        // Text fallback if buffer exists but image fails (e.g. corrupted file)
+        doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_RED)
+           .text(COMPANY_NAME.split(' ')[0], M, y + 17);
+      }
     } else {
-      strokeRect(doc, M, y + 8, 100, 30, '#6488A8', 1);
-      doc.font('Helvetica-Bold').fontSize(13).fillColor('#6488A8')
-         .text('D ACCESS', M + 8, y + 17);
+      // No buffer found — show company name text instead of "D ACCESS" placeholder
+      doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_RED)
+         .text('ENTERO', M, y + 17);
     }
 
     // "Purchase Order" — centered across full page width
