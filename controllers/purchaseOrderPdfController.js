@@ -8,43 +8,43 @@ let LOGO_BUFFER = null;
 
 const LOGO_SEARCH_PATHS = [
   // ── Your confirmed local path ──
-  path.join(__dirname, '../../pms-front/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../pms-front/public/static/assets/img/nav/ENTERO.png'),
 
   // ── Common production layouts ──
-  path.join(__dirname, '../../../pms-front/public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../../../pms-front/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../../pms-front/public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../../../pms-front/public/static/assets/img/nav/ENTERO.png'),
 
   // ── If frontend is built into "client" folder ──
-  path.join(__dirname, '../../client/public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../client/build/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../../client/public/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../client/public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../client/build/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../../client/public/static/assets/img/nav/ENTERO.png'),
 
   // ── If frontend is built into "frontend" folder ──
-  path.join(__dirname, '../../frontend/public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../frontend/build/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../../frontend/public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../../frontend/build/static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../../frontend/public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../frontend/build/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../../frontend/public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../../frontend/build/static/assets/img/nav/ENTERO.png'),
 
   // ── If backend serves static files from public/ ──
-  path.join(__dirname, '../public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../public/static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../static/assets/img/nav/DACCESS.png'),
-  path.join(__dirname, '../../static/assets/img/nav/DACCESS.png'),
+  path.join(__dirname, '../public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../public/static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../static/assets/img/nav/ENTERO.png'),
+  path.join(__dirname, '../../static/assets/img/nav/ENTERO.png'),
 
   // ── From process.cwd() (project root) ──
-  path.join(process.cwd(), 'pms-front/public/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'frontend/public/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'frontend/build/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'client/public/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'client/build/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'public/static/assets/img/nav/DACCESS.png'),
-  path.join(process.cwd(), 'static/assets/img/nav/DACCESS.png'),
+  path.join(process.cwd(), 'pms-front/public/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'frontend/public/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'frontend/build/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'client/public/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'client/build/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'public/static/assets/img/nav/ENTERO.png'),
+  path.join(process.cwd(), 'static/assets/img/nav/ENTERO.png'),
 ];
 
 // ── Log every path checked so you can see EXACTLY what's happening ──
 console.log('🔍 [PDF] __dirname       :', __dirname);
 console.log('🔍 [PDF] process.cwd()   :', process.cwd());
-console.log('🔍 [PDF] Searching for DACCESS.png...');
+console.log('🔍 [PDF] Searching for ENTERO.png...');
 
 for (const p of LOGO_SEARCH_PATHS) {
   const exists = fs.existsSync(p);
@@ -63,7 +63,7 @@ for (const p of LOGO_SEARCH_PATHS) {
 if (!LOGO_BUFFER) {
   console.warn('⚠️  [PDF] Logo NOT found in any path — text fallback will be used.');
   console.warn('    Run this on your server to find the file:');
-  console.warn('    find / -name "DACCESS.png" 2>/dev/null');
+  console.warn('    find / -name "ENTERO.png" 2>/dev/null');
 }
 
 // ── Number to Words ──────────────────────────────────────────────────────────
@@ -91,9 +91,9 @@ const numberToWords = (num) => {
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const COMPANY_NAME    = 'Daccess Security Systems Pvt Ltd';
-const COMPANY_ADDRESS = 'Office No.05, 3rd Floor, Revati Arcade-II, Opposite to Kapil Malhar Society, Baner, Pune-411045, Maharashtra, India';
-const COMPANY_GSTIN   = '27AACCD7325G1ZR';
+const COMPANY_NAME    = 'ENTERO SYSTEMS INDIA PVT. LTD.';
+const COMPANY_ADDRESS = 'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India';
+const COMPANY_GSTIN   = '27AAJCE1335Q1Z8';
 
 const COLOR_RED        = '#DC3232';
 const COLOR_TABLE_HDR  = '#B4B49A';
