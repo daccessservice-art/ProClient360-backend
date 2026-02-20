@@ -6,17 +6,15 @@ const cron = require('node-cron');
 
 // Function to send emails in batches to prevent suspension
 const sendEmailInBatches = async (recipients, mailOptions, companyName) => {
-  const MAX_RECIPIENTS_PER_EMAIL = 5; // Limit recipients per email
+  const MAX_RECIPIENTS_PER_EMAIL = 5;
   const batches = [];
   
-  // Split recipients into batches of 5 or fewer
   for (let i = 0; i < recipients.length; i += MAX_RECIPIENTS_PER_EMAIL) {
     batches.push(recipients.slice(i, i + MAX_RECIPIENTS_PER_EMAIL));
   }
   
   console.log(`Sending to ${recipients.length} recipients in ${batches.length} batches for ${companyName}`);
   
-  // Send each batch with a delay
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     const batchOptions = {
@@ -38,14 +36,12 @@ const sendEmailInBatches = async (recipients, mailOptions, companyName) => {
         });
       });
       
-      // Wait 5 seconds between batches (except after the last one)
       if (i < batches.length - 1) {
         console.log(`Waiting 5 seconds before next batch...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
       }
     } catch (error) {
       console.error(`Error sending batch ${i+1} for ${companyName}:`, error.message);
-      // Continue with next batch even if one fails
     }
   }
 };
@@ -53,7 +49,6 @@ const sendEmailInBatches = async (recipients, mailOptions, companyName) => {
 // Function to send the daily lead report
 const sendDailyLeadReport = async (isScheduledRun = false) => {
   try {
-    // Check if this is a scheduled run or if we're in production
     if (!isScheduledRun && process.env.NODE_ENV === 'development') {
       console.log('🔍 Development mode detected. Skipping email sending to avoid hitting daily limit.');
       console.log('📊 Report would be generated but emails are not sent in development mode.');
@@ -68,24 +63,25 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
     console.log('🔧 Environment:', process.env.NODE_ENV || 'Not set');
     console.log('📧 Email Sending:', isScheduledRun ? 'ENABLED (Scheduled Run)' : 'DISABLED (Manual Run)');
     
-    // ✅ Report sends at 10 AM today → shows YESTERDAY's leads
+    // Report sends at 10 AM today → shows YESTERDAY's leads
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    const reportDate = yesterday; // The date being reported on
+    const reportDate = yesterday;
     const startOfReportDay = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate(), 0, 0, 0, 0);
     const endOfReportDay   = new Date(reportDate.getFullYear(), reportDate.getMonth(), reportDate.getDate(), 23, 59, 59, 999);
 
     console.log(`📅 Report covers: ${startOfReportDay.toISOString()} → ${endOfReportDay.toISOString()}`);
 
-    // Get the designation IDs for the target designations
     const Designation = require('../models/designationModel');
     const targetDesignationNames = [
       'Director Customer Delight',
       'CEO & Founder',
       'Director Digi Solution',
-      'Junior Software Developer'
+      'Junior Software Developer',
+      'Sales Manager',
+      'Marketing'
     ];
     
     const targetDesignations = await Designation.find({
@@ -95,21 +91,19 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
     const designationIds = targetDesignations.map(d => d._id);
     console.log('Found target designation IDs:', designationIds);
 
-    // Get all companies that have employees with the target designations
     const companies = await Employee.distinct('company', { 
       designation: { $in: designationIds }
     });
 
     console.log(`Found ${companies.length} companies to send reports to`);
 
-    // Process companies with delays between them
     for (let i = 0; i < companies.length; i++) {
       const companyId = companies[i];
       
       try {
         console.log(`Processing company ${i+1}/${companies.length}: ${companyId}`);
 
-        // ✅ Get YESTERDAY's leads from TradeIndia, IndiaMart, and Direct
+        // ✅ FIXED: populate assignedTo so name shows in email
         const reportLeads = await Lead.find({
           company: companyId,
           createdAt: {
@@ -121,9 +115,10 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             { SOURCE: { $regex: /IndiaMart/i } },
             { SOURCE: 'Direct' }
           ]
-        }).lean();
+        })
+        .populate('assignedTo', 'name')
+        .lean();
 
-        // Group by source
         const tradeIndiaLeads = reportLeads.filter(lead => 
           lead.SOURCE === 'TradeIndia' || lead.SOURCE === 'TradeIndia '
         );
@@ -139,14 +134,12 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         console.log(`  - IndiaMart: ${indiaMartLeads.length} leads`);
         console.log(`  - Direct: ${directLeads.length} leads`);
 
-        // Count leads by feasibility
         const allLeadsCount        = reportLeads.length;
         const feasibleLeads        = reportLeads.filter(lead => lead.feasibility === 'feasible');
         const notFeasibleLeads     = reportLeads.filter(lead => lead.feasibility === 'not-feasible');
         const pendingLeads         = reportLeads.filter(lead => lead.feasibility === 'none');
         const callUnansweredLeads  = reportLeads.filter(lead => lead.feasibility === 'call-unanswered');
 
-        // Get ONLY employees with the target designations and valid emails
         const recipients = await Employee.find({
           company: companyId,
           designation: { $in: designationIds },
@@ -158,38 +151,39 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           continue;
         }
 
-        // Get company name
         const company = await Employee.findById(companyId).select('name');
         const companyName = company ? company.name : 'Your Company';
 
-        // Group leads by source
         const leadsBySource = {
           'TradeIndia': tradeIndiaLeads,
           'IndiaMart': indiaMartLeads,
           'Direct': directLeads
         };
 
-        // Group recipients by designation for reporting
         const recipientsByDesignation = {
           'Director Customer Delight': recipients.filter(r => r.designation && r.designation.name === 'Director Customer Delight'),
           'CEO & Founder': recipients.filter(r => r.designation && r.designation.name === 'CEO & Founder'),
           'Director Digi Solution': recipients.filter(r => r.designation && r.designation.name === 'Director Digi Solution'),
-          'Junior Software Developer': recipients.filter(r => r.designation && r.designation.name === 'Junior Software Developer')
+          'Junior Software Developer': recipients.filter(r => r.designation && r.designation.name === 'Junior Software Developer'),
+          'Sales Manager': recipients.filter(r => r.designation && r.designation.name === 'Sales Manager'),
+          'Marketing': recipients.filter(r => r.designation && r.designation.name === 'Marketing')
         };
 
-        // Helper: format lead date/time — returns two-line date + time chip
+        // ✅ FIXED: formatLeadTime now uses IST timezone (Asia/Kolkata)
         const formatLeadTime = (date) => {
           if (!date) return '<span style="color:#9ca3af;">N/A</span>';
           const d = new Date(date);
           const datePart = d.toLocaleDateString('en-IN', {
             day: '2-digit',
             month: 'short',
-            year: 'numeric'
+            year: 'numeric',
+            timeZone: 'Asia/Kolkata'
           });
           const timePart = d.toLocaleTimeString('en-IN', {
             hour: '2-digit',
             minute: '2-digit',
-            hour12: true
+            hour12: true,
+            timeZone: 'Asia/Kolkata'
           }).toUpperCase();
           return `
             <div style="line-height:1.5;">
@@ -203,7 +197,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           `;
         };
 
-        // Helper: build feasibility cell — shows reason inline for not-feasible & call-unanswered
         const getFeasibilityCell = (lead) => {
           if (lead.feasibility === 'feasible') {
             return `<span class="feasibility-badge badge-feasible">✅ Feasible</span>`;
@@ -227,7 +220,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           }
         };
 
-        // Build lead table rows — includes time column + inline feasibility reason
+        // ✅ FIXED: Added "Assigned To" column in lead rows
         const buildLeadRows = (leads) => leads.map(lead => `
           <tr>
             <td>${lead.SENDER_COMPANY || 'N/A'}</td>
@@ -236,10 +229,24 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             <td>${lead.SENDER_MOBILE || 'N/A'}</td>
             <td style="min-width:110px;">${formatLeadTime(lead.createdAt)}</td>
             <td>${getFeasibilityCell(lead)}</td>
+            <td style="white-space:nowrap; font-size:13px;">
+              ${lead.assignedTo && lead.assignedTo.name
+                ? `<span style="
+                    display:inline-block;
+                    background:#dbeafe;
+                    color:#1e40af;
+                    padding:2px 8px;
+                    border-radius:10px;
+                    font-size:12px;
+                    font-weight:600;">
+                    👤 ${lead.assignedTo.name}
+                  </span>`
+                : '<span style="color:#9ca3af; font-size:12px;">Unassigned</span>'
+              }
+            </td>
           </tr>
         `).join('');
 
-        // Build Call Unanswered dedicated section
         const buildCallUnansweredSection = (leads) => {
           if (leads.length === 0) return '';
           return `
@@ -254,6 +261,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                     <th>Mobile</th>
                     <th class="th-time">🕐 Lead Time</th>
                     <th>Calls Made</th>
+                    <th>Assigned To</th>
                     <th>Remarks</th>
                   </tr>
                 </thead>
@@ -269,7 +277,9 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                     const lastCallPlain = lastCall
                       ? new Date(lastCall.date).toLocaleString('en-IN', {
                           day: '2-digit', month: 'short',
-                          hour: '2-digit', minute: '2-digit', hour12: true
+                          hour: '2-digit', minute: '2-digit',
+                          hour12: true,
+                          timeZone: 'Asia/Kolkata'
                         }).toUpperCase()
                       : null;
                     return `
@@ -284,8 +294,23 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                             📞 ${callCount} call(s) / ${uniqueDays} day(s)
                           </span>
                           ${lastCallPlain
-                            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic;">Last attempt: ${lastCallPlain}</div>`
+                            ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;font-style:italic;">Last: ${lastCallPlain}</div>`
                             : ''
+                          }
+                        </td>
+                        <td style="white-space:nowrap;">
+                          ${lead.assignedTo && lead.assignedTo.name
+                            ? `<span style="
+                                display:inline-block;
+                                background:#dbeafe;
+                                color:#1e40af;
+                                padding:2px 8px;
+                                border-radius:10px;
+                                font-size:12px;
+                                font-weight:600;">
+                                👤 ${lead.assignedTo.name}
+                              </span>`
+                            : '<span style="color:#9ca3af;font-size:12px;">Unassigned</span>'
                           }
                         </td>
                         <td>${lead.remark || 'No remark provided'}</td>
@@ -298,7 +323,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           `;
         };
 
-        // Create HTML email content
         const emailContent = `
           <!DOCTYPE html>
           <html>
@@ -313,8 +337,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
               .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
               .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 16px; }
               .content { padding: 30px; }
-
-              /* ── Stat cards — 5 columns ── */
               .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 30px; }
               .stat-card { border-radius: 10px; padding: 18px 12px; text-align: center; }
               .stat-card.all             { background-color: #EFF6FF; border-left: 4px solid #3b82f6; }
@@ -329,7 +351,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
               .stat-card.pending         .stat-number { color: #f59e0b; }
               .stat-card.call-unanswered .stat-number { color: #f97316; }
               .stat-label { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-
               .section-title { font-size: 18px; font-weight: 600; margin: 30px 0 12px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
               .source-section { margin-bottom: 25px; }
               .source-name { font-weight: 600; color: #4b5563; margin-bottom: 10px; display: inline-block; background: #f3f4f6; padding: 5px 12px; border-radius: 20px; font-size: 14px; }
@@ -338,17 +359,12 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
               .lead-table th { background-color: #f9fafb; font-weight: 600; color: #374151; white-space: nowrap; }
               .lead-table tr:hover { background-color: #f9fafb; }
               .th-time { background-color: #ede9fe !important; color: #5b21b6 !important; }
-
-              /* ── Feasibility badges ── */
               .feasibility-badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
               .badge-feasible        { background-color: #d1fae5; color: #065f46; }
               .badge-not-feasible    { background-color: #fee2e2; color: #991b1b; }
               .badge-pending         { background-color: #fef9c3; color: #92400e; }
               .badge-call-unanswered { background-color: #ffedd5; color: #9a3412; }
-
-              /* ── Inline reason shown below badge ── */
               .reason-text { font-size: 11px; color: #6b7280; margin-top: 4px; font-style: italic; }
-
               .no-leads { text-align: center; color: #9ca3af; padding: 20px; font-style: italic; }
               .footer { background-color: #f9fafb; padding: 20px; text-align: center; font-size: 13px; color: #6b7280; border-top: 1px solid #e5e7eb; }
               .footer p { margin: 5px 0; }
@@ -382,7 +398,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                   </div>
                 </div>
                 
-                <!-- 5 stat cards including Call Unanswered -->
                 <div class="stats-grid">
                   <div class="stat-card all">
                     <div class="stat-number">${allLeadsCount}</div>
@@ -407,7 +422,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                 </div>
                 
                 ${allLeadsCount > 0 ? `
-                  <!-- Lead details by source — Not-Feasible reason shown inline per lead -->
                   <div>
                     <h2 class="section-title">📋 Lead Details by Source</h2>
                     ${Object.entries(leadsBySource).map(([source, leads]) => `
@@ -421,8 +435,9 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                                 <th>Contact Person</th>
                                 <th>Product</th>
                                 <th>Mobile</th>
-                                <th class="th-time">🕐 Lead Time</th>
+                                <th class="th-time">🕐 Lead Time (IST)</th>
                                 <th>Feasibility / Reason</th>
+                                <th>Assigned To</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -434,7 +449,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                     `).join('')}
                   </div>
 
-                  <!-- Call Unanswered dedicated section -->
                   ${buildCallUnansweredSection(callUnansweredLeads)}
 
                 ` : `<div class="no-leads">No leads received on ${formatDate(reportDate)} from TradeIndia, IndiaMart, or Direct entry.</div>`}
@@ -442,7 +456,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
               
               <div class="footer">
                 <p>© ${new Date().getFullYear()} ProClient360. All rights reserved.</p>
-                <p>This automated report is sent at <strong>10:00 AM daily</strong> and covers the previous day's leads.</p>
+                <p>This automated report is sent at <strong>10:00 AM daily (IST)</strong> and covers the previous day's leads.</p>
                 ${!isScheduledRun ? 
                   '<p>🔍 Preview Mode — This is a preview of the report. No emails were sent.</p>' : 
                   ''
@@ -453,12 +467,10 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           </html>
         `;
 
-        // Send email to all recipients with valid emails
         const recipientEmails = recipients
           .map(r => r.email)
           .filter(email => email && email.includes('@'));
         
-        // Only send emails if this is a scheduled run
         if (recipientEmails.length > 0 && isScheduledRun) {
           const mailOptions = {
             from: `ProClient360 <${process.env.EMAIL}>`,
@@ -466,15 +478,15 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             html: emailContent
           };
 
-          // Send emails in batches to prevent suspension
           await sendEmailInBatches(recipientEmails, mailOptions, companyName);
           
-          // Log recipients by designation for tracking
           console.log(`Recipients by designation for ${companyName}:`, {
             'Director Customer Delight': recipientsByDesignation['Director Customer Delight'].length,
             'CEO & Founder': recipientsByDesignation['CEO & Founder'].length,
             'Director Digi Solution': recipientsByDesignation['Director Digi Solution'].length,
-            'Junior Software Developer': recipientsByDesignation['Junior Software Developer'].length
+            'Junior Software Developer': recipientsByDesignation['Junior Software Developer'].length,
+            'Sales Manager': recipientsByDesignation['Sales Manager'].length,
+            'Marketing': recipientsByDesignation['Marketing'].length
           });
         } else if (recipientEmails.length === 0) {
           console.log(`No valid email addresses found for company ${companyId}`);
@@ -482,14 +494,12 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           console.log(`🔍 PREVIEW MODE: Email content generated but not sent (not a scheduled run)`);
         }
         
-        // Add delay between companies to prevent rate limiting
         if (i < companies.length - 1) {
           console.log(`Waiting 10 seconds before processing next company...`);
           await new Promise(resolve => setTimeout(resolve, 10000));
         }
       } catch (companyError) {
         console.error(`Error processing company ${companyId}:`, companyError.message);
-        // Continue with next company even if one fails
       }
     }
     
@@ -501,19 +511,16 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
   }
 };
 
-// Initialize the scheduler
 let scheduledTask = null;
 
 const initializeDailyLeadReportScheduler = () => {
-  // If a task is already scheduled, destroy it first
   if (scheduledTask) {
     scheduledTask.destroy();
   }
   
-  // ✅ ONLY 10:00 AM daily — 6 PM removed
   scheduledTask = cron.schedule('0 10 * * *', async () => {
     console.log('⏰ CRON JOB: Running daily lead report scheduler at:', new Date().toISOString());
-    const result = await sendDailyLeadReport(true); // Pass true to indicate this is a scheduled run
+    const result = await sendDailyLeadReport(true);
     if (result) {
       console.log('✅ CRON JOB: Daily lead report sent successfully.');
     } else {
@@ -524,10 +531,8 @@ const initializeDailyLeadReportScheduler = () => {
     timezone: "Asia/Kolkata"
   });
   
-  // ✅ Updated log message
-  console.log('📅 Daily lead report scheduler initialized to run at 10:00 AM daily (covers previous day leads).');
+  console.log('📅 Daily lead report scheduler initialized to run at 10:00 AM IST daily.');
   
-  // In development, run once at startup for testing
   if (process.env.NODE_ENV === 'development') {
     setTimeout(async () => {
       console.log('🚀 DEVELOPMENT MODE: Running initial daily lead report at startup for testing...');
@@ -535,11 +540,10 @@ const initializeDailyLeadReportScheduler = () => {
       if (result) {
         console.log('✅ DEVELOPMENT MODE: Initial daily lead report sent successfully.');
       }
-    }, 10000); // Wait 10 seconds after server start
+    }, 10000);
   }
 };
 
-// Export the functions
 module.exports = {
   sendDailyLeadReport,
   initializeDailyLeadReportScheduler
