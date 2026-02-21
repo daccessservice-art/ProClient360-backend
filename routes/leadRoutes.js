@@ -42,6 +42,9 @@ router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMy
 // Get call unanswered leads
 router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
 
+// NEW: Get not feasible leads
+router.get('/not-feasible', permissionMiddleware(['viewLead']), leadController.getNotFeasibleLeads);
+
 // Get sales employees
 router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
 

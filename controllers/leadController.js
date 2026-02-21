@@ -190,6 +190,92 @@ exports.getCallUnansweredLeads = async (req, res) => {
   }
 };
 
+// NEW FUNCTION FOR NOT FEASIBLE LEADS
+exports.getNotFeasibleLeads = async (req, res) => {
+  const user = req.user;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const query = {
+    company: new Types.ObjectId(user.company || user._id),
+    feasibility: "not-feasible"
+  };
+  const { source, date } = req.query;
+
+  try {
+    const validSources = [
+      'TradeIndia',
+      'IndiaMart',
+      'Google',
+      'Tender',
+      'Exhibitions',
+      'JustDial',
+      'Facebook',
+      'LinkedIn',
+      'Twitter',
+      'YouTube',
+      'WhatsApp',
+      'Referral',
+      'Email Campaign',
+      'Cold Call',
+      'Website',
+      'Walk-In',
+      'Direct',
+      'Other'
+    ];
+
+    if (source && validSources.includes(source)) {
+      query.SOURCE = source;
+    }
+
+    if (date) {
+      const inputDate = new Date(date);
+      if (isNaN(inputDate.getTime())) {
+        return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+      }
+
+      const startOfDay = new Date(inputDate.setHours(0, 0, 0, 0));
+      const endOfDay = new Date(inputDate.setHours(23, 59, 59, 999));
+
+      query.createdAt = {
+        $gte: startOfDay,
+        $lte: endOfDay,
+      };
+    }
+
+    const leads = await Lead.find(query)
+      .populate('company', 'name')
+      .populate('assignedBy', 'name')
+      .populate('assignedTo', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const totalRecords = await Lead.countDocuments(query);
+    const totalPages = Math.ceil(totalRecords / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
+    res.status(200).json({
+      success: true,
+      leads,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalRecords,
+        limit,
+        hasNextPage,
+        hasPrevPage,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching not feasible leads:', error);
+    res.status(500).json({ error: 'Internal Server Error: ' + error.message });
+  }
+};
+
 exports.getMyLeads = async (req, res) => {
   const user = req.user;
   const page = parseInt(req.query.page) || 1;

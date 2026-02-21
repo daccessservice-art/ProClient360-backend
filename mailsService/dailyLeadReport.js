@@ -119,19 +119,20 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         .populate('assignedTo', 'name')
         .lean();
 
-        const tradeIndiaLeads = reportLeads.filter(lead => 
-          lead.SOURCE === 'TradeIndia' || lead.SOURCE === 'TradeIndia '
-        );
+        // ✅ FIXED: Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
         const indiaMartLeads = reportLeads.filter(lead => 
           lead.SOURCE && lead.SOURCE.match(/IndiaMart/i)
+        );
+        const tradeIndiaLeads = reportLeads.filter(lead => 
+          lead.SOURCE === 'TradeIndia' || lead.SOURCE === 'TradeIndia '
         );
         const directLeads = reportLeads.filter(lead => 
           lead.SOURCE === 'Direct' || lead.SOURCE === 'Direct '
         );
         
         console.log(`🔍 Yesterday's leads for company ${companyId}:`);
-        console.log(`  - TradeIndia: ${tradeIndiaLeads.length} leads`);
         console.log(`  - IndiaMart: ${indiaMartLeads.length} leads`);
+        console.log(`  - TradeIndia: ${tradeIndiaLeads.length} leads`);
         console.log(`  - Direct: ${directLeads.length} leads`);
 
         const allLeadsCount        = reportLeads.length;
@@ -154,9 +155,10 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         const company = await Employee.findById(companyId).select('name');
         const companyName = company ? company.name : 'Your Company';
 
+        // ✅ FIXED: Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
         const leadsBySource = {
-          'TradeIndia': tradeIndiaLeads,
           'IndiaMart': indiaMartLeads,
+          'TradeIndia': tradeIndiaLeads,
           'Direct': directLeads
         };
 
@@ -169,32 +171,28 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           'Marketing': recipients.filter(r => r.designation && r.designation.name === 'Marketing')
         };
 
-        // ✅ FIXED: formatLeadTime now uses IST timezone (Asia/Kolkata)
+        // ✅ FIXED: formatLeadTime now uses exact same format as application
         const formatLeadTime = (date) => {
           if (!date) return '<span style="color:#9ca3af;">N/A</span>';
           const d = new Date(date);
+          
+          // Format to exactly match application: 19 Feb 2026 16:50
           const datePart = d.toLocaleDateString('en-IN', {
             day: '2-digit',
             month: 'short',
             year: 'numeric',
             timeZone: 'Asia/Kolkata'
           });
+          
           const timePart = d.toLocaleTimeString('en-IN', {
             hour: '2-digit',
             minute: '2-digit',
-            hour12: true,
+            hour12: false, // Use 24-hour format
             timeZone: 'Asia/Kolkata'
-          }).toUpperCase();
-          return `
-            <div style="line-height:1.5;">
-              <div style="font-size:12px; color:#374151; font-weight:600; white-space:nowrap;">
-                🗓 ${datePart}
-              </div>
-              <div style="font-size:12px; color:#6366f1; font-weight:600; white-space:nowrap; margin-top:2px;">
-                🕐 ${timePart}
-              </div>
-            </div>
-          `;
+          });
+          
+          // Combine date and time in the same format as application
+          return `${datePart} ${timePart}`;
         };
 
         const getFeasibilityCell = (lead) => {
@@ -278,9 +276,9 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                       ? new Date(lastCall.date).toLocaleString('en-IN', {
                           day: '2-digit', month: 'short',
                           hour: '2-digit', minute: '2-digit',
-                          hour12: true,
+                          hour12: false, // Use 24-hour format
                           timeZone: 'Asia/Kolkata'
-                        }).toUpperCase()
+                        })
                       : null;
                     return `
                       <tr>
@@ -451,7 +449,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
 
                   ${buildCallUnansweredSection(callUnansweredLeads)}
 
-                ` : `<div class="no-leads">No leads received on ${formatDate(reportDate)} from TradeIndia, IndiaMart, or Direct entry.</div>`}
+                ` : `<div class="no-leads">No leads received on ${formatDate(reportDate)} from IndiaMart, TradeIndia, or Direct entry.</div>`}
               </div>
               
               <div class="footer">
