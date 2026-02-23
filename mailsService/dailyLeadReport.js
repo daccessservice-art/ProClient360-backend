@@ -103,7 +103,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
       try {
         console.log(`Processing company ${i+1}/${companies.length}: ${companyId}`);
 
-        // ✅ FIXED: populate assignedTo so name shows in email
         const reportLeads = await Lead.find({
           company: companyId,
           createdAt: {
@@ -119,7 +118,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         .populate('assignedTo', 'name')
         .lean();
 
-        // ✅ FIXED: Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
+        // Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
         const indiaMartLeads = reportLeads.filter(lead => 
           lead.SOURCE && lead.SOURCE.match(/IndiaMart/i)
         );
@@ -155,7 +154,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         const company = await Employee.findById(companyId).select('name');
         const companyName = company ? company.name : 'Your Company';
 
-        // ✅ FIXED: Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
+        // Order sources as IndiaMart (top), TradeIndia (middle), Direct (bottom)
         const leadsBySource = {
           'IndiaMart': indiaMartLeads,
           'TradeIndia': tradeIndiaLeads,
@@ -171,27 +170,21 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           'Marketing': recipients.filter(r => r.designation && r.designation.name === 'Marketing')
         };
 
-        // ✅ FIXED: formatLeadTime now uses exact same format as application
         const formatLeadTime = (date) => {
           if (!date) return '<span style="color:#9ca3af;">N/A</span>';
           const d = new Date(date);
-          
-          // Format to exactly match application: 19 Feb 2026 16:50
           const datePart = d.toLocaleDateString('en-IN', {
             day: '2-digit',
             month: 'short',
             year: 'numeric',
             timeZone: 'Asia/Kolkata'
           });
-          
           const timePart = d.toLocaleTimeString('en-IN', {
             hour: '2-digit',
             minute: '2-digit',
-            hour12: false, // Use 24-hour format
+            hour12: false,
             timeZone: 'Asia/Kolkata'
           });
-          
-          // Combine date and time in the same format as application
           return `${datePart} ${timePart}`;
         };
 
@@ -218,7 +211,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           }
         };
 
-        // ✅ FIXED: Added "Assigned To" column in lead rows
         const buildLeadRows = (leads) => leads.map(lead => `
           <tr>
             <td>${lead.SENDER_COMPANY || 'N/A'}</td>
@@ -276,7 +268,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                       ? new Date(lastCall.date).toLocaleString('en-IN', {
                           day: '2-digit', month: 'short',
                           hour: '2-digit', minute: '2-digit',
-                          hour12: false, // Use 24-hour format
+                          hour12: false,
                           timeZone: 'Asia/Kolkata'
                         })
                       : null;
@@ -335,20 +327,6 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
               .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
               .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 16px; }
               .content { padding: 30px; }
-              .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 30px; }
-              .stat-card { border-radius: 10px; padding: 18px 12px; text-align: center; }
-              .stat-card.all             { background-color: #EFF6FF; border-left: 4px solid #3b82f6; }
-              .stat-card.feasible        { background-color: #ECFDF5; border-left: 4px solid #10b981; }
-              .stat-card.not-feasible    { background-color: #FEF2F2; border-left: 4px solid #ef4444; }
-              .stat-card.pending         { background-color: #FFFBEB; border-left: 4px solid #f59e0b; }
-              .stat-card.call-unanswered { background-color: #FFF7ED; border-left: 4px solid #f97316; }
-              .stat-number { font-size: 32px; font-weight: bold; margin-bottom: 5px; }
-              .stat-card.all             .stat-number { color: #3b82f6; }
-              .stat-card.feasible        .stat-number { color: #10b981; }
-              .stat-card.not-feasible    .stat-number { color: #ef4444; }
-              .stat-card.pending         .stat-number { color: #f59e0b; }
-              .stat-card.call-unanswered .stat-number { color: #f97316; }
-              .stat-label { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
               .section-title { font-size: 18px; font-weight: 600; margin: 30px 0 12px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
               .source-section { margin-bottom: 25px; }
               .source-name { font-weight: 600; color: #4b5563; margin-bottom: 10px; display: inline-block; background: #f3f4f6; padding: 5px 12px; border-radius: 20px; font-size: 14px; }
@@ -395,29 +373,36 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
                     ).join('')}
                   </div>
                 </div>
-                
-                <div class="stats-grid">
-                  <div class="stat-card all">
-                    <div class="stat-number">${allLeadsCount}</div>
-                    <div class="stat-label">All Leads</div>
-                  </div>
-                  <div class="stat-card feasible">
-                    <div class="stat-number">${feasibleLeads.length}</div>
-                    <div class="stat-label">Feasible</div>
-                  </div>
-                  <div class="stat-card not-feasible">
-                    <div class="stat-number">${notFeasibleLeads.length}</div>
-                    <div class="stat-label">Not Feasible</div>
-                  </div>
-                  <div class="stat-card pending">
-                    <div class="stat-number">${pendingLeads.length}</div>
-                    <div class="stat-label">Pending Review</div>
-                  </div>
-                  <div class="stat-card call-unanswered">
-                    <div class="stat-number">${callUnansweredLeads.length}</div>
-                    <div class="stat-label">Call Unanswered</div>
-                  </div>
-                </div>
+
+                <!-- ✅ FIXED: Table-based stats grid for Outlook compatibility (CSS grid not supported in Outlook) -->
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:30px;">
+                  <tr>
+                    <td width="19%" style="background-color:#EFF6FF; border-left:4px solid #3b82f6; border-radius:10px; padding:18px 12px; text-align:center; vertical-align:middle;">
+                      <div style="font-size:32px; font-weight:bold; color:#3b82f6; margin-bottom:5px;">${allLeadsCount}</div>
+                      <div style="color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">All Leads</div>
+                    </td>
+                    <td width="1%">&nbsp;</td>
+                    <td width="19%" style="background-color:#ECFDF5; border-left:4px solid #10b981; border-radius:10px; padding:18px 12px; text-align:center; vertical-align:middle;">
+                      <div style="font-size:32px; font-weight:bold; color:#10b981; margin-bottom:5px;">${feasibleLeads.length}</div>
+                      <div style="color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Feasible</div>
+                    </td>
+                    <td width="1%">&nbsp;</td>
+                    <td width="19%" style="background-color:#FEF2F2; border-left:4px solid #ef4444; border-radius:10px; padding:18px 12px; text-align:center; vertical-align:middle;">
+                      <div style="font-size:32px; font-weight:bold; color:#ef4444; margin-bottom:5px;">${notFeasibleLeads.length}</div>
+                      <div style="color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Not Feasible</div>
+                    </td>
+                    <td width="1%">&nbsp;</td>
+                    <td width="19%" style="background-color:#FFFBEB; border-left:4px solid #f59e0b; border-radius:10px; padding:18px 12px; text-align:center; vertical-align:middle;">
+                      <div style="font-size:32px; font-weight:bold; color:#f59e0b; margin-bottom:5px;">${pendingLeads.length}</div>
+                      <div style="color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Pending Review</div>
+                    </td>
+                    <td width="1%">&nbsp;</td>
+                    <td width="19%" style="background-color:#FFF7ED; border-left:4px solid #f97316; border-radius:10px; padding:18px 12px; text-align:center; vertical-align:middle;">
+                      <div style="font-size:32px; font-weight:bold; color:#f97316; margin-bottom:5px;">${callUnansweredLeads.length}</div>
+                      <div style="color:#6b7280; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Call Unanswered</div>
+                    </td>
+                  </tr>
+                </table>
                 
                 ${allLeadsCount > 0 ? `
                   <div>
