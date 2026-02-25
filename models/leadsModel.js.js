@@ -141,7 +141,12 @@ const leadSchema = new Schema({
     type: String,
     trim: true,
   },
-  // New field to track call history by day and attempt
+  // NEW FIELD: Stores actual inquiry time from TradeIndia/IndiaMart
+  // instead of MongoDB createdAt (which = cron job run time)
+  QUERY_TIME: {
+    type: Date,
+    default: null,
+  },
   callHistory: [{
     day: {
       type: Number,
@@ -169,12 +174,10 @@ const leadSchema = new Schema({
       ref: 'Employee'
     }
   }],
-  // NEW FIELD for auto-marking
   autoMarkedDate: {
     type: Date,
     default: null
   },
-  // NEW FIELD to track first call date
   firstCallDate: {
     type: Date,
     default: null
