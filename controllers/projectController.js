@@ -20,9 +20,9 @@ exports.showAll = async (req, res) => {
     const { status, search } = req.query;
 
     const isCompany = user.company ? false : true;
-    let query = { company: isCompany ? user._id : user.company,};
+    let query = { company: isCompany ? user._id : user.company };
 
-    if( !isCompany ) {
+    if (!isCompany) {
       const designation = await Designation.findOne({ _id: user.designation });
       if (!designation) {
         return res.status(404).json({ success: false, error: "Designation not found" });
@@ -33,18 +33,17 @@ exports.showAll = async (req, res) => {
     }
 
     const validStatuses = ["Upcoming", "Inprocess", "Completed"];
-
     if (status && validStatuses.includes(status)) {
       query.projectStatus = status;
     }
-    
+
     if (search && search.trim() !== "") {
       const customers = await Customer.find({
         custName: { $regex: search, $options: "i" }
       }).select('_id');
-      
+
       const customerIds = customers.map(customer => customer._id);
-      
+
       if (customerIds.length > 0) {
         query.custId = { $in: customerIds };
       } else {
@@ -62,7 +61,7 @@ exports.showAll = async (req, res) => {
         });
       }
     }
-    
+
     const projects = await Project.find(query)
       .skip(skip)
       .limit(limit)
@@ -105,9 +104,7 @@ exports.showAll = async (req, res) => {
     });
   } catch (error) {
     console.log("Error in showAll Controller:", error);
-    res
-      .status(500)
-      .json({ error: "Error while fetching projects: " + error.message });
+    res.status(500).json({ error: "Error while fetching projects: " + error.message });
   }
 };
 
@@ -119,15 +116,13 @@ exports.getProject = async (req, res) => {
     }
     res.status(200).json({ success: true, message: "Project fetched successfully", project });
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Error in getProject Controller : " + error.message });
+    res.status(500).json({ error: "Error in getProject Controller : " + error.message });
   }
 };
 
 exports.myProjects = async (req, res) => {
   try {
-    const user=req.user;
+    const user = req.user;
 
     const uniqueProjectIds = await TaskSheet.distinct("project", {
       company: user.company,
@@ -140,15 +135,13 @@ exports.myProjects = async (req, res) => {
 
     res.status(200).json({ success: true, message: "My projects fetched successfully", projects });
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Error In My project controller: " + error.message });
+    res.status(500).json({ error: "Error In My project controller: " + error.message });
   }
 };
 
 exports.search = async (req, res) => {
   try {
-    const user=req.user;
+    const user = req.user;
     const query = req.query.search;
 
     const projects = await Project.find({
@@ -162,9 +155,7 @@ exports.search = async (req, res) => {
 
     res.status(200).json({ success: true, message: "Projects fetched successfully", projects });
   } catch (error) {
-    res
-      .status(500)
-      .json({ error: "Error while searching projects: " + error.message });
+    res.status(500).json({ error: "Error while searching projects: " + error.message });
   }
 };
 
@@ -190,56 +181,65 @@ exports.create = async (req, res) => {
     } = req.body;
 
     const user = req.user;
-    
-    if(!user.company){
+
+    if (!user.company) {
       return res.status(403).json({ success: false, error: "Access denied. Companies cannot create projects." });
     }
 
     completeLevel = completeLevel === undefined ? 0 : completeLevel;
 
-    let address = Address;
-    
-    if(!address){
-      console.log("Address is required:", req.body);
-      return res.status(400).json({success:false,error:"Address Required..."});
+    if (!Address) {
+      return res.status(400).json({ success: false, error: "Address Required..." });
     }
 
+    // ── POCopy Upload ──────────────────────────────────────────────────────────
     let POCopyUrl = null;
     if (POCopy) {
       try {
-        let base64String;
-        
-        if (Array.isArray(POCopy) && POCopy.length > 0) {
-          base64String = POCopy[0];
-        } else if (typeof POCopy === 'string') {
-          base64String = POCopy;
+        // Must be a string
+        if (typeof POCopy !== 'string') {
+          return res.status(400).json({ success: false, error: "Invalid POCopy format: expected base64 string" });
         }
-        
-        if (base64String && base64String.includes(',')) {
+
+        let base64String = POCopy.trim();
+
+        // Strip data URI prefix e.g. "data:application/pdf;base64,"
+        if (base64String.includes(',')) {
           base64String = base64String.split(',')[1];
         }
-        
-        if (base64String && base64String.trim().length > 0) {
-          const buffer = Buffer.from(base64String, 'base64'); 
-          const fileName = `POCopy/${name}_${Date.now()}.pdf`; 
-          const file = bucket.file(fileName);
 
-          await file.save(buffer, {
-            metadata: { contentType: 'application/pdf' }, 
-          });
-
-          await file.makePublic();
-          POCopyUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        // Must not be empty after stripping
+        if (!base64String || base64String.length < 100) {
+          return res.status(400).json({ success: false, error: "POCopy file data is empty or corrupted" });
         }
+
+        const buffer = Buffer.from(base64String, 'base64');
+
+        // Validate it is actually a PDF (%PDF magic bytes)
+        if (buffer.length < 4 || buffer.toString('utf8', 0, 4) !== '%PDF') {
+          return res.status(400).json({ success: false, error: "Uploaded file is not a valid PDF" });
+        }
+
+        // Max 2MB
+        if (buffer.length > 2 * 1024 * 1024) {
+          return res.status(400).json({ success: false, error: "POCopy file must be less than 2MB" });
+        }
+
+        const safeName = (name || 'project').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50);
+        const fileName = `POCopy/${safeName}_${Date.now()}.pdf`;
+        const file = bucket.file(fileName);
+
+        await file.save(buffer, { metadata: { contentType: 'application/pdf' } });
+        await file.makePublic();
+
+        POCopyUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
       } catch (error) {
-        console.error('Error processing POCopy:', error);
-        return res.status(400).json({
-          success: false,
-          error: "Invalid file format for POCopy"
-        });
+        console.error('[create] POCopy error:', error.message);
+        return res.status(400).json({ success: false, error: "Failed to process POCopy: " + error.message });
       }
     }
-   
+    // ──────────────────────────────────────────────────────────────────────────
+
     const newProject = new Project({
       custId,
       name,
@@ -253,9 +253,9 @@ exports.create = async (req, res) => {
       payAgainstDelivery,
       payAfterCompletion,
       remark,
-      completeLevel: completeLevel,
+      completeLevel,
       POCopy: POCopyUrl,
-      Address: address,
+      Address,
       createdBy: user._id,
       retention,
       projectStatus:
@@ -269,8 +269,6 @@ exports.create = async (req, res) => {
     });
 
     const savedProject = await newProject.save();
-
-    // *** LOG ACTIVITY - Project Creation ***
     await logCreation(savedProject, user, req, 'Project');
 
     res.status(201).json({
@@ -279,44 +277,41 @@ exports.create = async (req, res) => {
       project: savedProject
     });
   } catch (error) {
-    console.error(error);
+    console.error('[create] Unhandled error:', error.message);
     res.status(500).json({ error: "Error while creating Project: " + error.message });
   }
 };
 
 exports.exportProjects = async (req, res) => {
   try {
-    const user=req.user;
-    
+    const user = req.user;
+
     const { startDate, endDate, status } = req.params;
 
     const query = {
       company: user.company ? user.company : user._id,
-      ...(status && { projectStatus: status }), 
+      ...(status && { projectStatus: status }),
     };
 
     if (startDate) {
-      query.startDate = { $gte: new Date(startDate) }; 
+      query.startDate = { $gte: new Date(startDate) };
     }
 
     if (endDate) {
-      query.endDate = { $lte: new Date(endDate) }; 
+      query.endDate = { $lte: new Date(endDate) };
     } else {
-      query.endDate = { $lte: new Date() }; 
+      query.endDate = { $lte: new Date() };
     }
 
     const projects = await Project.find(query).populate("custId", "custName");
 
     const doc = new PDFDocument();
     const tableWidth = 500;
-    const columnCount = 9; 
+    const columnCount = 9;
     const columnWidth = tableWidth / columnCount;
 
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      "attachment; filename=projects_report.pdf"
-    );
+    res.setHeader("Content-Disposition", "attachment; filename=projects_report.pdf");
 
     doc.pipe(res);
 
@@ -324,43 +319,28 @@ exports.exportProjects = async (req, res) => {
     doc.moveDown();
 
     const tableHeaders = [
-      "S.No",
-      "Project Name",
-      "Customer",
-      "PO Date",
-      "PO Value",
-      "Category",
-      "Start Date",
-      "End Date",
-      "Project Status",
+      "S.No", "Project Name", "Customer", "PO Date",
+      "PO Value", "Category", "Start Date", "End Date", "Project Status",
     ];
 
-    let y = doc.y; 
+    let y = doc.y;
     doc.fontSize(12).font("Helvetica-Bold");
     tableHeaders.forEach((header, index) => {
       doc.rect(50 + index * columnWidth, y, columnWidth, 30).stroke();
-      doc.text(header, 50 + index * columnWidth + 5, y + 5, {
-        width: columnWidth - 10,
-        align: "center",
-      }); 
+      doc.text(header, 50 + index * columnWidth + 5, y + 5, { width: columnWidth - 10, align: "center" });
     });
-    y += 30; 
+    y += 30;
 
-    doc
-      .moveTo(50, y)
-      .lineTo(50 + tableWidth, y)
-      .stroke();
-    y += 5; 
+    doc.moveTo(50, y).lineTo(50 + tableWidth, y).stroke();
+    y += 5;
 
-    doc.fontSize(10).font("Helvetica"); 
+    doc.fontSize(10).font("Helvetica");
     projects.forEach((project, index) => {
       const rowData = [
         index + 1,
         project.name,
         project.custId ? project.custId.custName : "N/A",
-        project.purchaseOrderDate
-          ? project.purchaseOrderDate.toDateString()
-          : "N/A",
+        project.purchaseOrderDate ? project.purchaseOrderDate.toDateString() : "N/A",
         project.purchaseOrderValue.toString(),
         project.category,
         project.startDate ? project.startDate.toDateString() : "N/A",
@@ -369,40 +349,31 @@ exports.exportProjects = async (req, res) => {
       ];
 
       const rowHeight = 30;
-      let maxRowHeight = rowHeight; 
+      let maxRowHeight = rowHeight;
 
-      rowData.forEach((data, index) => {
-        const textHeight = doc.heightOfString(data, {
-          width: columnWidth - 10,
-        });
-        const cellHeight = Math.ceil(textHeight / 10) * 10; 
-        if (cellHeight > maxRowHeight) {
-          maxRowHeight = cellHeight; 
-        }
+      rowData.forEach((data) => {
+        const textHeight = doc.heightOfString(data, { width: columnWidth - 10 });
+        const cellHeight = Math.ceil(textHeight / 10) * 10;
+        if (cellHeight > maxRowHeight) maxRowHeight = cellHeight;
       });
 
       rowData.forEach((data, index) => {
-        doc
-          .rect(50 + index * columnWidth, y, columnWidth, maxRowHeight)
-          .stroke(); 
+        doc.rect(50 + index * columnWidth, y, columnWidth, maxRowHeight).stroke();
         doc.text(data, 50 + index * columnWidth + 5, y + 5, {
           width: columnWidth - 10,
           align: "center",
           height: maxRowHeight,
-        }); 
+        });
       });
 
-      y += maxRowHeight; 
+      y += maxRowHeight;
     });
 
-    doc.rect(50, 60, tableWidth, y - 60).stroke(); 
-
+    doc.rect(50, 60, tableWidth, y - 60).stroke();
     doc.end();
   } catch (error) {
     console.error("Export error:", error);
-    res
-      .status(500)
-      .json({ error: "Under construction,  Error exporting projects: " + error.message });
+    res.status(500).json({ error: "Error exporting projects: " + error.message });
   }
 };
 
@@ -413,62 +384,35 @@ exports.delete = async (req, res) => {
 
     const project = await Project.findById(projectId);
     if (!project) {
-      return res
-        .status(404)
-        .json({ success: false, error: "Project not found" });
+      return res.status(404).json({ success: false, error: "Project not found" });
     }
 
-    // *** LOG ACTIVITY - Project Deletion ***
     await logDeletion(project, user, req, 'Project');
-
     await Tasksheet.deleteMany({ project: projectId });
     await Project.findByIdAndDelete(projectId);
 
-    res
-      .status(200)
-      .json({ success: true, message: "Project and its tasks deleted successfully" });
+    res.status(200).json({ success: true, message: "Project and its tasks deleted successfully" });
   } catch (error) {
-    res
-      .status(500)
-      .json({ success: false, error: "Error while deleting project: " + error.message });
+    res.status(500).json({ success: false, error: "Error while deleting project: " + error.message });
   }
 };
 
 exports.updateProject = async (req, res) => {
-  const { id } = req.params; 
+  const { id } = req.params;
   const user = req.user;
   const {
-    name,
-    custId,
-    Address,
-    completeLevel,
-    purchaseOrderNo,
-    projectStatus,
-    purchaseOrderDate,
-    purchaseOrderValue,
-    category,
-    startDate,
-    endDate,
-    advancePay,
-    payAgainstDelivery,
-    payAfterCompletion,
-    remark,
-    POCopy,
-    retention,
-    completionCertificate,
-    warrantyCertificate,
-    warrantyStartDate,
-    warrantyMonths
+    name, custId, Address, completeLevel, purchaseOrderNo, projectStatus,
+    purchaseOrderDate, purchaseOrderValue, category, startDate, endDate,
+    advancePay, payAgainstDelivery, payAfterCompletion, remark, POCopy,
+    retention, completionCertificate, warrantyCertificate, warrantyStartDate, warrantyMonths
   } = req.body;
-  
+
   try {
     const originalData = await Project.findById(id);
-    
     if (!originalData) {
       return res.status(404).json({ success: false, error: "Project not found" });
     }
 
-    // Helper function to serialize Address object for comparison
     const serializeAddress = (addr) => {
       if (!addr) return null;
       return JSON.stringify({
@@ -480,7 +424,6 @@ exports.updateProject = async (req, res) => {
       });
     };
 
-    // *** STORE OLD DATA FOR LOGGING - Convert to plain object ***
     const oldProjectData = {
       name: originalData.name,
       custId: originalData.custId ? originalData.custId.toString() : null,
@@ -505,11 +448,8 @@ exports.updateProject = async (req, res) => {
       warrantyMonths: originalData.warrantyMonths,
       _id: originalData._id
     };
-    
-    // *** BUILD UPDATE DATA - Include only fields that are provided ***
+
     const updateData = {};
-    
-    // Only add fields to updateData if they are provided in the request
     if (name !== undefined) updateData.name = name;
     if (custId !== undefined) updateData.custId = custId;
     if (Address !== undefined) updateData.Address = Address;
@@ -523,129 +463,74 @@ exports.updateProject = async (req, res) => {
     if (payAfterCompletion !== undefined) updateData.payAfterCompletion = payAfterCompletion;
     if (remark !== undefined) updateData.remark = remark;
     if (retention !== undefined) updateData.retention = retention;
-    
-    // Handle date fields with validation
-    if (purchaseOrderDate !== undefined && purchaseOrderDate !== null && purchaseOrderDate !== '') {
+
+    if (purchaseOrderDate) {
       const poDate = new Date(purchaseOrderDate);
-      if (!isNaN(poDate.getTime())) {
-        updateData.purchaseOrderDate = poDate;
-      }
+      if (!isNaN(poDate.getTime())) updateData.purchaseOrderDate = poDate;
     }
-    
-    if (startDate !== undefined && startDate !== null && startDate !== '') {
+    if (startDate) {
       const start = new Date(startDate);
-      if (!isNaN(start.getTime())) {
-        updateData.startDate = start;
-      }
+      if (!isNaN(start.getTime())) updateData.startDate = start;
     }
-    
-    if (endDate !== undefined && endDate !== null && endDate !== '') {
+    if (endDate) {
       const end = new Date(endDate);
-      if (!isNaN(end.getTime())) {
-        updateData.endDate = end;
-      }
+      if (!isNaN(end.getTime())) updateData.endDate = end;
     }
-    
-    // Handle POCopy upload
+
+    // ── File uploads ───────────────────────────────────────────────────────────
+    const uploadFile = async (base64Data, folder, label) => {
+      if (!base64Data || typeof base64Data !== 'string') return null;
+      let b64 = base64Data.trim();
+      if (b64.includes(',')) b64 = b64.split(',')[1];
+      if (!b64 || b64.length < 100) return null;
+      const buffer = Buffer.from(b64, 'base64');
+      const fileName = `${folder}/${id}_${Date.now()}.pdf`;
+      const file = bucket.file(fileName);
+      await file.save(buffer, { metadata: { contentType: 'application/pdf' } });
+      await file.makePublic();
+      return `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+    };
+
     if (POCopy) {
       try {
-        let base64String = POCopy;
-        if (base64String.includes(',')) {
-          base64String = base64String.split(',')[1];
-        }
-        const buffer = Buffer.from(base64String, 'base64');
-        const fileName = `POCopy/${id}_${Date.now()}.pdf`;
-        const file = bucket.file(fileName);
-
-        await file.save(buffer, {
-          metadata: { contentType: 'application/pdf' },
-        });
-
-        await file.makePublic();
-        const POCopyUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-        updateData.POCopy = POCopyUrl;
-      } catch (error) {
-        console.error('Error processing POCopy:', error);
-        return res.status(400).json({
-          success: false,
-          error: "Invalid file format for POCopy"
-        });
+        const url = await uploadFile(POCopy, 'POCopy', 'POCopy');
+        if (url) updateData.POCopy = url;
+      } catch (e) {
+        return res.status(400).json({ success: false, error: "Invalid file format for POCopy" });
       }
     }
 
-    // Handle completion certificate upload
     if (completionCertificate) {
       try {
-        let base64String = completionCertificate;
-        if (base64String.includes(',')) {
-          base64String = base64String.split(',')[1];
-        }
-        const buffer = Buffer.from(base64String, 'base64');
-        const fileName = `completionCertificate/${id}_${Date.now()}.pdf`;
-        const file = bucket.file(fileName);
-
-        await file.save(buffer, {
-          metadata: { contentType: 'application/pdf' },
-        });
-
-        await file.makePublic();
-        const completionCertificateUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-        updateData.completionCertificate = completionCertificateUrl;
-      } catch (error) {
-        console.error('Error processing completionCertificate:', error);
-        return res.status(400).json({
-          success: false,
-          error: "Invalid file format for completionCertificate"
-        });
+        const url = await uploadFile(completionCertificate, 'completionCertificate', 'completionCertificate');
+        if (url) updateData.completionCertificate = url;
+      } catch (e) {
+        return res.status(400).json({ success: false, error: "Invalid file format for completionCertificate" });
       }
     }
 
-    // Handle warranty certificate upload
     if (warrantyCertificate) {
       try {
-        let base64String = warrantyCertificate;
-        if (base64String.includes(',')) {
-          base64String = base64String.split(',')[1];
-        }
-        const buffer = Buffer.from(base64String, 'base64');
-        const fileName = `warrantyCertificate/${id}_${Date.now()}.pdf`;
-        const file = bucket.file(fileName);
-
-        await file.save(buffer, {
-          metadata: { contentType: 'application/pdf' },
-        });
-
-        await file.makePublic();
-        const warrantyCertificateUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-        updateData.warrantyCertificate = warrantyCertificateUrl;
-      } catch (error) {
-        console.error('Error processing warrantyCertificate:', error);
-        return res.status(400).json({
-          success: false,
-          error: "Invalid file format for warrantyCertificate"
-        });
+        const url = await uploadFile(warrantyCertificate, 'warrantyCertificate', 'warrantyCertificate');
+        if (url) updateData.warrantyCertificate = url;
+      } catch (e) {
+        return res.status(400).json({ success: false, error: "Invalid file format for warrantyCertificate" });
       }
     }
+    // ──────────────────────────────────────────────────────────────────────────
 
-    // Handle warranty start date with validation
-    if (warrantyStartDate !== undefined && warrantyStartDate !== null && warrantyStartDate !== '') {
+    if (warrantyStartDate) {
       const warrantyDate = new Date(warrantyStartDate);
-      if (!isNaN(warrantyDate.getTime())) {
-        updateData.warrantyStartDate = warrantyDate;
-      }
+      if (!isNaN(warrantyDate.getTime())) updateData.warrantyStartDate = warrantyDate;
     }
-    
-    // Handle warranty months with validation
     if (warrantyMonths !== undefined && warrantyMonths !== null && warrantyMonths !== '') {
       const months = parseInt(warrantyMonths);
-      if (!isNaN(months)) {
-        updateData.warrantyMonths = months;
-      }
+      if (!isNaN(months)) updateData.warrantyMonths = months;
     }
 
     const updatedProjectDoc = await Project.findByIdAndUpdate(
-      id, 
-      { $set: updateData }, 
+      id,
+      { $set: updateData },
       { runValidators: true, new: true }
     );
 
@@ -653,7 +538,6 @@ exports.updateProject = async (req, res) => {
       return res.status(404).json({ success: false, error: "Project not found after update" });
     }
 
-    // *** CONVERT TO PLAIN OBJECT FOR LOGGING ***
     const updatedProject = {
       name: updatedProjectDoc.name,
       custId: updatedProjectDoc.custId ? updatedProjectDoc.custId.toString() : null,
@@ -679,30 +563,11 @@ exports.updateProject = async (req, res) => {
       _id: updatedProjectDoc._id
     };
 
-    // *** DEBUGGING - Log the data being compared ***
-    console.log('=== DEBUGGING ACTIVITY LOG ===');
-    console.log('Old custId:', oldProjectData.custId);
-    console.log('New custId:', updatedProject.custId);
-    console.log('Old category:', oldProjectData.category);
-    console.log('New category:', updatedProject.category);
-    console.log('Old purchaseOrderValue:', oldProjectData.purchaseOrderValue);
-    console.log('New purchaseOrderValue:', updatedProject.purchaseOrderValue);
-    console.log('Old advancePay:', oldProjectData.advancePay);
-    console.log('New advancePay:', updatedProject.advancePay);
-    console.log('Old retention:', oldProjectData.retention);
-    console.log('New retention:', updatedProject.retention);
-    console.log('Old Address:', oldProjectData.Address);
-    console.log('New Address:', updatedProject.Address);
-    console.log('================================');
-
-    // *** LOG ACTIVITY - Project Update ***
     await logUpdate(oldProjectData, updatedProject, user, req, 'Project');
 
     return res.status(200).json({ success: true, message: "Project Updated Successfully" });
   } catch (error) {
     console.error("Error updating project:", error);
-    return res
-      .status(500)
-      .json({ error: "Error While Updating Project: " + error.message });
+    return res.status(500).json({ error: "Error While Updating Project: " + error.message });
   }
 };
