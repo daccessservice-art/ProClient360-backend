@@ -114,8 +114,8 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             { SOURCE: 'Direct' }
           ]
         })
-        .populate('assignedTo', 'name')
-        .populate('assignedBy', 'name')
+        .populate('assignedTo', 'name email')   // ✅ FIX: also fetch email as extra identifier
+        .populate('assignedBy', 'name email')   // ✅ FIX: also fetch email as extra identifier
         .lean();
 
         const indiaMartLeads = reportLeads.filter(lead => 
@@ -200,15 +200,31 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           }
         };
 
-        // ✅ FIX: assignedTo name show properly for all leads including not-feasible
+        // ✅ FIX: Robust name resolution for ALL feasibility states
+        // For not-feasible leads: assignedTo may be null/cleared.
+        // We try assignedTo → assignedBy → stored plain-text fields as fallback.
         const getAssignedToCell = (lead) => {
-          // ✅ FIX: For not-feasible leads assignedTo may be null
-          // so fallback to assignedBy (person who marked it not-feasible)
-          const name = (lead.assignedTo && lead.assignedTo.name)
-            ? lead.assignedTo.name
-            : (lead.assignedBy && lead.assignedBy.name)
-            ? lead.assignedBy.name
-            : null;
+          // Safely extract name from a populated field (object) or plain string
+          const extractName = (field) => {
+            if (!field) return null;
+            if (typeof field === 'object' && field.name && field.name.trim()) return field.name.trim();
+            if (typeof field === 'string' && field.trim()) return field.trim();
+            return null;
+          };
+
+          const name =
+            extractName(lead.assignedTo) ||      // populated Employee ref
+            extractName(lead.assignedBy) ||      // fallback: who marked it
+            extractName(lead.assignedToName) ||  // fallback: plain-text name field (if your model has it)
+            extractName(lead.markedBy) ||        // fallback: markedBy field (if your model has it)
+            null;
+
+          // 🔍 Debug log — remove once confirmed working
+          if (!name) {
+            console.log(`⚠️ No assignedTo name found for lead ${lead._id} (feasibility: ${lead.feasibility})`);
+            console.log('   assignedTo:', lead.assignedTo);
+            console.log('   assignedBy:', lead.assignedBy);
+          }
 
           if (name) {
             return `<span style="
@@ -313,9 +329,9 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
             <style>
               body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f7fa; }
               .container { max-width: 960px; margin: 0 auto; background-color: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }
-              .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
-              .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
-              .header p { margin: 10px 0 0 0; opacity: 0.9; font-size: 16px; }
+
+              /* Header styles handled inline via table for Outlook compatibility */
+
               .content { padding: 30px; }
               .section-title { font-size: 18px; font-weight: 600; margin: 30px 0 12px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 8px; }
               .source-section { margin-bottom: 25px; }
@@ -339,19 +355,25 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
           </head>
           <body>
             <div class="container">
-              <div class="header">
-                <!-- ✅ FIX 1: Updated heading -->
-                <h1>ProClient360 – Yesterday's Lead Report</h1>
-                <p>${companyName} — ${formatDate(reportDate)}</p>
-              </div>
+              <!--[if mso]>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr><td bgcolor="#764ba2" style="padding:30px; text-align:center;">
+              <![endif]-->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#764ba2" style="background-color:#764ba2; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);">
+                <tr>
+                  <td align="center" style="padding:30px; background-color:#764ba2;">
+                    <h1 style="margin:0; font-size:28px; font-weight:600; color:#ffffff; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">ProClient360 – Yesterday's Lead Report</h1>
+                    <p style="margin:10px 0 0 0; font-size:16px; color:#ffffff; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;">${companyName} — ${formatDate(reportDate)}</p>
+                  </td>
+                </tr>
+              </table>
+              <!--[if mso]></td></tr></table><![endif]-->
               
               <div class="content">
                 ${!isScheduledRun ? 
                   '<div class="dev-notice">⚠️ PREVIEW MODE: This is a preview of the report. No emails were sent.</div>' : 
                   ''
                 }
-
-                <!-- ✅ FIX 2: Removed "This report has been sent to key personnel" section -->
 
                 <!-- Stats -->
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:30px;">

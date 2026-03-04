@@ -14,7 +14,10 @@ router.get('/', permissionMiddleware(['viewCustomer']), showAll);
 // Parameterized routes come AFTER specific routes
 router.get('/:id', permissionMiddleware(['viewCustomer']), getCustomer);
 
-router.post('/', permissionMiddleware(['createCustomer']), createCustomer);
+// ✅ FIX: Allow 'createCustomer' OR 'createLead' permission.
+// Sales employees already have 'createLead', so they can now create customers from leads.
+// Managers/company with 'createCustomer' continue to work as before.
+router.post('/', permissionMiddleware(['createCustomer', 'createLead']), createCustomer);
 
 router.put('/:id', permissionMiddleware(['updateCustomer']), updateCustomer);
 

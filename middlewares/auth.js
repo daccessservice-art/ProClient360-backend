@@ -121,7 +121,13 @@ module.exports.permissionMiddleware = (permissions) => {
           return res.status(403).json({success:false, error: `User's permissions not found.` });
         }
         const employeePermissions = designation.permissions; 
-        const hasPermissions = permissions.every((permission) => {
+
+        // ✅ FIX: Changed from .every() to .some()
+        // .every() required the employee to have ALL permissions in the array (AND logic)
+        // .some() allows access if the employee has ANY ONE permission in the array (OR logic)
+        // This allows sales employees with 'createLead' to create customers,
+        // without needing 'createCustomer' permission explicitly.
+        const hasPermissions = permissions.some((permission) => {
           return employeePermissions.includes(permission);
         });
 
@@ -136,4 +142,3 @@ module.exports.permissionMiddleware = (permissions) => {
     }
   };
 };
-
