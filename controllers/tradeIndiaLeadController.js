@@ -30,47 +30,61 @@ const getDateRange = () => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// FIX 1: Parse actual inquiry time from TradeIndia response
-// TradeIndia returns date in formats like "2026-02-25 14:30:00"
-// or "25-02-2026" – we handle both safely
+// ✅ FIXED: parseLeadDate — treats TradeIndia time as IST
+//
+// OLD BUG:
+//   new Date("2026-03-05 10:45:00") → JS treats as UTC
+//   10:45 UTC stored → shows as 16:15 IST in frontend ❌
+//
+// FIX:
+//   Append +05:30 so JS knows it's IST
+//   "2026-03-05 10:45:00" → "2026-03-05T10:45:00+05:30"
+//   Stored as 05:15 UTC → shows as 10:45 IST ✅
 // ─────────────────────────────────────────────────────────────
 const parseLeadDate = (dateStr) => {
   if (!dateStr) return null;
   try {
-    // TradeIndia format: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD"
-    const parsed = new Date(dateStr);
-    if (!isNaN(parsed.getTime())) return parsed;
+    const str = String(dateStr).trim();
 
-    // Fallback: "DD-MM-YYYY HH:MM:SS"
-    const parts = dateStr.split(' ');
-    const dateParts = parts[0].split('-');
-    if (dateParts.length === 3 && dateParts[0].length === 2) {
-      const iso = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}${parts[1] ? ' ' + parts[1] : ''}`;
-      const fallback = new Date(iso);
-      if (!isNaN(fallback.getTime())) return fallback;
+    // Format 1: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM" ← TradeIndia most common
+    const fmt1 = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)$/);
+    if (fmt1) {
+      const parsed = new Date(`${fmt1[1]}T${fmt1[2]}+05:30`); // ✅ force IST
+      if (!isNaN(parsed.getTime())) return parsed;
     }
+
+    // Format 2: "DD-MM-YYYY HH:MM:SS" or "DD-MM-YYYY"
+    const fmt2 = str.match(/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?$/);
+    if (fmt2) {
+      const [, dd, mm, yyyy, time] = fmt2;
+      const timepart = time || '00:00:00';
+      const parsed = new Date(`${yyyy}-${mm}-${dd}T${timepart}+05:30`); // ✅ force IST
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+
+    // Format 3: Already has timezone (Z or +HH:MM) — trust it directly
+    if (/Z$/.test(str) || /[+-]\d{2}:\d{2}$/.test(str)) {
+      const parsed = new Date(str);
+      if (!isNaN(parsed.getTime())) return parsed;
+    }
+
+    logger.warn(`[TradeIndia] Unrecognized date format: "${str}"`);
   } catch (e) {
-    logger.warn(`Could not parse date: ${dateStr}`);
+    logger.warn(`[TradeIndia] Could not parse date: "${dateStr}" — ${e.message}`);
   }
   return null;
 };
 
 // ─────────────────────────────────────────────────────────────
-// FIX 2: Normalize field names from TradeIndia API response
-// TradeIndia API can return camelCase OR snake_case field names
-// depending on their API version. We handle both.
+// Normalize field names from TradeIndia API response
 // ─────────────────────────────────────────────────────────────
 const mapLeadFields = (lead, companyId) => {
-
-  // --- DEBUG: Log raw lead on first run to verify field names ---
-  // Remove this line after confirming field names are correct
   logger.info('RAW TradeIndia lead sample: ' + JSON.stringify(lead));
 
   return {
     company: companyId,
     SOURCE: 'TradeIndia',
 
-    // Unique ID - try all possible field names TradeIndia uses
     UNIQUE_ID_TRADEINDIA:
       lead.rfi_id       ||
       lead.RFI_ID       ||
@@ -78,7 +92,6 @@ const mapLeadFields = (lead, companyId) => {
       lead.inquiry_id   ||
       '',
 
-    // Sender Name
     SENDER_NAME:
       lead.sender_name  ||
       lead.SenderName   ||
@@ -86,7 +99,6 @@ const mapLeadFields = (lead, companyId) => {
       lead.name         ||
       '',
 
-    // ✅ FIX: Company Name - TradeIndia may return as company_name or sender_company
     SENDER_COMPANY:
       lead.sender_company   ||
       lead.company_name     ||
@@ -95,14 +107,12 @@ const mapLeadFields = (lead, companyId) => {
       lead.organization     ||
       '',
 
-    // Email
     SENDER_EMAIL:
       lead.sender_email ||
       lead.email        ||
       lead.Email        ||
       '',
 
-    // Mobile
     SENDER_MOBILE:
       lead.sender_mobile  ||
       lead.mobile         ||
@@ -110,14 +120,12 @@ const mapLeadFields = (lead, companyId) => {
       lead.Mobile         ||
       '',
 
-    // Subject
     SUBJECT:
       lead.subject        ||
       lead.Subject        ||
       lead.inquiry_subject||
       '',
 
-    // ✅ FIX: Product Name - TradeIndia may return as product_name or query_product_name
     QUERY_PRODUCT_NAME:
       lead.query_product_name ||
       lead.product_name       ||
@@ -126,7 +134,6 @@ const mapLeadFields = (lead, companyId) => {
       lead.item_name          ||
       '',
 
-    // Message
     QUERY_MESSAGE:
       lead.query_message  ||
       lead.message        ||
@@ -134,27 +141,26 @@ const mapLeadFields = (lead, companyId) => {
       lead.inquiry_message||
       '',
 
-    // Address fields
-    SENDER_ADDRESS:     lead.sender_address   || lead.address      || '',
-    SENDER_CITY:        lead.sender_city      || lead.city         || '',
-    SENDER_STATE:       lead.sender_state     || lead.state        || '',
-    SENDER_PINCODE:     lead.sender_pincode   || lead.pincode      || lead.zip || '',
-    SENDER_COUNTRY_ISO: lead.sender_country_iso || lead.country    || '',
+    SENDER_ADDRESS:     lead.sender_address     || lead.address  || '',
+    SENDER_CITY:        lead.sender_city        || lead.city     || '',
+    SENDER_STATE:       lead.sender_state       || lead.state    || '',
+    SENDER_PINCODE:     lead.sender_pincode     || lead.pincode  || lead.zip || '',
+    SENDER_COUNTRY_ISO: lead.sender_country_iso || lead.country  || '',
 
-    // ✅ FIX: Save actual inquiry time from TradeIndia, NOT the cron job run time
-    // TradeIndia returns the real inquiry time in these fields:
+    // ✅ FIXED: parseLeadDate now correctly appends +05:30 (IST)
     QUERY_TIME:
       parseLeadDate(lead.rfi_date)        ||
       parseLeadDate(lead.inquiry_date)    ||
       parseLeadDate(lead.created_at)      ||
       parseLeadDate(lead.CreatedAt)       ||
       parseLeadDate(lead.date)            ||
-      null,  // null = will fall back to createdAt in frontend
+      null,
   };
 };
 
-// Main controller
-
+// ─────────────────────────────────────────────────────────────
+// Main fetch function
+// ─────────────────────────────────────────────────────────────
 const fetchTradeIndiaLeads = async () => {
   try {
     const companies = await Company.find({
@@ -199,10 +205,8 @@ const fetchTradeIndiaLeads = async () => {
         }
       }
 
-      // FIX: TradeIndia API wraps leads in a key - handle all possible response shapes
+      // Handle all possible TradeIndia response shapes
       let leads = response.data;
-
-      // Common response wrappers TradeIndia uses:
       if (leads && leads.data)           leads = leads.data;
       else if (leads && leads.leads)     leads = leads.leads;
       else if (leads && leads.inquiries) leads = leads.inquiries;
@@ -233,17 +237,13 @@ const fetchTradeIndiaLeads = async () => {
           }
 
           const leadData = mapLeadFields(lead, company._id);
-
-          // FIX: Use $setOnInsert for createdAt so existing leads don't get their
-          // creation time overwritten on subsequent cron runs
           const existingLead = await Lead.findOne({ UNIQUE_ID_TRADEINDIA: uniqueId });
 
           if (existingLead) {
-            // Lead already exists — only update fields that were empty/missing before
             const updateFields = {};
-            if (!existingLead.SENDER_COMPANY  && leadData.SENDER_COMPANY)  updateFields.SENDER_COMPANY  = leadData.SENDER_COMPANY;
+            if (!existingLead.SENDER_COMPANY     && leadData.SENDER_COMPANY)     updateFields.SENDER_COMPANY     = leadData.SENDER_COMPANY;
             if (!existingLead.QUERY_PRODUCT_NAME && leadData.QUERY_PRODUCT_NAME) updateFields.QUERY_PRODUCT_NAME = leadData.QUERY_PRODUCT_NAME;
-            if (!existingLead.QUERY_TIME       && leadData.QUERY_TIME)       updateFields.QUERY_TIME       = leadData.QUERY_TIME;
+            if (!existingLead.QUERY_TIME         && leadData.QUERY_TIME)         updateFields.QUERY_TIME         = leadData.QUERY_TIME;
 
             if (Object.keys(updateFields).length > 0) {
               await Lead.updateOne({ _id: existingLead._id }, { $set: updateFields });
@@ -251,7 +251,6 @@ const fetchTradeIndiaLeads = async () => {
             }
             skippedCount++;
           } else {
-            // New lead — create it
             await Lead.create(leadData);
             savedCount++;
           }
