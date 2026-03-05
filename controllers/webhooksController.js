@@ -4,14 +4,15 @@ const Lead = require('../models/leadsModel.js');
 // ─────────────────────────────────────────────────────────────
 // ✅ FIXED: parseIndiaMartTime
 //
-// IndiaMart sends time already in UTC (no timezone marker)
-// e.g. lead came at 10:45 IST → IndiaMart sends "05:15:00" (UTC)
+// IndiaMart sends time in IST (no timezone marker)
+// e.g. lead came at 14:17 IST → IndiaMart sends "14:17:00" (IST, no timezone)
 //
-// OLD BUG (your current code): adding +05:30 on top of UTC
-//   05:15 UTC + 05:30 = 10:45 UTC stored = 16:15 IST shown ❌ (~6hrs wrong)
+// REAL BUG: new Lead(r) was spreading raw r object
+//           Mongoose parsed QUERY_TIME string as UTC automatically
+//           So 14:17 IST string → stored as 14:17 UTC → showed as 19:47 IST ❌
 //
-// FIX: append Z (UTC) instead of +05:30 (IST)
-//   05:15Z stored → frontend shows 10:45 IST ✅
+// FIX: Build lead manually (not new Lead(r)) + append +05:30 to force IST
+//      "14:17:00" + "+05:30" → stored as 08:47 UTC → shows as 14:17 IST ✅
 // ─────────────────────────────────────────────────────────────
 const parseIndiaMartTime = (rawStr) => {
   if (!rawStr) return null;
@@ -23,7 +24,7 @@ const parseIndiaMartTime = (rawStr) => {
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // "DD-Mon-YYYY HH:MM:SS" e.g. "05-Mar-2026 05:15:00" → parse as UTC
+  // "DD-Mon-YYYY HH:MM:SS" e.g. "05-Mar-2026 14:17:00" → treat as IST
   const months = {
     jan:'01', feb:'02', mar:'03', apr:'04', may:'05', jun:'06',
     jul:'07', aug:'08', sep:'09', oct:'10', nov:'11', dec:'12'
@@ -33,30 +34,30 @@ const parseIndiaMartTime = (rawStr) => {
     const [, dd, mon, yyyy, time] = matchDMY;
     const mm = months[mon.toLowerCase()];
     if (mm) {
-      const parsed = new Date(`${yyyy}-${mm}-${dd}T${time}Z`); // ✅ Z = UTC
+      const parsed = new Date(`${yyyy}-${mm}-${dd}T${time}+05:30`); // ✅ IST
       if (!isNaN(parsed.getTime())) {
-        console.log(`[IndiaMart] Parsed UTC: ${parsed.toISOString()} → IST: ${parsed.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+        console.log(`[IndiaMart] Parsed IST: ${parsed.toISOString()} → IST display: ${parsed.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
         return parsed;
       }
     }
   }
 
-  // "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS" → parse as UTC
+  // "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS" → treat as IST
   const matchYMD = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)$/);
   if (matchYMD) {
-    const parsed = new Date(`${matchYMD[1]}T${matchYMD[2]}Z`); // ✅ Z = UTC
+    const parsed = new Date(`${matchYMD[1]}T${matchYMD[2]}+05:30`); // ✅ IST
     if (!isNaN(parsed.getTime())) {
-      console.log(`[IndiaMart] Parsed UTC: ${parsed.toISOString()} → IST: ${parsed.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+      console.log(`[IndiaMart] Parsed IST: ${parsed.toISOString()} → IST display: ${parsed.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
       return parsed;
     }
   }
 
-  // "DD-MM-YYYY HH:MM:SS" → parse as UTC
+  // "DD-MM-YYYY HH:MM:SS" → treat as IST
   const matchDMYNum = str.match(/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{2}:\d{2}(?::\d{2})?))?$/);
   if (matchDMYNum) {
     const [, dd, mm, yyyy, time] = matchDMYNum;
     const timepart = time || '00:00:00';
-    const parsed = new Date(`${yyyy}-${mm}-${dd}T${timepart}Z`); // ✅ Z = UTC
+    const parsed = new Date(`${yyyy}-${mm}-${dd}T${timepart}+05:30`); // ✅ IST
     if (!isNaN(parsed.getTime())) return parsed;
   }
 
@@ -85,7 +86,7 @@ exports.indiaMartWebhook = async (req, res) => {
         if (leadData.STATUS === "SUCCESS") {
             const r = leadData.RESPONSE;
 
-            // DEBUG logs — check your server console to verify time fields
+            // DEBUG logs
             console.log("=== IndiaMart RAW RESPONSE ===");
             console.log(JSON.stringify(r, null, 2));
             console.log("IndiaMart TIME fields:", {
@@ -102,7 +103,7 @@ exports.indiaMartWebhook = async (req, res) => {
             });
 
             // ✅ Build lead manually — do NOT use new Lead(r)
-            // new Lead(r) spreads r and lets Mongoose parse QUERY_TIME as UTC wrongly
+            // new Lead(r) lets Mongoose auto-parse QUERY_TIME string as UTC ❌
             const newLead = new Lead();
             newLead.company                   = company._id;
             newLead.SOURCE                    = "IndiaMart";
@@ -134,11 +135,11 @@ exports.indiaMartWebhook = async (req, res) => {
                 r.date              ||
                 null;
 
-            // ✅ FIXED: parse as UTC (IndiaMart sends UTC time)
+            // ✅ FIXED: parse as IST (IndiaMart sends IST time without timezone marker)
             const parsedTime = parseIndiaMartTime(rawTimeStr);
             newLead.QUERY_TIME = parsedTime || new Date();
 
-            // Verification logs — check these in your server console
+            // Verification logs
             console.log("rawTimeStr from IndiaMart:", rawTimeStr);
             console.log("QUERY_TIME stored (UTC):", newLead.QUERY_TIME.toISOString());
             console.log("QUERY_TIME display (IST):", newLead.QUERY_TIME.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }));
