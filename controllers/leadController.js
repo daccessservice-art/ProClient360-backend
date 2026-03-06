@@ -624,13 +624,7 @@ exports.deleteLead = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Lead not found.' });
     }
 
-    if (lead.STATUS === 'Won' || lead.STATUS === 'Lost') {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot delete a lead with status "${lead.STATUS}". This lead is already finalized.`
-      });
-    }
-
+    // ── Won/Lost restriction REMOVED ── any status can now be deleted
     await logLeadDeletion(lead, user, req);
     await Lead.deleteOne({ _id: leadId, company: user.company || user._id });
 
