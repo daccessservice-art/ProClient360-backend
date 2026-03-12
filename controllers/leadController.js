@@ -3,11 +3,7 @@ const Lead = require('../models/leadsModel.js');
 const { logLeadCreation, logLeadUpdate, logLeadDeletion, logLeadAssignment, logStatusChange, logCallAttempt } = require('../middlewares/activityLogger');
 
 // ── Build IST-correct date range for a YYYY-MM-DD string ──
-// Frontend sends "2026-03-04" (IST date).
-// We must match leads where QUERY_TIME falls within that IST day.
-// IST = UTC+5:30, so IST 00:00 = UTC 18:30 previous day, IST 23:59:59 = UTC 18:29:59 same day.
 const getISTDayRange = (dateStr) => {
-  // Parse as IST midnight by appending T00:00:00+05:30
   const startIST = new Date(`${dateStr}T00:00:00+05:30`);
   const endIST   = new Date(`${dateStr}T23:59:59.999+05:30`);
   return { startOfDay: startIST, endOfDay: endIST };
@@ -42,7 +38,6 @@ exports.getLeads = async (req, res) => {
   ];
 
   try {
-    // Validate date early
     if (date) {
       const test = new Date(`${date}T00:00:00+05:30`);
       if (isNaN(test.getTime())) {
@@ -50,7 +45,6 @@ exports.getLeads = async (req, res) => {
       }
     }
 
-    // ── Table query: pending leads only ──
     const query = { company: companyId, feasibility: 'none' };
     if (source && validSources.includes(source)) query.SOURCE = source;
     if (date) {
@@ -68,14 +62,11 @@ exports.getLeads = async (req, res) => {
     const totalRecords = await Lead.countDocuments(query);
     const totalPages   = Math.ceil(totalRecords / limit);
 
-    // ── Card counts: build per-feasibility query using $and to avoid $or conflict ──
     const buildCardQuery = (feasibility) => {
       const q = { company: companyId };
       if (source && validSources.includes(source)) q.SOURCE = source;
       if (feasibility) q.feasibility = feasibility;
-
       if (date) {
-        // $and ensures the date $or doesn't conflict with any other $or on q
         q.$and = [buildDateCondition(date)];
       }
       return q;
@@ -243,7 +234,11 @@ exports.getMyLeads = async (req, res) => {
       baseQuery.assignedTo = new Types.ObjectId(user._id);
     }
 
-    const allLeadsCount = await Lead.countDocuments(baseQuery);
+    // ✅ FIX: Only count leads with valid statuses (excludes 'HotLeads' outliers)
+    const allLeadsCount = await Lead.countDocuments({
+      ...baseQuery,
+      STATUS: { $in: ['Pending', 'Ongoing', 'Won', 'Lost'] }
+    });
 
     let query = { ...baseQuery };
 
@@ -513,6 +508,20 @@ exports.createLead = async (req, res) => {
       feasibility, assignedTo, assignedBy, assignedTime, customerType, customerId, callLeads
     } = req.body;
 
+    // ✅ FIX: Duplicate mobile number check
+    if (SENDER_MOBILE) {
+      const existing = await Lead.findOne({
+        company: new Types.ObjectId(user.company || user._id),
+        SENDER_MOBILE: SENDER_MOBILE.trim(),
+      });
+      if (existing) {
+        return res.status(400).json({
+          success: false,
+          error: `A lead with mobile number ${SENDER_MOBILE} already exists (Company: ${existing.SENDER_COMPANY || 'Unknown'}).`,
+        });
+      }
+    }
+
     const leadData = {
       SENDER_NAME, SENDER_EMAIL, SENDER_MOBILE, SUBJECT, SENDER_COMPANY,
       SENDER_ADDRESS, SENDER_CITY, SENDER_STATE, SENDER_PINCODE, SENDER_COUNTRY_ISO,
@@ -624,7 +633,6 @@ exports.deleteLead = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Lead not found.' });
     }
 
-    // ── Won/Lost restriction REMOVED ── any status can now be deleted
     await logLeadDeletion(lead, user, req);
     await Lead.deleteOne({ _id: leadId, company: user.company || user._id });
 

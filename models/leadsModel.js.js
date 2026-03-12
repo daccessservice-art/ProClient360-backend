@@ -24,7 +24,6 @@ const leadSchema = new Schema({
     enum: ['Pending', 'Ongoing', 'Lost', 'Won', 'HotLeads'],
     default: 'Pending'
   },
-
   callLeads: {
     type: String,
     enum: ['Hot Leads', 'Warm Leads', 'Cold Leads', 'Invalid Leads'],
@@ -141,8 +140,6 @@ const leadSchema = new Schema({
     type: String,
     trim: true,
   },
-  // NEW FIELD: Stores actual inquiry time from TradeIndia/IndiaMart
-  // instead of MongoDB createdAt (which = cron job run time)
   QUERY_TIME: {
     type: Date,
     default: null,
@@ -182,6 +179,18 @@ const leadSchema = new Schema({
     type: Date,
     default: null
   },
+
+  // NEW: Call Unanswered Auto Mail
+  
+  callUnansweredMailSent: {
+    type: Boolean,
+    default: false,
+  },
+  callUnansweredMailSentAt: {
+    type: Date,
+    default: null,
+  },
+
   previousActions: [{
     _id: {
       type: Schema.Types.ObjectId,

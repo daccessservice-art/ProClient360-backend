@@ -11,6 +11,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
+const { initCallUnansweredMailScheduler } = require('./mailsService/callUnansweredMailService');
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
@@ -69,6 +70,9 @@ const startServer = async () => {
     
     console.log('Initializing daily lead report scheduler...');
     initializeDailyLeadReportScheduler();
+
+    console.log('Initializing call unanswered mail scheduler...');
+    initCallUnansweredMailScheduler();
     
     console.log('Initializing auto-mark stale leads scheduler...');
     cron.schedule('0 2 * * *', async () => {
