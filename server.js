@@ -11,7 +11,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
-const { initCallUnansweredMailScheduler } = require('./mailsService/callUnAnsweredMailService');
+const { initCallUnansweredMailScheduler } = require('./mailsService/callUnansweredMailService');
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
