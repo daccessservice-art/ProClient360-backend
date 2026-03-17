@@ -6,6 +6,7 @@ const { permissionMiddleware, isLoggedIn } = require('../middlewares/auth');
 const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel.js');
 const { autoMarkStaleLeads } = require('../scripts/autoMarkStaleLeads');
+const { saveMeetingLog } = require("../controllers/leadController");
 
 console.log('📋 Registering Lead Routes...');
 
@@ -186,6 +187,8 @@ router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController
 
 // Create new lead
 router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
+
+router.put("/meeting-log/:id", isLoggedIn, saveMeetingLog);
 
 console.log('✅ All lead routes registered successfully');
 

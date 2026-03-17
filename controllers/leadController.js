@@ -642,3 +642,43 @@ exports.deleteLead = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
+
+exports.saveMeetingLog = async (req, res) => {
+  try {
+    const user   = req.user;
+    const { id } = req.params;
+    const { platformKey, label } = req.body;
+ 
+    if (!platformKey || !label) {
+      return res.status(400).json({ success: false, error: "platformKey and label are required." });
+    }
+ 
+    const lead = await Lead.findOne({ _id: id, company: user.company || user._id });
+    if (!lead) {
+      return res.status(404).json({ success: false, error: "Lead not found." });
+    }
+ 
+    // Only append — never touch status, step, or any other lead field
+    lead.previousActions.push({
+      status:          lead.STATUS          || "Pending",
+      step:            lead.step            || "1. Call Not Connect/ Callback",
+      nextFollowUpDate:lead.nextFollowUpDate || null,
+      completion:      lead.complated       || 0,
+      quotation:       lead.quotation       || 0,
+      callLeads:       lead.callLeads       || "Warm Leads",
+      rem: `[MeetingLog|${platformKey}] ${label}`,
+      actionBy: {
+        name:   user.name  || "System",
+        userId: user._id,
+      },
+      createdAt: new Date(),
+    });
+ 
+    await lead.save();
+ 
+    res.status(200).json({ success: true, message: "Meeting log saved." });
+  } catch (error) {
+    console.error("saveMeetingLog error:", error);
+    res.status(500).json({ success: false, error: "Internal Server Error: " + error.message });
+  }
+};
