@@ -15,25 +15,14 @@ router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req,
   try {
     console.log('Manual trigger for processing stale leads');
     const result = await autoMarkStaleLeads();
-    
     if (result.success) {
-      res.status(200).json({
-        success: true,
-        message: `Successfully processed stale leads. Marked ${result.markedCount} leads as not-feasible.`,
-        data: result
-      });
+      res.status(200).json({ success: true, message: `Successfully processed stale leads. Marked ${result.markedCount} leads as not-feasible.`, data: result });
     } else {
-      res.status(500).json({
-        success: false,
-        error: result.error
-      });
+      res.status(500).json({ success: false, error: result.error });
     }
   } catch (error) {
     console.error('Error in manual stale lead processing:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal Server Error: ' + error.message
-    });
+    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 });
 
@@ -43,8 +32,11 @@ router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMy
 // Get call unanswered leads
 router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadController.getCallUnansweredLeads);
 
-// NEW: Get not feasible leads
+// Get not feasible leads
 router.get('/not-feasible', permissionMiddleware(['viewLead']), leadController.getNotFeasibleLeads);
+
+// ✅ NEW: Get feasible leads (for marketing dashboard Feasible card)
+router.get('/feasible-leads', permissionMiddleware(['viewLead']), leadController.getFeasibleLeads);
 
 // Get sales employees
 router.get('/sales-employees', permissionMiddleware(['viewLead']), salesManagerController.getSalesEmployees);
@@ -61,106 +53,38 @@ console.log('✅ Registering /call-attempt/:id route');
 router.post('/call-attempt/:id', isLoggedIn, async (req, res) => {
   try {
     console.log('=== CALL ATTEMPT API CALLED ===');
-    const user = req.user;
+    const user   = req.user;
     const leadId = req.params.id;
     const { day, attempt, date, status, remarks, attemptedBy } = req.body;
 
-    if (!Types.ObjectId.isValid(leadId)) {
-      console.error('Invalid lead ID format:', leadId);
-      return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
-    }
+    if (!Types.ObjectId.isValid(leadId)) return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
+    if (!user) return res.status(401).json({ success: false, error: 'User not authenticated. Please log in.' });
 
-    if (!user) {
-      console.error('User not authenticated');
-      return res.status(401).json({ success: false, error: 'User not authenticated. Please log in.' });
-    }
+    const lead = await Lead.findOne({ _id: leadId, company: user.company || user._id });
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found or you do not have access to this lead.' });
+    if (!day || !attempt) return res.status(400).json({ success: false, error: 'Day and attempt are required fields.' });
 
-    const lead = await Lead.findOne({
-      _id: leadId,
-      company: user.company || user._id
-    });
-
-    if (!lead) {
-      console.error('Lead not found or access denied');
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Lead not found or you do not have access to this lead.' 
-      });
-    }
-
-    if (!day || !attempt) {
-      return res.status(400).json({
-        success: false,
-        error: 'Day and attempt are required fields.'
-      });
-    }
-
-    const existingCallIndex = lead.callHistory.findIndex(
-      call => call.day === day && call.attempt === attempt
-    );
-
-    if (existingCallIndex !== -1) {
-      console.error('❌ Call attempt already exists:', { day, attempt });
-      return res.status(400).json({
-        success: false,
-        error: `Day ${day} - Attempt ${attempt} is already recorded`
-      });
-    }
+    const existingCallIndex = lead.callHistory.findIndex(call => call.day === day && call.attempt === attempt);
+    if (existingCallIndex !== -1) return res.status(400).json({ success: false, error: `Day ${day} - Attempt ${attempt} is already recorded` });
 
     const isFirstCall = lead.callHistory.length === 0;
-
-    const newCall = {
-      day,
-      attempt,
-      date: date || new Date(),
-      status: status || 'attempted',
-      remarks: remarks || '',
-      attemptedBy: attemptedBy || user._id
-    };
-
-    console.log('➕ Adding new call attempt:', newCall);
-
+    const newCall = { day, attempt, date: date || new Date(), status: status || 'attempted', remarks: remarks || '', attemptedBy: attemptedBy || user._id };
     lead.callHistory.push(newCall);
 
-    if (isFirstCall) {
-      lead.firstCallDate = new Date();
-      console.log('📅 Setting first call date:', lead.firstCallDate);
-    }
+    if (isFirstCall) { lead.firstCallDate = new Date(); }
+    lead.callHistory.sort((a, b) => { if (a.day !== b.day) return a.day - b.day; return a.attempt - b.attempt; });
 
-    lead.callHistory.sort((a, b) => {
-      if (a.day !== b.day) return a.day - b.day;
-      return a.attempt - b.attempt;
-    });
-    
-    console.log('Saving lead with call history...');
-    
     await lead.save();
 
-    console.log('=== LEAD SAVED SUCCESSFULLY ===');
-
-    const savedCall = lead.callHistory.find(
-      call => call.day === day && call.attempt === attempt
-    );
-
-    res.status(200).json({
-      success: true,
-      message: 'Call attempt recorded successfully.',
-      data: savedCall
-    });
+    const savedCall = lead.callHistory.find(call => call.day === day && call.attempt === attempt);
+    res.status(200).json({ success: true, message: 'Call attempt recorded successfully.', data: savedCall });
   } catch (error) {
-    console.error('=== ERROR IN CALL ATTEMPT API ===');
-    console.error('Error:', error);
-
-    res.status(500).json({
-      success: false,
-      error: 'Internal Server Error: ' + error.message
-    });
+    console.error('Error in call attempt:', error);
+    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 });
 
 console.log('✅ /call-attempt/:id route registered successfully');
-
-// ROUTES WITH :id IN THE PATH
 
 // Marketing to Sales assignment
 router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.assignLead);
@@ -171,7 +95,7 @@ router.put('/reassign/:id', permissionMiddleware(['updateLead']), leadController
 // Submit enquiry
 router.put('/submit-enquiry/:id', isLoggedIn, leadController.submiEnquiry);
 
-// Sales Manager specific route - get employee leads
+// Sales Manager specific route
 router.get('/employee-leads/:employeeId', permissionMiddleware(['viewLead']), salesManagerController.getManagerTeamLeads);
 
 // Update lead
@@ -179,8 +103,6 @@ router.put('/:id', permissionMiddleware(['updateLead']), leadController.updateLe
 
 // Delete lead
 router.delete('/:id', permissionMiddleware(['deleteLead']), leadController.deleteLead);
-
-// GENERIC ROUTES
 
 // Get all marketing leads
 router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController.getLeads);
@@ -192,17 +114,11 @@ router.put("/meeting-log/:id", isLoggedIn, saveMeetingLog);
 
 console.log('✅ All lead routes registered successfully');
 
-// DEBUG ROUTE
 if (process.env.NODE_ENV !== 'production') {
   router.get('/debug-routes', (req, res) => {
     const routes = [];
     router.stack.forEach((middleware) => {
-      if (middleware.route) {
-        routes.push({
-          path: middleware.route.path,
-          methods: Object.keys(middleware.route.methods)
-        });
-      }
+      if (middleware.route) routes.push({ path: middleware.route.path, methods: Object.keys(middleware.route.methods) });
     });
     res.json({ routes });
   });

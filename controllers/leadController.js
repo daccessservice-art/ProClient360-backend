@@ -211,6 +211,73 @@ exports.getNotFeasibleLeads = async (req, res) => {
   }
 };
 
+// ✅ NEW — Feasible leads with assigned employee name populated
+exports.getFeasibleLeads = async (req, res) => {
+  const user  = req.user;
+  const page  = parseInt(req.query.page)  || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip  = (page - 1) * limit;
+  const { source, date, search } = req.query;
+
+  const validSources = [
+    'TradeIndia', 'IndiaMart', 'Google', 'Tender', 'Exhibitions',
+    'JustDial', 'Facebook', 'LinkedIn', 'Twitter', 'YouTube',
+    'WhatsApp', 'Referral', 'Email Campaign', 'Cold Call',
+    'Website', 'Walk-In', 'Direct', 'Other'
+  ];
+
+  try {
+    const query = {
+      company: new Types.ObjectId(user.company || user._id),
+      feasibility: 'feasible'
+    };
+
+    if (source && validSources.includes(source)) query.SOURCE = source;
+
+    if (date) {
+      const dc = buildDateCondition(date);
+      query.$or = dc.$or;
+    }
+
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { SENDER_COMPANY: searchRegex },
+        { SENDER_MOBILE:  searchRegex },
+        { SENDER_NAME:    searchRegex },
+      ];
+    }
+
+    const leads = await Lead.find(query)
+      .populate('company',    'name')
+      .populate('assignedBy', 'name')
+      .populate('assignedTo', 'name')  // ← employee name shown in Feasible Leads table
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const totalRecords = await Lead.countDocuments(query);
+    const totalPages   = Math.ceil(totalRecords / limit);
+
+    res.status(200).json({
+      success: true,
+      leads,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalRecords,
+        limit,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching feasible leads:', error);
+    res.status(500).json({ error: 'Internal Server Error: ' + error.message });
+  }
+};
+
 exports.getMyLeads = async (req, res) => {
   const user  = req.user;
   const page  = parseInt(req.query.page)  || 1;
