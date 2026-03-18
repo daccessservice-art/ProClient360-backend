@@ -241,10 +241,17 @@ exports.getFeasibleLeads = async (req, res) => {
 
     if (search) {
       const searchRegex = new RegExp(search, 'i');
+      const Employee = require('../models/employeeModel');
+      const matchingEmployees = await Employee.find(
+        { name: searchRegex },
+        '_id'
+      ).lean();
+      const employeeIds = matchingEmployees.map(e => e._id);
       query.$or = [
         { SENDER_COMPANY: searchRegex },
         { SENDER_MOBILE:  searchRegex },
         { SENDER_NAME:    searchRegex },
+         ...(employeeIds.length > 0 ? [{ assignedTo: { $in: employeeIds } }] : []),
       ];
     }
 
