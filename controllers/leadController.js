@@ -234,7 +234,6 @@ exports.getMyLeads = async (req, res) => {
       baseQuery.assignedTo = new Types.ObjectId(user._id);
     }
 
-    // ✅ FIX: Only count leads with valid statuses (excludes 'HotLeads' outliers)
     const allLeadsCount = await Lead.countDocuments({
       ...baseQuery,
       STATUS: { $in: ['Pending', 'Ongoing', 'Won', 'Lost'] }
@@ -508,19 +507,7 @@ exports.createLead = async (req, res) => {
       feasibility, assignedTo, assignedBy, assignedTime, customerType, customerId, callLeads
     } = req.body;
 
-    // ✅ FIX: Duplicate mobile number check
-    if (SENDER_MOBILE) {
-      const existing = await Lead.findOne({
-        company: new Types.ObjectId(user.company || user._id),
-        SENDER_MOBILE: SENDER_MOBILE.trim(),
-      });
-      if (existing) {
-        return res.status(400).json({
-          success: false,
-          error: `A lead with mobile number ${SENDER_MOBILE} already exists (Company: ${existing.SENDER_COMPANY || 'Unknown'}).`,
-        });
-      }
-    }
+    // ✅ Duplicate mobile check REMOVED — same mobile can have multiple leads
 
     const leadData = {
       SENDER_NAME, SENDER_EMAIL, SENDER_MOBILE, SUBJECT, SENDER_COMPANY,
@@ -648,16 +635,16 @@ exports.saveMeetingLog = async (req, res) => {
     const user   = req.user;
     const { id } = req.params;
     const { platformKey, label } = req.body;
- 
+
     if (!platformKey || !label) {
       return res.status(400).json({ success: false, error: "platformKey and label are required." });
     }
- 
+
     const lead = await Lead.findOne({ _id: id, company: user.company || user._id });
     if (!lead) {
       return res.status(404).json({ success: false, error: "Lead not found." });
     }
- 
+
     // Only append — never touch status, step, or any other lead field
     lead.previousActions.push({
       status:          lead.STATUS          || "Pending",
@@ -673,9 +660,9 @@ exports.saveMeetingLog = async (req, res) => {
       },
       createdAt: new Date(),
     });
- 
+
     await lead.save();
- 
+
     res.status(200).json({ success: true, message: "Meeting log saved." });
   } catch (error) {
     console.error("saveMeetingLog error:", error);
