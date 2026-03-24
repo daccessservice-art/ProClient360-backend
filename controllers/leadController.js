@@ -290,7 +290,8 @@ exports.getMyLeads = async (req, res) => {
   const page  = parseInt(req.query.page)  || 1;
   const limit = parseInt(req.query.limit) || 10;
   const skip  = (page - 1) * limit;
-  const { source, date, status, callLeads, search, followUpToday } = req.query;
+
+  const { source, date, status, callLeads, search, followUpToday, todayAction } = req.query;
 
   const validSources = [
     'TradeIndia', 'IndiaMart', 'Google', 'Tender', 'Exhibitions',
@@ -352,7 +353,20 @@ exports.getMyLeads = async (req, res) => {
       query.nextFollowUpDate = { $gte: startOfToday, $lt: endOfToday };
       delete query.createdAt;
     }
-
+ 
+    // ── NEW: Today's Action filter ──
+    // Returns leads that have at least one previousAction created today
+    if (todayAction === 'true') {
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+      const endOfToday   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+      query.previousActions = {
+        $elemMatch: {
+          createdAt: { $gte: startOfToday, $lte: endOfToday }
+        }
+      };
+    }
+ 
     const leads = await Lead.find(query)
       .populate('company', 'name')
       .populate('assignedBy', 'name')
@@ -379,12 +393,12 @@ exports.getMyLeads = async (req, res) => {
       Lead.countDocuments({ ...baseQuery, callLeads: 'Invalid Leads' }),
     ]);
 
-    const today = new Date();
-    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-    const endOfToday   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+    const today2 = new Date();
+    const startOfToday2 = new Date(today2.getFullYear(), today2.getMonth(), today2.getDate(), 0, 0, 0, 0);
+    const endOfToday2   = new Date(today2.getFullYear(), today2.getMonth(), today2.getDate(), 23, 59, 59, 999);
     const todaysFollowUpCount = await Lead.countDocuments({
       ...baseQuery,
-      nextFollowUpDate: { $gte: startOfToday, $lt: endOfToday }
+      nextFollowUpDate: { $gte: startOfToday2, $lt: endOfToday2 }
     });
 
     const activeQuotationLeads = await Lead.find({
