@@ -2,8 +2,11 @@ const transporter = require('./emailTransporter');
 const Lead        = require('../models/leadsModel.js');
 const cron        = require('node-cron');
 
-const DACCESS_CONTACT_PHONE = '8956307471';
-const DACCESS_COMPANY_NAME  = 'DACCESS Security System';
+const DACCESS_WEBSITE       = 'https://daccess.co.in/';
+// ✅ Absolute URL — works in all email clients
+const DACCESS_LOGO_URL      = 'https://proclient360.com/static/assets/img/daccess.png';
+const DACCESS_CONTACT_PHONE = '+91 8956307471';
+const DACCESS_COMPANY_NAME  = 'DACCESS Security System PVT. LTD.';
 const DACCESS_DEPARTMENT    = 'Sales & Marketing Department';
 
 const formatDateIST = (date) => {
@@ -81,22 +84,44 @@ const buildEmailHTML = (lead) => {
             border-radius:12px;overflow:hidden;
             box-shadow:0 4px 16px rgba(0,0,0,.10);">
 
-  <!-- HEADER -->
+  <!-- HEADER with LOGO -->
   <table width="100%" cellpadding="0" cellspacing="0" border="0"
          style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 100%);">
     <tr>
-      <td style="padding:36px 32px 28px;text-align:center;">
-        <p style="margin:0 0 6px;font-size:11px;letter-spacing:3px;
+      <td style="padding:32px 32px 24px;text-align:center;">
+
+        <!-- Logo — clickable to website -->
+        <a href="${DACCESS_WEBSITE}" target="_blank"
+           style="display:inline-block;margin-bottom:14px;text-decoration:none;">
+          <img
+            src="${DACCESS_LOGO_URL}"
+            alt="${DACCESS_COMPANY_NAME}"
+            width="140"
+            height="auto"
+            style="display:block;margin:0 auto;
+                   filter:brightness(0) invert(1);
+                   max-height:52px;object-fit:contain;
+                   border:0;outline:none;"
+          />
+        </a>
+
+        <!-- Company name — clickable to website -->
+        <p style="margin:0 0 4px;font-size:11px;letter-spacing:3px;
                   text-transform:uppercase;color:#e94560;font-weight:700;">
-          ${DACCESS_COMPANY_NAME}
+          <a href="${DACCESS_WEBSITE}" target="_blank"
+             style="color:#e94560;text-decoration:none;">
+            ${DACCESS_COMPANY_NAME}
+          </a>
         </p>
-        <h1 style="margin:0;font-size:23px;font-weight:700;
+
+        <h1 style="margin:10px 0 0;font-size:22px;font-weight:700;
                    color:#ffffff;line-height:1.35;">
           We Tried to Reach You
         </h1>
-        <p style="margin:10px 0 0;font-size:13px;color:#94a3b8;">
+        <p style="margin:8px 0 0;font-size:13px;color:#94a3b8;">
           We were unable to connect with you despite multiple attempts.
         </p>
+
       </td>
     </tr>
   </table>
@@ -196,7 +221,10 @@ const buildEmailHTML = (lead) => {
             📞 ${DACCESS_CONTACT_PHONE}
           </p>
           <p style="margin:0;font-size:13px;color:#cbd5e1;">
-            ${DACCESS_COMPANY_NAME}<br/>
+            <a href="${DACCESS_WEBSITE}" target="_blank"
+               style="color:#ffffff;text-decoration:none;font-weight:700;">
+              ${DACCESS_COMPANY_NAME}
+            </a><br/>
             <span style="color:#94a3b8;">${DACCESS_DEPARTMENT}</span>
           </p>
         </td>
@@ -217,7 +245,26 @@ const buildEmailHTML = (lead) => {
   <div style="background:#f8fafc;border-top:1px solid #e2e8f0;
               padding:20px 32px;text-align:center;
               font-size:12px;color:#94a3b8;line-height:1.7;">
-    <strong style="color:#64748b;">${DACCESS_COMPANY_NAME}</strong><br/>
+
+    <!-- Footer logo -->
+    <a href="${DACCESS_WEBSITE}" target="_blank"
+       style="display:inline-block;margin-bottom:10px;text-decoration:none;">
+      <img
+        src="${DACCESS_LOGO_URL}"
+        alt="${DACCESS_COMPANY_NAME}"
+        width="90"
+        height="auto"
+        style="display:block;margin:0 auto;opacity:0.5;
+               object-fit:contain;border:0;outline:none;"
+      />
+    </a>
+
+    <strong style="color:#64748b;">
+      <a href="${DACCESS_WEBSITE}" target="_blank"
+         style="color:#64748b;text-decoration:none;">
+        ${DACCESS_COMPANY_NAME}
+      </a>
+    </strong><br/>
     &copy; ${new Date().getFullYear()} All rights reserved.<br/>
     This email was sent because you submitted an inquiry that we were
     unable to follow up via phone.<br/>
@@ -251,6 +298,7 @@ const buildPlainText = (lead) => {
     `Query Time : ${queryDate}`,
     '',
     `Please call us back on: ${DACCESS_CONTACT_PHONE}`,
+    `Visit us: ${DACCESS_WEBSITE}`,
     `${DACCESS_COMPANY_NAME} — ${DACCESS_DEPARTMENT}`,
     'Available Mon–Sat, 9 AM to 7 PM IST.',
     '',
