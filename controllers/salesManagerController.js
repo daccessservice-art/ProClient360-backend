@@ -17,7 +17,6 @@ exports.getAllLeads = async (req, res) => {
       feasibility: 'feasible'
     };
 
-    // ✅ Support both 'search' (from frontend) and 'searchTerm' (legacy)
     const { source, date, status, callLeads, search, searchTerm } = req.query;
 
     if (source) leadQuery.SOURCE = source;
@@ -42,15 +41,11 @@ exports.getAllLeads = async (req, res) => {
       if (validLeads.includes(callLeads)) leadQuery.callLeads = callLeads;
     }
 
-    // ✅ FIXED: reads 'search', supports assigned employee name,
-    //          uses $and to avoid overwriting date filter's $or
     const searchValue = search || searchTerm;
     if (searchValue) {
       const searchRegex = new RegExp(searchValue, 'i');
-
       const matchingEmployees = await Employee.find({ name: searchRegex }, '_id').lean();
       const employeeIds = matchingEmployees.map(e => e._id);
-
       if (!leadQuery.$and) leadQuery.$and = [];
       leadQuery.$and.push({
         $or: [
@@ -63,7 +58,8 @@ exports.getAllLeads = async (req, res) => {
     }
 
     const leads = await Lead.find(leadQuery)
-      .populate('assignedTo', 'name email')
+      .populate('assignedTo', 'name email')   // ✅ already present
+      .populate('assignedBy', 'name email')   // ✅ FIXED — was missing, caused "None"
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -246,7 +242,6 @@ exports.getManagerTeamLeads = async (req, res) => {
       assignedTo: new Types.ObjectId(employeeId)
     };
 
-    // ✅ Support both 'search' (from frontend) and 'searchTerm' (legacy)
     const { source, date, status, callLeads, search, searchTerm } = req.query;
 
     if (source) leadQuery.SOURCE = source;
@@ -271,15 +266,11 @@ exports.getManagerTeamLeads = async (req, res) => {
       if (validLeads.includes(callLeads)) leadQuery.callLeads = callLeads;
     }
 
-    // ✅ FIXED: reads 'search', supports assigned employee name,
-    //          uses $and to avoid overwriting date filter's $or
     const searchValue = search || searchTerm;
     if (searchValue) {
       const searchRegex = new RegExp(searchValue, 'i');
-
       const matchingEmployees = await Employee.find({ name: searchRegex }, '_id').lean();
       const employeeIds = matchingEmployees.map(e => e._id);
-
       if (!leadQuery.$and) leadQuery.$and = [];
       leadQuery.$and.push({
         $or: [
@@ -292,7 +283,8 @@ exports.getManagerTeamLeads = async (req, res) => {
     }
 
     const leads = await Lead.find(leadQuery)
-      .populate('assignedTo', 'name email')
+      .populate('assignedTo', 'name email')   // ✅ already present
+      .populate('assignedBy', 'name email')   // ✅ FIXED — was missing, caused "None"
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
