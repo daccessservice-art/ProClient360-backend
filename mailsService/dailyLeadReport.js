@@ -151,7 +151,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
         }
 
         const company = await Employee.findById(companyId).select('name');
-        const companyName = company ? company.name : 'Your Company';
+        const companyName = company ? company.name : 'DAccess Security Systems Pvt. Ltd.';
 
         const leadsBySource = {
           'IndiaMart': indiaMartLeads,
