@@ -53,8 +53,11 @@ exports.resetTokenLink = (user) => {
     };
     const token = jwt.sign(payload, secret, { expiresIn: "15m" });
 
-    // ✅ FIX: Changed '/ResetPassword' to '/reset-password' (lowercase)
-    const link = `${process.env.Frontend_URL}/reset-password/${user._id}/${token}`;
+    // ✅ SOLUTION: Added fallback URL
+    // If process.env.Frontend_URL is undefined, it uses 'https://proclient360.com'
+    const baseUrl = process.env.Frontend_URL || "https://proclient360.com";
+    
+    const link = `${baseUrl}/reset-password/${user._id}/${token}`;
     
     return link;
   } catch (err) {
