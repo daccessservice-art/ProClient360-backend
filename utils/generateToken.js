@@ -1,6 +1,5 @@
 const jwt = require("jsonwebtoken");
 
-
 exports.generateTokenAndSendResponse = (user, res, loggedUser) => {
   try {
     const token = jwt.sign(
@@ -54,9 +53,9 @@ exports.resetTokenLink = (user) => {
     };
     const token = jwt.sign(payload, secret, { expiresIn: "15m" });
 
-    const link = `${
-      process.env.Frontend_URL
-    }/ResetPassword/${user._id}/${token}`;
+    // ✅ FIX: Changed '/ResetPassword' to '/reset-password' (lowercase)
+    const link = `${process.env.Frontend_URL}/reset-password/${user._id}/${token}`;
+    
     return link;
   } catch (err) {
     console.log("Error in resetTokenLink: ", err);
