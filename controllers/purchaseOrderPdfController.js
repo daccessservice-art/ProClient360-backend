@@ -93,8 +93,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       }
     }
 
+    // FIXED: added billingAddress, manualAddress, typeOfVendor to vendor populate
     const po = await PurchaseOrder.findById(id)
-      .populate('vendor',    'vendorName address gstin phoneNumber1 email')
+      .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor gstin phoneNumber1 email')
       .populate('project',   'name')
       .populate('createdBy', 'name email')
       .populate('company',   'name')
@@ -206,9 +207,22 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
        .text(vendor.vendorName || 'N/A', M + 4, vy, { width: leftW - 8 });
     vy += 13;
-    if (vendor.address) {
+
+    //  FIXED: build address from billingAddress object or manualAddress string
+    const vendorAddress = vendor.typeOfVendor === 'Import'
+      ? (vendor.manualAddress || null)
+      : vendor.billingAddress?.add
+        ? [
+            vendor.billingAddress.add,
+            vendor.billingAddress.city,
+            vendor.billingAddress.state,
+            vendor.billingAddress.country,
+          ].filter(Boolean).join(', ')
+        : null;
+
+    if (vendorAddress) {
       doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-         .text(vendor.address, M + 4, vy, { width: leftW - 8 });
+         .text(vendorAddress, M + 4, vy, { width: leftW - 8 });
       vy += 20;
     }
     if (vendor.gstin) {
@@ -233,10 +247,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += boxH + 6;
 
     // ════════════════════════════════════════════════════════════
-    // 3. ITEMS TABLE — now includes DISC.% column
+    // 3. ITEMS TABLE — includes DISC.% column
     // ════════════════════════════════════════════════════════════
 
-    // ✅ Column widths adjusted to fit DISC.% — total must stay within CW (555pt)
     const itemCols = [
       { key: 'sr',       label: 'SR.',            w: 22,  align: 'center' },
       { key: 'item',     label: 'ITEM DETAILS',   w: 120, align: 'left'   },
@@ -244,13 +257,12 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { key: 'uom',      label: 'UOM',            w: 28,  align: 'center' },
       { key: 'qty',      label: 'QTY',            w: 32,  align: 'right'  },
       { key: 'rate',     label: 'RATE',           w: 44,  align: 'right'  },
-      { key: 'disc',     label: 'DISC.%',         w: 34,  align: 'center' }, // ✅ NEW
+      { key: 'disc',     label: 'DISC.%',         w: 34,  align: 'center' },
       { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 52,  align: 'right'  },
       { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 58,  align: 'right'  },
       { key: 'gst',      label: 'GST%/AMT.',      w: 44,  align: 'center' },
       { key: 'net',      label: 'NET AMT.(Rs)',   w: 77,  align: 'right'  },
     ];
-    // Sum = 22+120+44+28+32+44+34+52+58+44+77 = 555 ✅
 
     const rowH = 16;
     let cx = M;
@@ -290,7 +302,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           { text: item.baseUOM || item.unit || '-', align: 'center' },
           { text: qty.toFixed(2),                   align: 'right'  },
           { text: rate.toFixed(2),                  align: 'right'  },
-          { text: discText,                          align: 'center' }, // ✅ DISC.%
+          { text: discText,                          align: 'center' },
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: gstText,                           align: 'center' },
@@ -325,7 +337,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { text: '',                     align: 'center' },
       { text: totalQty.toFixed(2),   align: 'right',  bold: true },
       { text: '',                     align: 'right'  },
-      { text: '',                     align: 'center' }, // DISC.% total blank
+      { text: '',                     align: 'center' },
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalTax.toFixed(2),   align: 'right',  bold: true },

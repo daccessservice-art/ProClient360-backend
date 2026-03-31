@@ -4,7 +4,7 @@ const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
 exports.getPurchaseOrder = async (req, res) => {
   try {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
-      .populate('vendor', 'vendorName email phoneNumber1')
+      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor gstin')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
       .populate('company', 'name');
@@ -80,7 +80,7 @@ exports.showAll = async (req, res) => {
     const purchaseOrders = await PurchaseOrder.find(query)
       .skip(skip)
       .limit(limit)
-      .populate('vendor', 'vendorName email phoneNumber1')
+      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor gstin')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
       .populate('company', 'name')
@@ -121,7 +121,6 @@ exports.createPurchaseOrder = async (req, res) => {
     const user = req.user;
     const poData = req.body;
 
-    // Validate payment terms
     if (poData.paymentTerms) {
       const { advance, payAgainstDelivery, payAfterCompletion } = poData.paymentTerms;
       const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
@@ -134,14 +133,12 @@ exports.createPurchaseOrder = async (req, res) => {
       }
     }
 
-    // Create new purchase order
     const newPurchaseOrder = new PurchaseOrder({
       ...poData,
       company: user.company ? user.company : user._id,
       createdBy: user._id,
     });
 
-    // Save with retry logic for duplicate key errors
     let savedPO = null;
     let retryCount = 0;
     const maxRetries = 3;
@@ -151,24 +148,19 @@ exports.createPurchaseOrder = async (req, res) => {
         savedPO = await newPurchaseOrder.save();
       } catch (saveError) {
         if (saveError.code === 11000 && saveError.keyPattern && saveError.keyPattern.orderNumber) {
-          // Duplicate key error for orderNumber, regenerate and retry
           console.log(`Duplicate order number detected, retrying... (Attempt ${retryCount + 1}/${maxRetries})`);
-          
-          // Clear the order number to trigger regeneration
           newPurchaseOrder.orderNumber = undefined;
           retryCount++;
-          
           if (retryCount >= maxRetries) {
             throw saveError;
           }
         } else {
-          throw saveError; // Re-throw if it's not a duplicate key error
+          throw saveError;
         }
       }
     }
 
     if (savedPO) {
-      // Create history record
       await new PurchaseOrderHistory({
         purchaseOrder: savedPO._id,
         updatedBy: user._id,
@@ -243,7 +235,6 @@ exports.updatePurchaseOrder = async (req, res) => {
       });
     }
 
-    // Validate payment terms
     if (updatedData.paymentTerms) {
       const { advance, payAgainstDelivery, payAfterCompletion } = updatedData.paymentTerms;
       const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
@@ -256,29 +247,17 @@ exports.updatePurchaseOrder = async (req, res) => {
       }
     }
 
-    // Store previous values for history
     const previousValues = { ...existingPO._doc };
-    
-    // Check if status is being changed
     const statusChanged = existingPO.status !== updatedData.status;
-    
-    // Check if items are being updated
     const itemsChanged = JSON.stringify(existingPO.items) !== JSON.stringify(updatedData.items);
-    
-    // Check if payment terms are being updated
     const paymentTermsChanged = JSON.stringify(existingPO.paymentTerms) !== JSON.stringify(updatedData.paymentTerms);
 
-    // Update purchase order
     const updatedPurchaseOrder = await PurchaseOrder.findByIdAndUpdate(
       id, 
       updatedData, 
-      {
-        new: true,
-        runValidators: true,
-      }
+      { new: true, runValidators: true }
     );
 
-    // Create history record
     let updateType = 'UPDATE';
     let description = 'Purchase order updated';
     
@@ -300,11 +279,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       description,
       previousValues,
       newValues: updatedData,
-      changes: {
-        statusChanged,
-        itemsChanged,
-        paymentTermsChanged
-      }
+      changes: { statusChanged, itemsChanged, paymentTermsChanged }
     }).save();
 
     res.status(200).json({ 
