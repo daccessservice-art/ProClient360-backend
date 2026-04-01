@@ -80,9 +80,9 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
       'Director Digi Solution',
       'Junior Software Developer',
       'Sales Manager',
-      'Marketing'
+      'Marketing',
+      'Executive Director-Project'
     ];
-    
     const targetDesignations = await Designation.find({
       name: { $in: targetDesignationNames }
     }).select('_id');

@@ -26,6 +26,15 @@ const serviceActionSchema = new Schema({
         default: 'Pending',
         required: true,
     },
+    suggestion: {
+  type: String,
+  maxlength: [500, "Suggestion cannot exceed 500 characters"],
+  default: "",
+},
+tentativeNextVisitDate: {
+  type: Date,
+  default: null,
+},
     endTime: {
         type: Date,
         required: false,

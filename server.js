@@ -161,6 +161,8 @@ app.use('/api/ticket', ticketRoutes);
 
 app.use('/api/service', serviceRoutes);
 
+app.use('/api/serviceReview', require('./routes/serviceReviewRoutes'));
+
 app.use('/api/serviceAction', serviceActionRoutes);
 
 app.use('/api/feedback', feedbackRoutes);
