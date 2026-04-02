@@ -25,10 +25,9 @@ exports.showAll = async (req, res) => {
   try {
     const user = req.user;
 
-    // Extract pagination query parameters
-    let page = parseInt(req.query.page) || 1; // Default to page 1
-    const limit = parseInt(req.query.limit) || 10; // Default to 10 records per page
-    let skip = (page - 1) * limit; // Calculate documents to skip
+    let page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    let skip = (page - 1) * limit;
 
     const { q } = req.query;
 
@@ -50,6 +49,7 @@ exports.showAll = async (req, res) => {
           { email: { $regex: searchRegex } },
           { GSTNo: { $regex: searchRegex } },
           { phoneNumber1: { $regex: searchRegex } },
+          { industryType: { $regex: searchRegex } },
         ],
       };
     } else {
@@ -58,28 +58,23 @@ exports.showAll = async (req, res) => {
       };
     }
 
-    // Fetch paginated customers with populated fields
     const customers = await Customer.find(query)
       .skip(skip)
       .limit(limit)
-      .populate("createdBy", "name email") // Populate createdBy
+      .populate("createdBy", "name email")
       .sort({ createdAt: -1 })
-      .lean(); // Optimize performance
+      .lean();
 
-    // Check if customers exist
     if (customers.length === 0) {
       return res.status(404).json({ success: false, error: "No customers found" });
     }
 
-    // Get total number of customers for the query
     const totalCustomers = await Customer.countDocuments(query);
 
-    // Calculate pagination metadata
     const totalPages = Math.ceil(totalCustomers / limit);
     const hasNextPage = page < totalPages;
     const hasPrevPage = page > 1;
 
-    // Send response with customers and pagination metadata
     res.status(200).json({
       success: true,
       customers,
@@ -107,7 +102,7 @@ exports.createCustomer = async (req, res) => {
     console.log('User ID:', user._id);
     console.log('User Name:', user.name);
     console.log('Request body:', req.body);
-    
+
     const {
       custName,
       billingAddress,
@@ -119,14 +114,15 @@ exports.createCustomer = async (req, res) => {
       phoneNumber2,
       zone,
       ownedBy,
+      industryType,
+      industryTypeOther,
     } = req.body;
 
-    // Check if customer already exists
     const existingCustomer = await Customer.findOne({
       company: user.company ? user.company : user._id,
       email: email,
     });
-    
+
     if (existingCustomer) {
       console.log('Customer already exists');
       return res
@@ -134,7 +130,14 @@ exports.createCustomer = async (req, res) => {
         .json({ success: false, error: "Customer already exist please use different email Id" });
     }
 
-    // Create new customer
+    // Validate industry type
+    if (industryType === 'Other' && (!industryTypeOther || industryTypeOther.trim() === '')) {
+      return res.status(400).json({
+        success: false,
+        error: "Please specify the industry type when selecting 'Other'"
+      });
+    }
+
     const newCust = new Customer({
       custName,
       GSTNo,
@@ -148,27 +151,26 @@ exports.createCustomer = async (req, res) => {
       phoneNumber2,
       billingAddress,
       zone,
+      industryType,
+      industryTypeOther: industryType === 'Other' ? industryTypeOther : undefined,
     });
 
     console.log('New customer object:', newCust);
 
-    // Save the customer
     const savedCustomer = await newCust.save();
     console.log('Customer saved to database:', savedCustomer._id);
-    
-    // *** LOG ACTIVITY - Make sure this is working ***
+
     console.log('About to log customer creation...');
     console.log('Saved Customer:', savedCustomer);
     console.log('User:', user);
-    
+
     try {
       const logResult = await logCreation(savedCustomer, user, req, 'Customer');
       console.log('Customer creation logged successfully:', logResult);
     } catch (logError) {
       console.error('Error logging customer creation:', logError);
-      // Don't fail the request if logging fails
     }
-    
+
     res.status(201).json({
       success: true,
       message: "Customer created successfully",
@@ -194,7 +196,6 @@ exports.deleteCustomer = async (req, res) => {
     const user = req.user;
     const customerId = req.params.id;
 
-    // Check if there are any projects associated with the customer
     const projects = await Project.find({ custId: customerId });
 
     if (projects.length > 0) {
@@ -204,17 +205,14 @@ exports.deleteCustomer = async (req, res) => {
       });
     }
 
-    // Find the customer before deletion
     const customer = await Customer.findById(customerId);
 
     if (!customer) {
       return res.status(404).json({ success: false, error: "Customer Not Found!!" });
     }
 
-    // *** LOG ACTIVITY BEFORE DELETION ***
     await logDeletion(customer, user, req, 'Customer');
 
-    // Proceed to delete the customer
     await Customer.findByIdAndDelete(customerId);
 
     res.status(200).json({ success: true, message: "Customer deleted successfully" });
@@ -232,14 +230,20 @@ exports.updateCustomer = async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
 
-    // Find the existing customer
     const existingCustomer = await Customer.findById(id);
 
     if (!existingCustomer) {
       return res.status(404).json({ success: false, error: "Customer not found" });
     }
 
-    // *** STORE OLD DATA FOR LOGGING - Convert to plain object ***
+    // Validate industry type if "Other" is selected
+    if (updatedData.industryType === 'Other' && (!updatedData.industryTypeOther || updatedData.industryTypeOther.trim() === '')) {
+      return res.status(400).json({
+        success: false,
+        error: "Please specify the industry type when selecting 'Other'"
+      });
+    }
+
     const oldCustomerData = {
       custName: existingCustomer.custName,
       email: existingCustomer.email,
@@ -257,13 +261,13 @@ exports.updateCustomer = async (req, res) => {
       } : {},
       zone: existingCustomer.zone,
       ownedBy: existingCustomer.ownedBy,
+      industryType: existingCustomer.industryType,
+      industryTypeOther: existingCustomer.industryTypeOther,
       _id: existingCustomer._id
     };
 
-    // Prepare an array to store changes
     let changes = [];
 
-    // Helper function to track changes
     const trackChanges = (fieldName, oldValue, newValue) => {
       if (oldValue !== newValue) {
         changes.push({
@@ -276,7 +280,6 @@ exports.updateCustomer = async (req, res) => {
       }
     };
 
-    // Compare fields and track changes
     trackChanges("custName", existingCustomer.custName, updatedData.custName);
     trackChanges("email", existingCustomer.email, updatedData.email);
     trackChanges("GSTNo", existingCustomer.GSTNo, updatedData.GSTNo);
@@ -302,8 +305,9 @@ exports.updateCustomer = async (req, res) => {
       updatedData.phoneNumber2
     );
     trackChanges("zone", existingCustomer.zone, updatedData.zone);
+    trackChanges("industryType", existingCustomer.industryType, updatedData.industryType);
+    trackChanges("industryTypeOther", existingCustomer.industryTypeOther, updatedData.industryTypeOther);
 
-    // Compare nested objects like billingAddress and deliveryAddress
     if (updatedData.billingAddress) {
       trackChanges(
         "billingAddress.add",
@@ -360,13 +364,11 @@ exports.updateCustomer = async (req, res) => {
       );
     }
 
-    // Save the updated customer record
     const updatedCustomerDoc = await Customer.findByIdAndUpdate(id, updatedData, {
       new: true,
       runValidators: true,
     }).populate("createdBy", "name email");
 
-    // *** CONVERT MONGOOSE DOCUMENT TO PLAIN OBJECT ***
     const updatedCustomer = {
       custName: updatedCustomerDoc.custName,
       email: updatedCustomerDoc.email,
@@ -384,21 +386,21 @@ exports.updateCustomer = async (req, res) => {
       } : {},
       zone: updatedCustomerDoc.zone,
       ownedBy: updatedCustomerDoc.ownedBy,
+      industryType: updatedCustomerDoc.industryType,
+      industryTypeOther: updatedCustomerDoc.industryTypeOther,
       _id: updatedCustomerDoc._id
     };
 
-    // Save the changes to the customerHistory collection if there are any
     if (changes.length > 0) {
       await CustomerHistory.insertMany(changes);
     }
 
-    // *** LOG ACTIVITY WITH COMPLETE DATA ***
     await logUpdate(oldCustomerData, updatedCustomer, user, req, 'Customer');
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Customer updated successfully", 
-      updatedCustomer: updatedCustomerDoc  // Return the full Mongoose doc with populated fields
+    res.status(200).json({
+      success: true,
+      message: "Customer updated successfully",
+      updatedCustomer: updatedCustomerDoc
     });
   } catch (error) {
     console.error(error);
@@ -406,20 +408,18 @@ exports.updateCustomer = async (req, res) => {
   }
 };
 
-// PDF Export Function (Improved with all fields)
+// PDF Export Function
 exports.exportCustomersPDF = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
-    
-    // Get all customers for export with populated fields
+
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther')
       .populate("createdBy", "name")
       .sort({ createdAt: -1 });
 
-    // Create PDF document with landscape orientation for better width
-    const doc = new PDFDocument({ 
+    const doc = new PDFDocument({
       margin: 30,
       size: 'A4',
       layout: 'landscape',
@@ -430,10 +430,9 @@ exports.exportCustomersPDF = async (req, res) => {
         CreationDate: new Date()
       }
     });
-    
+
     const filename = `customers_export_${new Date().toISOString().split('T')[0]}.pdf`;
-    
-    // Set response headers - Updated for production compatibility
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
@@ -442,113 +441,104 @@ exports.exportCustomersPDF = async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    
-    // Handle errors during PDF generation
+
     doc.on('error', (err) => {
       console.error('PDF generation error:', err);
       if (!res.headersSent) {
-        res.status(500).json({ 
-          success: false, 
-          error: "Error generating PDF: " + err.message 
+        res.status(500).json({
+          success: false,
+          error: "Error generating PDF: " + err.message
         });
       }
     });
-    
-    // Pipe the PDF to the response
+
     doc.pipe(res);
-    
-    // Add header
+
     doc.fontSize(20).fillColor('#2c3e50').text('Customer Master Report', { align: 'center' });
     doc.moveDown();
     doc.fontSize(10).fillColor('#7f8c8d').text(`Generated on: ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`, { align: 'center' });
     doc.moveDown();
     doc.fontSize(12).fillColor('#2c3e50').text(`Total Customers: ${customers.length}`);
     doc.moveDown();
-    
-    // Table configuration with more columns
+
     const tableTop = doc.y;
     const headers = [
-      'Sr No', 
-      'Name', 
-      'Email', 
-      'Phone 1', 
-      'Phone 2', 
-      'Contact Person 1', 
-      'Contact Person 2', 
-      'GST No', 
-      'Zone', 
-      'Address', 
-      'City', 
-      'State', 
-      'Country', 
+      'Sr No',
+      'Name',
+      'Email',
+      'Phone 1',
+      'Phone 2',
+      'Contact Person 1',
+      'Contact Person 2',
+      'GST No',
+      'Zone',
+      'Industry Type',
+      'Address',
+      'City',
+      'State',
       'Pincode',
       'Created By',
       'Owned By'
     ];
-    
-    // Adjust column widths for landscape orientation
+
     const columnWidth = [
-      30,  // Sr No
-      70,  // Name
-      80,  // Email
-      50,  // Phone 1
-      50,  // Phone 2
-      70,  // Contact Person 1
-      70,  // Contact Person 2
-      50,  // GST No
-      40,  // Zone
-      80,  // Address
-      50,  // City
-      50,  // State
-      50,  // Country
-      40,  // Pincode
-      60,  // Created By
-      60   // Owned By
+      30,
+      65,
+      75,
+      50,
+      50,
+      65,
+      65,
+      50,
+      35,
+      65,
+      75,
+      45,
+      45,
+      40,
+      55,
+      55
     ];
-    
+
     const rowHeight = 25;
-    
-    // Function to draw table headers
+
     const drawHeaders = (yPosition) => {
       let currentX = 30;
       doc.fontSize(8).fillColor('#ffffff');
-      
-      // Header background
-      doc.rect(30, yPosition, 750, rowHeight).fill('#3498db');
-      
-      // Header text
+
+      doc.rect(30, yPosition, 770, rowHeight).fill('#3498db');
+
       doc.fillColor('#ffffff');
       headers.forEach((header, i) => {
         doc.text(header, currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
         currentX += columnWidth[i];
       });
-      
+
       return yPosition + rowHeight;
     };
-    
-    // Draw initial headers
+
     let yPosition = drawHeaders(tableTop);
     let alternateRow = false;
-    
-    // Function to draw customer row
+
     const drawCustomerRow = (customer, index, yPosition) => {
-      // Check if we need a new page (adjusted for landscape)
       if (yPosition > 500) {
         doc.addPage();
         yPosition = 50;
         yPosition = drawHeaders(yPosition);
       }
-      
-      // Alternate row colors
+
       if (alternateRow) {
-        doc.rect(30, yPosition, 750, rowHeight).fill('#f8f9fa');
+        doc.rect(30, yPosition, 770, rowHeight).fill('#f8f9fa');
       }
       alternateRow = !alternateRow;
-      
-      // Add row data
+
       let currentX = 30;
       doc.fontSize(7).fillColor('#2c3e50');
-      
+
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
       const rowData = [
         index + 1,
         customer.custName || '',
@@ -559,76 +549,69 @@ exports.exportCustomersPDF = async (req, res) => {
         customer.customerContactPersonName2 || '',
         customer.GSTNo || '',
         customer.zone || '',
+        industryDisplay,
         customer.billingAddress?.add || '',
         customer.billingAddress?.city || '',
         customer.billingAddress?.state || '',
-        customer.billingAddress?.country || '',
         customer.billingAddress?.pincode || '',
         customer.createdBy?.name || '',
         customer.ownedBy || ''
       ];
-      
+
       rowData.forEach((text, i) => {
         doc.text(text, currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
         currentX += columnWidth[i];
       });
-      
+
       return yPosition + rowHeight;
     };
-    
-    // Draw all customer rows
+
     customers.forEach((customer, index) => {
       yPosition = drawCustomerRow(customer, index, yPosition);
     });
-    
-    // Add page numbers before finalizing the document
+
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
       doc.fontSize(8).fillColor('#95a5a6').text(
-        `Page ${i + 1} of ${range.count}`, 
-        30, 
-        doc.page.height - 30, 
+        `Page ${i + 1} of ${range.count}`,
+        30,
+        doc.page.height - 30,
         { align: 'center' }
       );
     }
-    
-    // Finalize PDF
+
     doc.end();
   } catch (error) {
     console.error('PDF export error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        success: false, 
-        error: "Error generating PDF: " + error.message 
+      res.status(500).json({
+        success: false,
+        error: "Error generating PDF: " + error.message
       });
     }
   }
 };
 
-// Excel Export Function (Improved with all fields)
+// Excel Export Function
 exports.exportCustomersExcel = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
-    
-    // Get all customers for export with populated fields
+
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther')
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
 
-    // Create workbook
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'ProClient360';
     workbook.lastModifiedBy = 'ProClient360';
     workbook.created = new Date();
     workbook.modified = new Date();
-    
-    // Add worksheet
+
     const worksheet = workbook.addWorksheet('Customers');
-    
-    // Define columns with all fields
+
     worksheet.columns = [
       { header: 'Sr No', key: 'srNo', width: 10 },
       { header: 'Customer Name', key: 'custName', width: 25 },
@@ -639,6 +622,7 @@ exports.exportCustomersExcel = async (req, res) => {
       { header: 'Contact Person 2', key: 'customerContactPersonName2', width: 20 },
       { header: 'GST No', key: 'GSTNo', width: 15 },
       { header: 'Zone', key: 'zone', width: 10 },
+      { header: 'Industry Type', key: 'industryType', width: 25 },
       { header: 'Address', key: 'address', width: 35 },
       { header: 'City', key: 'city', width: 15 },
       { header: 'State', key: 'state', width: 15 },
@@ -649,8 +633,7 @@ exports.exportCustomersExcel = async (req, res) => {
       { header: 'Owned By', key: 'ownedByName', width: 15 },
       { header: 'Created Date', key: 'createdAt', width: 15 }
     ];
-    
-    // Add header row with styling
+
     const headerRow = worksheet.getRow(1);
     headerRow.height = 25;
     headerRow.eachCell((cell) => {
@@ -668,9 +651,12 @@ exports.exportCustomersExcel = async (req, res) => {
         right: { style: 'thin' }
       };
     });
-    
-    // Add data rows
+
     customers.forEach((customer, index) => {
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
       const row = worksheet.addRow({
         srNo: index + 1,
         custName: customer.custName || '',
@@ -681,6 +667,7 @@ exports.exportCustomersExcel = async (req, res) => {
         customerContactPersonName2: customer.customerContactPersonName2 || '',
         GSTNo: customer.GSTNo || '',
         zone: customer.zone || '',
+        industryType: industryDisplay,
         address: customer.billingAddress?.add || '',
         city: customer.billingAddress?.city || '',
         state: customer.billingAddress?.state || '',
@@ -691,8 +678,7 @@ exports.exportCustomersExcel = async (req, res) => {
         ownedByName: customer.ownedBy || '',
         createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : ''
       });
-      
-      // Style data rows
+
       row.height = 20;
       row.eachCell((cell) => {
         cell.alignment = { vertical: 'middle', wrapText: true };
@@ -703,8 +689,7 @@ exports.exportCustomersExcel = async (req, res) => {
           right: { style: 'thin' }
         };
       });
-      
-      // Alternate row colors
+
       if (index % 2 === 0) {
         row.eachCell((cell) => {
           cell.fill = {
@@ -715,8 +700,7 @@ exports.exportCustomersExcel = async (req, res) => {
         });
       }
     });
-    
-    // Add summary row at the end
+
     const summaryRow = worksheet.addRow({
       srNo: '',
       custName: 'Total Customers:',
@@ -727,6 +711,7 @@ exports.exportCustomersExcel = async (req, res) => {
       customerContactPersonName2: '',
       GSTNo: '',
       zone: '',
+      industryType: '',
       address: '',
       city: '',
       state: '',
@@ -737,7 +722,7 @@ exports.exportCustomersExcel = async (req, res) => {
       ownedByName: '',
       createdAt: ''
     });
-    
+
     summaryRow.height = 25;
     summaryRow.eachCell((cell, colNumber) => {
       if (colNumber === 2 || colNumber === 3) {
@@ -749,13 +734,11 @@ exports.exportCustomersExcel = async (req, res) => {
         };
       }
     });
-    
-    // Freeze header row
+
     worksheet.views = [
       { state: 'frozen', xSplit: 0, ySplit: 1 }
     ];
-    
-    // Set response headers - Updated for production compatibility
+
     const filename = `customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -765,16 +748,15 @@ exports.exportCustomersExcel = async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    
-    // Write the file to response and handle errors
+
     await workbook.xlsx.write(res);
     res.end();
   } catch (error) {
     console.error('Excel export error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        success: false, 
-        error: "Error generating Excel: " + error.message 
+      res.status(500).json({
+        success: false,
+        error: "Error generating Excel: " + error.message
       });
     }
   }

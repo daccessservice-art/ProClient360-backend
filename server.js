@@ -163,6 +163,8 @@ app.use('/api/service', serviceRoutes);
 
 app.use('/api/serviceReview', require('./routes/serviceReviewRoutes'));
 
+app.use('/api/hrReview', require('./routes/hrReviewRoutes'));
+
 app.use('/api/serviceAction', serviceActionRoutes);
 
 app.use('/api/feedback', feedbackRoutes);

@@ -6,7 +6,7 @@ const customerSchema = new mongoose.Schema({
     ref: 'Employee',
   },
   ownedBy: {
-    type: String, // Changed from ObjectId to String to allow manual input
+    type: String,
     required: [true, 'Owner name is required'],
     trim: true,
     maxlength: [100, 'Owner name cannot exceed 100 characters'],
@@ -92,6 +92,36 @@ const customerSchema = new mongoose.Schema({
       values: ['North', 'South', 'East', 'West', 'Central'],
       message: 'Zone must be one of the following: North, South, East, West, Central',
     },
+  },
+  industryType: {
+    type: String,
+    required: [true, 'Industry type is required'],
+    enum: {
+      values: [
+        'IT & Software',
+        'Manufacturing',
+        'Construction & Infrastructure',
+        'Healthcare',
+        'Education',
+        'Retail',
+        'Banking & Finance',
+        'Logistics & Supply Chain',
+        'Hospitality',
+        'Real Estate',
+        'Government & Public Sector',
+        'Energy & Utilities',
+        'Telecom',
+        'Pharmaceuticals',
+        'Automotive',
+        'Other'
+      ],
+      message: 'Please select a valid industry type',
+    },
+  },
+  industryTypeOther: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Industry type description cannot exceed 100 characters'],
   }
 }, {
   timestamps: true,
