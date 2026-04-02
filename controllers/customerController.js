@@ -116,6 +116,7 @@ exports.createCustomer = async (req, res) => {
       ownedBy,
       industryType,
       industryTypeOther,
+      customerPriority, // ✅ NEW: Added customerPriority
     } = req.body;
 
     const existingCustomer = await Customer.findOne({
@@ -138,6 +139,14 @@ exports.createCustomer = async (req, res) => {
       });
     }
 
+    // ✅ Validate customer priority
+    if (!customerPriority || !['P1', 'P2', 'P3'].includes(customerPriority)) {
+      return res.status(400).json({
+        success: false,
+        error: "Customer priority must be P1, P2, or P3"
+      });
+    }
+
     const newCust = new Customer({
       custName,
       GSTNo,
@@ -153,6 +162,7 @@ exports.createCustomer = async (req, res) => {
       zone,
       industryType,
       industryTypeOther: industryType === 'Other' ? industryTypeOther : undefined,
+      customerPriority, // ✅ NEW: Save customer priority
     });
 
     console.log('New customer object:', newCust);
@@ -244,6 +254,14 @@ exports.updateCustomer = async (req, res) => {
       });
     }
 
+    // ✅ Validate customer priority
+    if (updatedData.customerPriority && !['P1', 'P2', 'P3'].includes(updatedData.customerPriority)) {
+      return res.status(400).json({
+        success: false,
+        error: "Customer priority must be P1, P2, or P3"
+      });
+    }
+
     const oldCustomerData = {
       custName: existingCustomer.custName,
       email: existingCustomer.email,
@@ -263,6 +281,7 @@ exports.updateCustomer = async (req, res) => {
       ownedBy: existingCustomer.ownedBy,
       industryType: existingCustomer.industryType,
       industryTypeOther: existingCustomer.industryTypeOther,
+      customerPriority: existingCustomer.customerPriority, // ✅ Track priority changes
       _id: existingCustomer._id
     };
 
@@ -307,6 +326,7 @@ exports.updateCustomer = async (req, res) => {
     trackChanges("zone", existingCustomer.zone, updatedData.zone);
     trackChanges("industryType", existingCustomer.industryType, updatedData.industryType);
     trackChanges("industryTypeOther", existingCustomer.industryTypeOther, updatedData.industryTypeOther);
+    trackChanges("customerPriority", existingCustomer.customerPriority, updatedData.customerPriority); // ✅ Track priority
 
     if (updatedData.billingAddress) {
       trackChanges(
@@ -388,6 +408,7 @@ exports.updateCustomer = async (req, res) => {
       ownedBy: updatedCustomerDoc.ownedBy,
       industryType: updatedCustomerDoc.industryType,
       industryTypeOther: updatedCustomerDoc.industryTypeOther,
+      customerPriority: updatedCustomerDoc.customerPriority, // ✅ Include in updated data
       _id: updatedCustomerDoc._id
     };
 
@@ -415,7 +436,7 @@ exports.exportCustomersPDF = async (req, res) => {
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
       .populate("createdBy", "name")
       .sort({ createdAt: -1 });
 
@@ -473,6 +494,7 @@ exports.exportCustomersPDF = async (req, res) => {
       'GST No',
       'Zone',
       'Industry Type',
+      'Priority', // ✅ Added Priority column
       'Address',
       'City',
       'State',
@@ -483,21 +505,22 @@ exports.exportCustomersPDF = async (req, res) => {
 
     const columnWidth = [
       30,
-      65,
-      75,
+      60,
+      70,
       50,
       50,
-      65,
-      65,
+      60,
+      60,
       50,
       35,
-      65,
-      75,
+      60,
+      40, // ✅ Priority width
+      70,
       45,
       45,
       40,
-      55,
-      55
+      50,
+      50
     ];
 
     const rowHeight = 25;
@@ -550,6 +573,7 @@ exports.exportCustomersPDF = async (req, res) => {
         customer.GSTNo || '',
         customer.zone || '',
         industryDisplay,
+        customer.customerPriority || 'P2', // ✅ Priority value
         customer.billingAddress?.add || '',
         customer.billingAddress?.city || '',
         customer.billingAddress?.state || '',
@@ -600,7 +624,7 @@ exports.exportCustomersExcel = async (req, res) => {
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
 
@@ -623,6 +647,7 @@ exports.exportCustomersExcel = async (req, res) => {
       { header: 'GST No', key: 'GSTNo', width: 15 },
       { header: 'Zone', key: 'zone', width: 10 },
       { header: 'Industry Type', key: 'industryType', width: 25 },
+      { header: 'Priority', key: 'customerPriority', width: 10 }, // ✅ Added Priority column
       { header: 'Address', key: 'address', width: 35 },
       { header: 'City', key: 'city', width: 15 },
       { header: 'State', key: 'state', width: 15 },
@@ -668,6 +693,7 @@ exports.exportCustomersExcel = async (req, res) => {
         GSTNo: customer.GSTNo || '',
         zone: customer.zone || '',
         industryType: industryDisplay,
+        customerPriority: customer.customerPriority || 'P2', // ✅ Priority value
         address: customer.billingAddress?.add || '',
         city: customer.billingAddress?.city || '',
         state: customer.billingAddress?.state || '',
@@ -712,6 +738,7 @@ exports.exportCustomersExcel = async (req, res) => {
       GSTNo: '',
       zone: '',
       industryType: '',
+      customerPriority: '',
       address: '',
       city: '',
       state: '',

@@ -10,19 +10,54 @@ const TaskSheet = require('../models/taskSheetModel');
 const Service = require('../models/serviceModel');
 const { newUserMail } = require('../mailsService/newEmpCreation');
 
+// ✅ FIXED: Removed status filter - Employee model doesn't have status field
 exports.getAllEmployees = async (req, res) => {
   try {
     const user = req.user;
+    
+    console.log('Fetching all employees for company:', user.company || user._id);
+    
     const employees = await Employee.find({
       company: user.company ? user.company : user._id,
-      status: 'active' // Only get active employees
     }).select('_id name email');
+    
+    console.log('Found employees:', employees.length);
     
     res.status(200).json({
       success: true,
       employees
     });
   } catch (error) {
+    console.error('Error fetching all employees:', error);
+    res.status(500).json({
+      success: false,
+      error: "Error fetching employees: " + error.message
+    });
+  }
+};
+
+// ✅ NEW: Lightweight dropdown endpoint - returns only _id and name
+exports.getEmployeesForDropdown = async (req, res) => {
+  try {
+    const user = req.user;
+    
+    console.log('Fetching employees for dropdown - Company:', user.company || user._id);
+    
+    const employees = await Employee.find({
+      company: user.company ? user.company : user._id,
+    })
+    .select('_id name')
+    .sort({ name: 1 }) // Sort alphabetically
+    .lean();
+    
+    console.log('Dropdown employees found:', employees.length);
+    
+    res.status(200).json({
+      success: true,
+      employees
+    });
+  } catch (error) {
+    console.error('Error fetching employees for dropdown:', error);
     res.status(500).json({
       success: false,
       error: "Error fetching employees: " + error.message

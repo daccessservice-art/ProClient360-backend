@@ -122,7 +122,17 @@ const customerSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [100, 'Industry type description cannot exceed 100 characters'],
-  }
+  },
+  // ✅ NEW FIELD: Customer Priority
+  customerPriority: {
+    type: String,
+    required: [true, 'Customer priority is required'],
+    enum: {
+      values: ['P1', 'P2', 'P3'],
+      message: 'Customer priority must be P1, P2, or P3',
+    },
+    default: 'P2',
+  },
 }, {
   timestamps: true,
 });

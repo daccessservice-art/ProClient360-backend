@@ -8,7 +8,10 @@ router.get('/dashboard',isLoggedIn, employeeController.dashboard);
 
 router.get('/',permissionMiddleware(['viewEmployee']),employeeController.showAll);
 
-router.get('/all',permissionMiddleware(['viewEmployee']), employeeController.getAllEmployees); // New route added
+// ✅ FIXED: Changed from viewEmployee to isLoggedIn - so all logged-in users can access for dropdowns
+router.get('/all', isLoggedIn, employeeController.getAllEmployees);
+
+router.get('/dropdown', isLoggedIn, employeeController.getEmployeesForDropdown); // ✅ NEW: Lightweight dropdown endpoint
 
 router.get('/search',permissionMiddleware(['viewEmployee']), employeeController.search);
 
