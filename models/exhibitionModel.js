@@ -1,3 +1,4 @@
+// models/exhibitionModel.js
 const mongoose = require('mongoose');
 
 const exhibitionSchema = new mongoose.Schema({
@@ -49,6 +50,14 @@ const exhibitionSchema = new mongoose.Schema({
     required: [true, 'Stall designation fees are required'],
     min: [0, 'Stall designation fees cannot be negative'],
   },
+
+  // ✅ NEW: Exhibition Owner — selected employee responsible for this exhibition
+  exhibitionOwner: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Employee',
+    default: null,
+  },
+
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
