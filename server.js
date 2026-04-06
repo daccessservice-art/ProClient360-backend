@@ -55,6 +55,8 @@ const mrfRoutes = require('./routes/mrfRoutes');
 
 const activityLogRoutes = require('./routes/activityLogRoutes');
 
+const exhibitionRoutes = require('./routes/exhibitionRoutes');
+
 
 const app = express();
 
@@ -192,6 +194,7 @@ app.use('/api/grn', grnRoutes);
 app.use('/api/qc', qcRoutes);
 app.use('/api/dc', dcRoutes);
 app.use('/api/mrf', mrfRoutes);
+app.use('/api/exhibition', exhibitionRoutes);
 
 
 app.use((err, req, res, next) => {

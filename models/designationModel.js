@@ -135,7 +135,17 @@ const designationSchema = new mongoose.Schema({
             'viewSalesManagerMaster',
             'createSalesManagerMaster',
             'updateSalesManagerMaster',
-            'deleteSalesManagerMaster'
+            'deleteSalesManagerMaster',
+
+            'createExhibition',
+            'viewExhibition',
+            'updateExhibition',
+            'deleteExhibition',
+
+            'createExhibitionVisit',
+            'viewExhibitionVisit',
+            'updateExhibitionVisit',
+            'deleteExhibitionVisit',
         ],
     }]
 
