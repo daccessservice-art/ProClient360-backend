@@ -1,5 +1,7 @@
+// controllers/exhibitionController.js
 const Exhibition = require('../models/exhibitionModel');
 const ExhibitionVisit = require('../models/exhibitionVisitModel');
+const { sendVisitThankYouEmail } = require('../mailsService/visitThankYouMailService');
 
 // ─── EXHIBITION MASTER CONTROLLERS ───────────────────────────────────────────
 
@@ -137,12 +139,20 @@ exports.deleteExhibition = async (req, res) => {
   }
 };
 
-// Dropdown list (for visit form)
+// ✅ Dropdown — only current & future exhibitions (dateTo >= today)
 exports.getExhibitionsDropdown = async (req, res) => {
   try {
     const user = req.user;
     const { q } = req.query;
-    let query = { company: user.company || user._id };
+
+    // Start of today (midnight) so ongoing exhibitions are included
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    let query = {
+      company: user.company || user._id,
+      dateTo: { $gte: todayStart }, // only current/future
+    };
 
     if (q && q.trim() !== '') {
       query.exhibitionName = { $regex: new RegExp(q, 'i') };
@@ -150,7 +160,7 @@ exports.getExhibitionsDropdown = async (req, res) => {
 
     const exhibitions = await Exhibition.find(query)
       .select('exhibitionName city dateFrom dateTo status')
-      .sort({ dateFrom: -1 })
+      .sort({ dateFrom: 1 }) // nearest first
       .limit(50)
       .lean();
 
@@ -195,7 +205,6 @@ exports.showAllVisits = async (req, res) => {
     const visits = await ExhibitionVisit.find(query)
       .skip(skip)
       .limit(limit)
-      // ✅ Select ALL fields including the 3 new ones
       .select(
         'exhibition customerName companyName mobile email location followUpDate remark ' +
         'visitorDesignation leadsType product createdBy createdAt'
@@ -231,7 +240,7 @@ exports.createVisit = async (req, res) => {
     const {
       exhibition, customerName, companyName, mobile, email,
       location, followUpDate, remark,
-      visitorDesignation, leadsType, product, // ✅ NEW FIELDS
+      visitorDesignation, leadsType, product,
     } = req.body;
 
     if (!exhibition || !customerName || !companyName || !mobile) {
@@ -246,6 +255,16 @@ exports.createVisit = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Selected exhibition not found' });
     }
 
+    // ✅ Validate: exhibition must not be fully past
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    if (exhibitionExists.dateTo && new Date(exhibitionExists.dateTo) < todayStart) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot add visit to a past exhibition. Please select a current or upcoming exhibition.',
+      });
+    }
+
     const newVisit = new ExhibitionVisit({
       exhibition,
       customerName,
@@ -255,9 +274,9 @@ exports.createVisit = async (req, res) => {
       location,
       followUpDate,
       remark,
-      visitorDesignation: visitorDesignation || '',   // ✅
-      leadsType: leadsType || '',                     // ✅
-      product: product || '',                         // ✅
+      visitorDesignation: visitorDesignation || '',
+      leadsType: leadsType || '',
+      product: product || '',
       company: user.company || user._id,
       createdBy: user._id,
     });
@@ -271,6 +290,32 @@ exports.createVisit = async (req, res) => {
       )
       .populate('exhibition', 'exhibitionName city dateFrom dateTo')
       .populate('createdBy', 'name');
+
+    // ✅ Send thank-you email (non-blocking — errors won't break the API)
+    if (email && email.trim()) {
+      setImmediate(async () => {
+        try {
+          await sendVisitThankYouEmail({
+            customerName,
+            companyName,
+            mobile,
+            email,
+            location,
+            followUpDate,
+            remark,
+            visitorDesignation,
+            leadsType,
+            product,
+            exhibitionName: exhibitionExists.exhibitionName,
+            exhibitionCity: exhibitionExists.city,
+            exhibitionDateFrom: exhibitionExists.dateFrom,
+            exhibitionDateTo: exhibitionExists.dateTo,
+          });
+        } catch (mailErr) {
+          console.error('[createVisit] Thank-you email error:', mailErr.message);
+        }
+      });
+    }
 
     res.status(201).json({ success: true, message: 'Visit recorded successfully', visit: populated });
   } catch (error) {
