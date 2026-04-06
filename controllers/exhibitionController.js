@@ -36,7 +36,8 @@ exports.showAllExhibitions = async (req, res) => {
       .skip(skip)
       .limit(limit)
       .populate('createdBy', 'name email')
-      .populate('exhibitionOwner', 'name mobile designation') // ✅ populate owner
+      // ✅ FIX: Employee model uses `mobileNo`, not `mobile`
+      .populate('exhibitionOwner', 'name mobileNo designation')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -64,7 +65,8 @@ exports.getExhibitionById = async (req, res) => {
   try {
     const exhibition = await Exhibition.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('exhibitionOwner', 'name mobile designation');
+      // ✅ FIX: mobileNo
+      .populate('exhibitionOwner', 'name mobileNo designation');
     if (!exhibition) return res.status(404).json({ success: false, error: 'Exhibition not found' });
     res.status(200).json({ success: true, exhibition });
   } catch (error) {
@@ -89,7 +91,7 @@ exports.createExhibition = async (req, res) => {
       exhibitionName, targetAddress, dateFrom, dateTo,
       venue, city, country, exhibitionFees, stallDesignationFees,
       status: status || 'Upcoming',
-      exhibitionOwner: exhibitionOwner || null, // ✅
+      exhibitionOwner: exhibitionOwner || null,
       company: user.company || user._id,
       createdBy: user._id,
     });
@@ -98,7 +100,8 @@ exports.createExhibition = async (req, res) => {
 
     const populated = await Exhibition.findById(saved._id)
       .populate('createdBy', 'name email')
-      .populate('exhibitionOwner', 'name mobile designation');
+      // ✅ FIX: mobileNo
+      .populate('exhibitionOwner', 'name mobileNo designation');
 
     res.status(201).json({ success: true, message: 'Exhibition created successfully', exhibition: populated });
   } catch (error) {
@@ -124,7 +127,8 @@ exports.updateExhibition = async (req, res) => {
       new: true, runValidators: true,
     })
       .populate('createdBy', 'name email')
-      .populate('exhibitionOwner', 'name mobile designation');
+      // ✅ FIX: mobileNo
+      .populate('exhibitionOwner', 'name mobileNo designation');
 
     if (!exhibition) return res.status(404).json({ success: false, error: 'Exhibition not found' });
 
@@ -154,7 +158,7 @@ exports.deleteExhibition = async (req, res) => {
   }
 };
 
-// ✅ Dropdown — only current & future exhibitions (dateTo >= today)
+// Dropdown — only current & future exhibitions (dateTo >= today)
 exports.getExhibitionsDropdown = async (req, res) => {
   try {
     const user = req.user;
@@ -174,7 +178,8 @@ exports.getExhibitionsDropdown = async (req, res) => {
 
     const exhibitions = await Exhibition.find(query)
       .select('exhibitionName city dateFrom dateTo status exhibitionOwner')
-      .populate('exhibitionOwner', 'name mobile designation') // ✅
+      // ✅ FIX: mobileNo
+      .populate('exhibitionOwner', 'name mobileNo designation')
       .sort({ dateFrom: 1 })
       .limit(50)
       .lean();
@@ -227,7 +232,8 @@ exports.showAllVisits = async (req, res) => {
       .populate({
         path: 'exhibition',
         select: 'exhibitionName city dateFrom dateTo exhibitionOwner',
-        populate: { path: 'exhibitionOwner', select: 'name mobile designation' }, // ✅ nested
+        // ✅ FIX: mobileNo in nested populate
+        populate: { path: 'exhibitionOwner', select: 'name mobileNo designation' },
       })
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
@@ -269,15 +275,15 @@ exports.createVisit = async (req, res) => {
       });
     }
 
-    // ✅ Populate exhibitionOwner to get their mobile for the email
+    // ✅ FIX: populate with mobileNo (not mobile) — this is what was breaking the email
     const exhibitionExists = await Exhibition.findById(exhibition)
-      .populate('exhibitionOwner', 'name mobile designation');
+      .populate('exhibitionOwner', 'name mobileNo designation');
 
     if (!exhibitionExists) {
       return res.status(404).json({ success: false, error: 'Selected exhibition not found' });
     }
 
-    // ✅ Block past exhibitions
+    // Block past exhibitions
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     if (exhibitionExists.dateTo && new Date(exhibitionExists.dateTo) < todayStart) {
@@ -313,11 +319,12 @@ exports.createVisit = async (req, res) => {
       .populate({
         path: 'exhibition',
         select: 'exhibitionName city dateFrom dateTo exhibitionOwner',
-        populate: { path: 'exhibitionOwner', select: 'name mobile designation' },
+        // ✅ FIX: mobileNo
+        populate: { path: 'exhibitionOwner', select: 'name mobileNo designation' },
       })
       .populate('createdBy', 'name');
 
-    // ✅ Send thank-you email — dynamically use exhibitionOwner's contact
+    // Send thank-you email — use exhibitionOwner's contact if available
     if (email && email.trim()) {
       setImmediate(async () => {
         try {
@@ -337,9 +344,9 @@ exports.createVisit = async (req, res) => {
             exhibitionCity:     exhibitionExists.city,
             exhibitionDateFrom: exhibitionExists.dateFrom,
             exhibitionDateTo:   exhibitionExists.dateTo,
-            // ✅ Pass owner details for the contact card in the email
-            ownerName:   owner ? owner.name   : null,
-            ownerMobile: owner ? owner.mobile : null,
+            ownerName:   owner ? owner.name    : null,
+            // ✅ FIX: was owner.mobile — Employee model field is `mobileNo`
+            ownerMobile: owner ? owner.mobileNo : null,
           });
         } catch (mailErr) {
           console.error('[createVisit] Thank-you email error:', mailErr.message);
