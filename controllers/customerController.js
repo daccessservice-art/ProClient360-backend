@@ -271,12 +271,15 @@ exports.updateCustomer = async (req, res) => {
 
     let changes = [];
     const trackChanges = (fieldName, oldValue, newValue) => {
-      if (oldValue !== newValue) {
+      // ✅ FIX: Normalize undefined/null to "" so CustomerHistory validation never fails
+      const normalizedOld = (oldValue === undefined || oldValue === null) ? "" : String(oldValue);
+      const normalizedNew = (newValue === undefined || newValue === null) ? "" : String(newValue);
+      if (normalizedOld !== normalizedNew) {
         changes.push({
           customerId: id,
           fieldName,
-          oldValue,
-          newValue,
+          oldValue: normalizedOld,
+          newValue: normalizedNew,
           changeReason: req.body.changeReason || "Updated via customer edit",
         });
       }
