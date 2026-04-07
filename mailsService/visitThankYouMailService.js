@@ -6,7 +6,6 @@ const DACCESS_LOGO_URL     = 'https://proclient360.com/static/assets/img/daccess
 const DACCESS_COMPANY_NAME = 'DAccess Security Systems Pvt. Ltd.';
 const DACCESS_DEPARTMENT   = 'Sales & Marketing Department';
 
-// Fallback contact — used only when no exhibition owner is assigned
 const DACCESS_FALLBACK_PHONE = '+91 8956307471';
 const DACCESS_FALLBACK_NAME  = DACCESS_COMPANY_NAME;
 
@@ -22,15 +21,13 @@ const formatDateIST = (date) => {
   }
 };
 
-// Safe string — never returns undefined/null/object, always a plain string
 const val = (v) => {
   if (v === null || v === undefined) return '—';
-  if (typeof v === 'object') return '—';   // ✅ guard against populated objects
+  if (typeof v === 'object') return '—';
   const s = String(v).trim();
   return s || '—';
 };
 
-// ── Info row ─────────────────────────────────────────────────────────────────
 const infoRow = (icon, label, value) => `
   <tr>
     <td style="padding:10px 14px;vertical-align:top;width:140px;
@@ -45,7 +42,6 @@ const infoRow = (icon, label, value) => `
     </td>
   </tr>`;
 
-// ── Lead badge color ──────────────────────────────────────────────────────────
 const leadsColor = (type) => {
   if (type === 'Hot Leads')  return '#dc2626';
   if (type === 'Warm Leads') return '#d97706';
@@ -53,41 +49,40 @@ const leadsColor = (type) => {
   return '#64748b';
 };
 
-// ── Main HTML builder ─────────────────────────────────────────────────────────
 const buildVisitThankYouHTML = (visitData) => {
-
-  // ✅ Safely destructure — defaults prevent undefined crashes
   const customerName       = val(visitData.customerName);
   const companyName        = val(visitData.companyName);
-  const mobile             = visitData.mobile        ? val(visitData.mobile)        : null;
-  const email              = visitData.email         ? val(visitData.email)         : null;
-  const location           = visitData.location      ? val(visitData.location)      : null;
-  const followUpDate       = visitData.followUpDate  || null;
-  const remark             = visitData.remark        ? val(visitData.remark)        : null;
+  const mobile             = visitData.mobile             ? val(visitData.mobile)             : null;
+  const email              = visitData.email              ? val(visitData.email)              : null;
+  const location           = visitData.location           ? val(visitData.location)           : null;
+  const remark             = visitData.remark             ? val(visitData.remark)             : null;
   const visitorDesignation = visitData.visitorDesignation ? val(visitData.visitorDesignation) : null;
-  const leadsType          = visitData.leadsType     ? val(visitData.leadsType)     : null;
-  const product            = visitData.product       ? val(visitData.product)       : null;
-  const exhibitionName     = val(visitData.exhibitionName);
-  const exhibitionCity     = visitData.exhibitionCity ? val(visitData.exhibitionCity) : null;
+  const leadsType          = visitData.leadsType          ? val(visitData.leadsType)          : null;
+  const product            = visitData.product            ? val(visitData.product)            : null;
+
+  const rawExhibitionName = visitData.exhibitionName;
+  const exhibitionName    = (rawExhibitionName && typeof rawExhibitionName === 'string' && rawExhibitionName.trim())
+                              ? rawExhibitionName.trim() : 'our Exhibition';
+
+  const exhibitionCity     = (visitData.exhibitionCity && typeof visitData.exhibitionCity === 'string')
+                               ? visitData.exhibitionCity.trim() : null;
   const exhibitionDateFrom = visitData.exhibitionDateFrom || null;
   const exhibitionDateTo   = visitData.exhibitionDateTo   || null;
 
-  // ✅ ownerName / ownerMobile — must be plain strings, not objects
   const ownerName   = (visitData.ownerName   && typeof visitData.ownerName   === 'string') ? visitData.ownerName.trim()   : null;
   const ownerMobile = (visitData.ownerMobile && typeof visitData.ownerMobile === 'string') ? visitData.ownerMobile.trim() : null;
 
-  const todayFormatted = formatDateIST(new Date());
-  const followUp       = followUpDate ? formatDateIST(followUpDate) : null;
-  const exDateFrom     = exhibitionDateFrom ? formatDateIST(exhibitionDateFrom) : null;
-  const exDateTo       = exhibitionDateTo   ? formatDateIST(exhibitionDateTo)   : null;
+  const todayFormatted = formatDateIST(new Date()) || '';
+  const followUp       = visitData.followUpDate ? formatDateIST(visitData.followUpDate) : null;
+  const exDateFrom     = exhibitionDateFrom     ? formatDateIST(exhibitionDateFrom)     : null;
+  const exDateTo       = exhibitionDateTo       ? formatDateIST(exhibitionDateTo)       : null;
 
   const exhibitionLabel = [
-    exhibitionName !== '—' ? exhibitionName : '',
-    exhibitionCity         ? `— ${exhibitionCity}` : '',
+    exhibitionName,
+    exhibitionCity         ? `— ${exhibitionCity}`             : '',
     exDateFrom && exDateTo ? `(${exDateFrom} to ${exDateTo})` : '',
   ].filter(Boolean).join(' ');
 
-  // Use owner's details if available, else fallback to company defaults
   const contactName  = ownerName   || DACCESS_FALLBACK_NAME;
   const contactPhone = ownerMobile || DACCESS_FALLBACK_PHONE;
 
@@ -139,7 +134,7 @@ const buildVisitThankYouHTML = (visitData) => {
         <p style="margin:0;font-size:13.5px;color:#94a3b8;line-height:1.6;">
           We were delighted to meet you at the exhibition.<br/>
           Your visit has been recorded &mdash;
-          <strong style="color:#e2e8f0;">${todayFormatted || ''}</strong>
+          <strong style="color:#e2e8f0;">${todayFormatted}</strong>
         </p>
       </td>
     </tr>
@@ -153,7 +148,7 @@ const buildVisitThankYouHTML = (visitData) => {
     <p style="font-size:14.5px;color:#475569;line-height:1.8;margin:0 0 24px;">
       Thank you for taking the time to visit our stall at
       <strong style="color:#1e293b;">${exhibitionName}</strong>
-      ${exhibitionCity ? 'in <strong style="color:#1e293b;">' + exhibitionCity + '</strong>' : ''}.
+      ${exhibitionCity ? `in <strong style="color:#1e293b;">${exhibitionCity}</strong>` : ''}.
       It was a pleasure meeting you and learning about your requirements.
       We look forward to a fruitful relationship ahead.
     </p>
@@ -166,7 +161,7 @@ const buildVisitThankYouHTML = (visitData) => {
         &#x1F3DB;&nbsp; Exhibition Details
       </p>
       <p style="margin:0;font-size:15px;font-weight:700;color:#ffffff;line-height:1.5;">
-        ${exhibitionLabel || exhibitionName}
+        ${exhibitionLabel}
       </p>
     </div>
   </div>
@@ -186,9 +181,9 @@ const buildVisitThankYouHTML = (visitData) => {
         ${email    ? infoRow('&#x2709;',  'Email',    email)    : ''}
         ${location ? infoRow('&#x1F4CD;', 'Location', location) : ''}
         ${product  ? infoRow('&#x1F4E6;', 'Product Enquired',
-            '<span style="background:#e0f2fe;color:#0369a1;padding:3px 10px;border-radius:20px;font-size:12.5px;font-weight:700;">' + product + '</span>') : ''}
+            `<span style="background:#e0f2fe;color:#0369a1;padding:3px 10px;border-radius:20px;font-size:12.5px;font-weight:700;">${product}</span>`) : ''}
         ${leadsType ? infoRow('&#x1F525;', 'Lead Category',
-            '<span style="background:' + leadsColor(leadsType) + '22;color:' + leadsColor(leadsType) + ';padding:3px 10px;border-radius:20px;font-size:12.5px;font-weight:700;">' + leadsType + '</span>') : ''}
+            `<span style="background:${leadsColor(leadsType)}22;color:${leadsColor(leadsType)};padding:3px 10px;border-radius:20px;font-size:12.5px;font-weight:700;">${leadsType}</span>`) : ''}
       </tbody>
     </table>
   </div>
@@ -266,7 +261,7 @@ const buildVisitThankYouHTML = (visitData) => {
           </p>
           <p style="margin:0;font-size:13.5px;color:#1c1917;line-height:1.7;">
             <strong>${contactName}</strong>
-            ${ownerName ? '<br/><span style="font-size:12px;color:rgba(0,0,0,.55);">' + DACCESS_DEPARTMENT + ' &mdash; ' + DACCESS_COMPANY_NAME + '</span>' : ''}
+            ${ownerName ? `<br/><span style="font-size:12px;color:rgba(0,0,0,.55);">${DACCESS_DEPARTMENT} &mdash; ${DACCESS_COMPANY_NAME}</span>` : ''}
           </p>
         </td>
       </tr>
@@ -290,7 +285,7 @@ const buildVisitThankYouHTML = (visitData) => {
 
 </div>
 </body>
-</html>`;
+</html>`.trim();
 };
 
 // ── Plain text fallback ───────────────────────────────────────────────────────
@@ -298,20 +293,22 @@ const buildPlainText = (visitData) => {
   const customerName       = val(visitData.customerName);
   const companyName        = val(visitData.companyName);
   const mobile             = visitData.mobile             ? val(visitData.mobile)             : null;
-  const email              = visitData.email              ? val(visitData.email)              : null;
   const location           = visitData.location           ? val(visitData.location)           : null;
-  const followUpDate       = visitData.followUpDate       || null;
   const remark             = visitData.remark             ? val(visitData.remark)             : null;
   const visitorDesignation = visitData.visitorDesignation ? val(visitData.visitorDesignation) : null;
   const leadsType          = visitData.leadsType          ? val(visitData.leadsType)          : null;
   const product            = visitData.product            ? val(visitData.product)            : null;
-  const exhibitionName     = val(visitData.exhibitionName);
-  const exhibitionCity     = visitData.exhibitionCity ? val(visitData.exhibitionCity) : null;
+
+  const rawExhibitionName = visitData.exhibitionName;
+  const exhibitionName    = (rawExhibitionName && typeof rawExhibitionName === 'string' && rawExhibitionName.trim())
+                              ? rawExhibitionName.trim() : 'our Exhibition';
+  const exhibitionCity    = (visitData.exhibitionCity && typeof visitData.exhibitionCity === 'string')
+                              ? visitData.exhibitionCity.trim() : null;
 
   const ownerName   = (visitData.ownerName   && typeof visitData.ownerName   === 'string') ? visitData.ownerName.trim()   : null;
   const ownerMobile = (visitData.ownerMobile && typeof visitData.ownerMobile === 'string') ? visitData.ownerMobile.trim() : null;
 
-  const followUp     = followUpDate ? formatDateIST(followUpDate) : null;
+  const followUp     = visitData.followUpDate ? formatDateIST(visitData.followUpDate) : null;
   const contactName  = ownerName   || DACCESS_FALLBACK_NAME;
   const contactPhone = ownerMobile || DACCESS_FALLBACK_PHONE;
 
@@ -325,14 +322,13 @@ const buildPlainText = (visitData) => {
     `Company     : ${companyName}`,
     visitorDesignation ? `Designation : ${visitorDesignation}` : null,
     mobile    ? `Mobile      : ${mobile}`    : null,
-    email     ? `Email       : ${email}`     : null,
     location  ? `Location    : ${location}`  : null,
     product   ? `Product     : ${product}`   : null,
     leadsType ? `Lead Type   : ${leadsType}` : null,
     '',
     followUp ? `Follow-Up Call Scheduled: ${followUp}` : null,
     followUp ? 'Our team will call you on the above date.' : null,
-    remark   ? `\nNotes: ${remark}` : null,
+    remark ? `\nNotes: ${remark}` : null,
     '',
     `For queries, contact : ${contactName}`,
     `Phone                : ${contactPhone}`,
@@ -348,65 +344,55 @@ const buildPlainText = (visitData) => {
 // ── Send function ─────────────────────────────────────────────────────────────
 const sendVisitThankYouEmail = async (visitData) => {
   const toEmail       = visitData.email;
-  const exhibitionName = val(visitData.exhibitionName);
+  const rawName       = visitData.exhibitionName;
+  const exhibitionName = (rawName && typeof rawName === 'string' && rawName.trim())
+                           ? rawName.trim() : 'our Exhibition';
 
-  // ✅ Guard: no email address
-  if (!toEmail || !toEmail.trim()) {
+  // Guard: no email
+  if (!toEmail || typeof toEmail !== 'string' || !toEmail.trim()) {
     console.log('[VisitThankYou] Skipped — no email address provided.');
     return { success: false, reason: 'no_email' };
   }
 
-  console.log(`[VisitThankYou] Preparing email → ${toEmail}`);
-  console.log(`[VisitThankYou] Exhibition: ${exhibitionName}`);
-  console.log(`[VisitThankYou] Owner name: ${visitData.ownerName || 'none (using fallback)'}`);
-  console.log(`[VisitThankYou] Owner mobile: ${visitData.ownerMobile || 'none (using fallback)'}`);
-
-  // ✅ Guard: build HTML safely — catch any template error
-  let htmlBody, textBody;
-  try {
-    htmlBody = buildVisitThankYouHTML(visitData);
-    textBody = buildPlainText(visitData);
-    console.log('[VisitThankYou] Email body built successfully.');
-  } catch (buildErr) {
-    console.error('[VisitThankYou] ❌ Failed to build email body:', buildErr.message);
-    return { success: false, error: 'build_failed: ' + buildErr.message };
-  }
-
-  // ✅ Guard: check FROM address env var
+  // Guard: EMAIL env var must exist
   if (!process.env.EMAIL) {
     console.error('[VisitThankYou] ❌ process.env.EMAIL is not set — cannot send email.');
     return { success: false, error: 'missing_env_EMAIL' };
   }
 
-  const mailOptions = {
-    from:    `"${DACCESS_COMPANY_NAME}" <${process.env.EMAIL}>`,
-    to:      toEmail.trim(),
-    subject: `Thank You for Visiting Us at ${exhibitionName} | ${DACCESS_COMPANY_NAME}`,
-    html:    htmlBody,
-    text:    textBody,
-  };
+  console.log(`[VisitThankYou] Preparing email  → ${toEmail.trim()}`);
+  console.log(`[VisitThankYou] Exhibition       : ${exhibitionName}`);
+  console.log(`[VisitThankYou] Owner name       : ${visitData.ownerName  || 'none (using fallback)'}`);
+  console.log(`[VisitThankYou] Owner mobile     : ${visitData.ownerMobile || 'none (using fallback)'}`);
 
-  // ✅ Send with full error logging
+  // Single try/catch wraps BOTH build + send together
+  // (splitting them into two separate try/catches was the root cause — 
+  //  a build error would return early and sendMail was never reached)
   try {
+    const mailOptions = {
+      from:    `"${DACCESS_COMPANY_NAME}" <${process.env.EMAIL}>`,
+      to:      toEmail.trim(),
+      subject: `Thank You for Visiting Us at ${exhibitionName} | ${DACCESS_COMPANY_NAME}`,
+      html:    buildVisitThankYouHTML(visitData),
+      text:    buildPlainText(visitData),
+    };
+
     await new Promise((resolve, reject) => {
       transporter.sendMail(mailOptions, (error, info) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(info);
-        }
+        if (error) reject(error);
+        else resolve(info);
       });
     });
 
-    console.log(`[VisitThankYou] ✅ Email sent successfully → ${toEmail}`);
+    console.log(`[VisitThankYou] ✅ Email sent successfully → ${toEmail.trim()}`);
     return { success: true };
 
-  } catch (sendErr) {
-    console.error(`[VisitThankYou] ❌ Transporter failed → ${toEmail}`);
-    console.error(`[VisitThankYou] Error code    : ${sendErr.code || 'N/A'}`);
-    console.error(`[VisitThankYou] Error message : ${sendErr.message}`);
-    console.error(`[VisitThankYou] Response      : ${sendErr.response || 'N/A'}`);
-    return { success: false, error: sendErr.message };
+  } catch (err) {
+    console.error(`[VisitThankYou] ❌ Failed → ${toEmail.trim()}`);
+    console.error(`[VisitThankYou] Error code    : ${err.code    || 'N/A'}`);
+    console.error(`[VisitThankYou] Error message : ${err.message}`);
+    console.error(`[VisitThankYou] Response      : ${err.response || 'N/A'}`);
+    return { success: false, error: err.message };
   }
 };
 
