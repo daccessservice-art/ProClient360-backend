@@ -2,6 +2,8 @@ const TaskSheet = require("../models/taskSheetModel");
 const jwt = require("jsonwebtoken");
 const Action = require("../models/actionModel");
 const Project = require('../models/projectModel');
+const Designation = require('../models/designationModel');
+const Employee = require('../models/employeeModel');
 const { newTaskAssignedMail } = require("../mailsService/newTaskAssign");
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
@@ -17,13 +19,13 @@ exports.showAll = async (req, res) => {
     .populate("taskName", "name");
 
     if (task.length <= 0) {
-      return res.status(404).json({success:false, error: "No Task Found " });
+      return res.status(404).json({ success: false, error: "No Task Found" });
     }
     
     res.status(200).json({
       task,
       totalRecord: task.length,
-      success:true,
+      success: true,
     });
   } catch (error) {
     res.status(500).json({
@@ -36,38 +38,58 @@ exports.getTaskSheet = async (req, res) => {
   try {
     const user = req.user;
     const { id } = req.params;
-    
-    const task = await TaskSheet.find({
+
+    let query = {
       company: user.company ? user.company : user._id,
       project: id
-    })
-    .populate({
-      path: 'project',
-      select: 'name startDate endDate completeLevel custId', 
-      populate: {
-        path: 'custId', 
-        select: 'custName' 
+    };
+
+    // ✅ FIXED: If employee has no viewTaskSheet permission
+    // → filter to show only their own assigned tasks (project employee)
+    // → if has permission → show all tasks (manager/admin)
+    if (user.company) {
+      try {
+        const employeeDoc = await Employee.findById(user._id).populate('designation');
+        const hasViewTaskSheet = employeeDoc?.designation?.permissions?.includes('viewTaskSheet');
+
+        if (!hasViewTaskSheet) {
+          // Project employee - only see their own tasks
+          query.employees = user._id;
+        }
+      } catch (err) {
+        // Safe fallback - filter by employee
+        query.employees = user._id;
       }
-    })
-    .populate('taskName', 'name')
-    .populate('employees', 'name')
-    .populate('assignedBy', 'name')
-    .sort({startDate: 1});
+    }
+
+    const task = await TaskSheet.find(query)
+      .populate({
+        path: 'project',
+        select: 'name startDate endDate completeLevel custId', 
+        populate: {
+          path: 'custId', 
+          select: 'custName' 
+        }
+      })
+      .populate('taskName', 'name')
+      .populate('employees', 'name')
+      .populate('assignedBy', 'name')
+      .sort({ startDate: 1 });
 
     if (task.length <= 0) {
-      return res.status(404).json({success:false, error: "No Task Found " });
+      return res.status(404).json({ success: false, error: "No Task Found" });
     }
     
-    res.status(200).json({success:true, task });
+    res.status(200).json({ success: true, task });
   } catch (error) {
-    res.status(500).json({error:"Error while getting taskSheet using id: "+error.message});
+    res.status(500).json({ error: "Error while getting taskSheet using id: " + error.message });
   }
 };
 
 exports.myTask = async (req, res) => {
   try {
     const user = req.user;
-    const {projectId} = req.params;
+    const { projectId } = req.params;
     
     const task = await TaskSheet.find({
       company: user.company,
@@ -77,15 +99,14 @@ exports.myTask = async (req, res) => {
     .populate('taskName', 'name')
     .populate('assignedBy', 'name');
 
-    if (task.length <= 0) {
-      return res.status(404).json({success:false, error: "There is no task" });
-    }
-    
+    // ✅ FIXED: Return 200 with empty array instead of 404
+    // Mobile shows blank screen on 404, web handled it silently
     res.status(200).json({
-      task,
-      success:true,
-      totalRecord: task.length,
+      task: task || [],
+      success: true,
+      totalRecord: task ? task.length : 0,
     });
+
   } catch (error) {
     res.status(500).json({ error: "Error in myTask controller: " + error.message });
   }
@@ -140,18 +161,11 @@ exports.create = async (req, res) => {
     });
 
     if (task) {
-      if(existingProject.projectStatus === 'upcoming'){
+      if (existingProject.projectStatus === 'upcoming') {
         existingProject.projectStatus = 'inprocess';
         await existingProject.save();
       }
 
-      // *** LOG ACTIVITY - TaskSheet Creation ***
-      console.log('=== LOGGING TASKSHEET CREATION ===');
-      console.log('Task created:', task._id);
-      console.log('User:', user.name);
-      console.log('Assigned to employees:', employees);
-      
-      // Populate task details for better logging
       const populatedTask = await TaskSheet.findById(task._id)
         .populate('taskName', 'name')
         .populate('employees', 'name')
@@ -160,21 +174,14 @@ exports.create = async (req, res) => {
       
       await logCreation(populatedTask, user, req, 'Task');
 
-      // Log each employee assignment
       if (employees && Array.isArray(employees)) {
-        const Employee = require('../models/employeeModel');
-        
         for (const employeeId of employees) {
           try {
             const employee = await Employee.findById(employeeId);
             if (employee) {
-              // Log assignment for each employee
               const { logAssignment } = require('../helpers/activityLogHelper');
               await logAssignment(populatedTask, employee, user, req, 'Task');
-              
-              // Send email notification
               newTaskAssignedMail(employeeId, task, existingProject.name);
-              
               console.log(`Task assigned to employee: ${employee.name}`);
             }
           } catch (emailError) {
@@ -224,7 +231,6 @@ exports.update = async (req, res) => {
     console.log('Update Data:', updateData);
     console.log('User:', user.name);
     
-    // Find existing task with populated fields
     const existingTask = await TaskSheet.findById(id)
       .populate('taskName', 'name')
       .populate('employees', 'name')
@@ -238,7 +244,6 @@ exports.update = async (req, res) => {
       });
     }
 
-    // *** STORE OLD DATA FOR LOGGING - CONVERT TO PLAIN OBJECT ***
     const oldTaskData = {
       taskName: existingTask.taskName ? existingTask.taskName._id.toString() : null,
       project: existingTask.project ? existingTask.project._id.toString() : null,
@@ -252,23 +257,13 @@ exports.update = async (req, res) => {
       _id: existingTask._id
     };
 
-    console.log('=== OLD TASK DATA ===');
-    console.log(JSON.stringify(oldTaskData, null, 2));
-    
-    // Check if employees are being updated
     const oldEmployeeIds = oldTaskData.employees;
     const newEmployeeIds = updateData.employees ? updateData.employees.map(id => id.toString()).sort() : oldEmployeeIds;
     const employeesChanged = JSON.stringify(oldEmployeeIds) !== JSON.stringify(newEmployeeIds);
     
-    console.log('Employees changed:', employeesChanged);
-    console.log('Old employees:', oldEmployeeIds);
-    console.log('New employees:', newEmployeeIds);
-    
-    // Remove fields that shouldn't be updated
     delete updateData.company;
     delete updateData.assignedBy;
     
-    // Update the task
     const task = await TaskSheet.findByIdAndUpdate(
       id, 
       updateData, 
@@ -279,7 +274,6 @@ exports.update = async (req, res) => {
     .populate('assignedBy', 'name')
     .populate('project', 'name');
 
-    // *** CONVERT TO PLAIN OBJECT FOR LOGGING ***
     const updatedTask = {
       taskName: task.taskName ? (task.taskName._id ? task.taskName._id.toString() : task.taskName.toString()) : null,
       project: task.project ? (task.project._id ? task.project._id.toString() : task.project.toString()) : null,
@@ -293,45 +287,22 @@ exports.update = async (req, res) => {
       _id: task._id
     };
 
-    console.log('=== NEW TASK DATA ===');
-    console.log(JSON.stringify(updatedTask, null, 2));
-
-    // *** LOG ACTIVITY - TaskSheet Update ***
-    // If employees changed, we'll log that separately as ASSIGN actions
-    // So we need to exclude 'employees' field from the general UPDATE log
-    console.log('=== CALLING LOG UPDATE ===');
-    
     if (employeesChanged) {
-      // Create temporary objects without employees field for comparison
       const oldTaskWithoutEmployees = { ...oldTaskData };
       const updatedTaskWithoutEmployees = { ...updatedTask };
       delete oldTaskWithoutEmployees.employees;
       delete updatedTaskWithoutEmployees.employees;
-      
-      console.log('Employees changed - logging UPDATE without employees field');
       await logUpdate(oldTaskWithoutEmployees, updatedTaskWithoutEmployees, user, req, 'Task');
     } else {
-      // No employee changes, log all changes normally
       await logUpdate(oldTaskData, updatedTask, user, req, 'Task');
     }
-    
-    console.log('=== LOG UPDATE COMPLETE ===');
 
-    // *** LOG EMPLOYEE ASSIGNMENT/REASSIGNMENT IF CHANGED ***
     if (employeesChanged) {
-      console.log('=== LOGGING EMPLOYEE CHANGES ===');
-      
-      const Employee = require('../models/employeeModel');
       const { logAssignment } = require('../helpers/activityLogHelper');
       
-      // Find newly added employees
       const addedEmployeeIds = newEmployeeIds.filter(id => !oldEmployeeIds.includes(id));
       const removedEmployeeIds = oldEmployeeIds.filter(id => !newEmployeeIds.includes(id));
       
-      console.log('Added employees:', addedEmployeeIds);
-      console.log('Removed employees:', removedEmployeeIds);
-      
-      // Log assignments for newly added employees
       for (const employeeId of addedEmployeeIds) {
         try {
           const employee = await Employee.findById(employeeId);
@@ -344,12 +315,10 @@ exports.update = async (req, res) => {
         }
       }
       
-      // Log reassignment for removed employees
       for (const employeeId of removedEmployeeIds) {
         try {
           const employee = await Employee.findById(employeeId);
           if (employee) {
-            // Log as reassignment (removal)
             const ActivityLog = require('../models/activityLogModel');
             await ActivityLog.create({
               company: task.company,
@@ -417,10 +386,7 @@ exports.delete = async (req, res) => {
       });
     }
 
-    // *** LOG ACTIVITY - TaskSheet Deletion ***
-    console.log('=== LOGGING TASKSHEET DELETION ===');
     await logDeletion(task, user, req, 'Task');
-
     await TaskSheet.findByIdAndDelete(taskSheetId);
     await Action.deleteMany({ task: taskSheetId });
 
