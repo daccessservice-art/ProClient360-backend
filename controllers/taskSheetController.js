@@ -44,20 +44,14 @@ exports.getTaskSheet = async (req, res) => {
       project: id
     };
 
-    // ✅ FIXED: If employee has no viewTaskSheet permission
-    // → filter to show only their own assigned tasks (project employee)
-    // → if has permission → show all tasks (manager/admin)
     if (user.company) {
       try {
         const employeeDoc = await Employee.findById(user._id).populate('designation');
         const hasViewTaskSheet = employeeDoc?.designation?.permissions?.includes('viewTaskSheet');
-
         if (!hasViewTaskSheet) {
-          // Project employee - only see their own tasks
           query.employees = user._id;
         }
       } catch (err) {
-        // Safe fallback - filter by employee
         query.employees = user._id;
       }
     }
@@ -90,17 +84,36 @@ exports.myTask = async (req, res) => {
   try {
     const user = req.user;
     const { projectId } = req.params;
-    
-    const task = await TaskSheet.find({
-      company: user.company,
+
+    console.log('=== myTask DEBUG ===');
+    console.log('user._id:', user._id);
+    console.log('user.company:', user.company);
+    console.log('projectId:', projectId);
+
+    // ✅ FIXED: user.company may be undefined when coming through
+    // isEmployee middleware (no population). So we build query
+    // safely — only add company filter if it actually exists.
+    const query = {
       employees: user._id,
       project: projectId
-    })
-    .populate('taskName', 'name')
-    .populate('assignedBy', 'name');
+    };
 
-    // ✅ FIXED: Return 200 with empty array instead of 404
-    // Mobile shows blank screen on 404, web handled it silently
+    // ✅ Only add company to query if it exists on the user object
+    if (user.company) {
+      query.company = user.company;
+    }
+
+    console.log('Final query:', JSON.stringify(query));
+
+    const task = await TaskSheet.find(query)
+      .populate('taskName', 'name')
+      .populate('assignedBy', 'name');
+
+    console.log('Tasks found:', task ? task.length : 0);
+    console.log('===================');
+
+    // ✅ Always return 200 with empty array — never 404
+    // Mobile shows blank screen on 404
     res.status(200).json({
       task: task || [],
       success: true,
@@ -108,6 +121,7 @@ exports.myTask = async (req, res) => {
     });
 
   } catch (error) {
+    console.log('myTask ERROR:', error.message);
     res.status(500).json({ error: "Error in myTask controller: " + error.message });
   }
 };
