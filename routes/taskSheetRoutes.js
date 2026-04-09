@@ -2,16 +2,16 @@ const express = require('express');
 const router = express.Router();
 
 const taskSheetController = require('../controllers/taskSheetController');
-const { permissionMiddleware } = require('../middlewares/auth');
+const { permissionMiddleware, isEmployee } = require('../middlewares/auth');
 
 // Get all task sheets
 router.get('/', permissionMiddleware(['viewTaskSheet']), taskSheetController.showAll);
 
-// Get task sheet by project ID
-router.get('/:id', permissionMiddleware(['viewTaskSheet']), taskSheetController.getTaskSheet);
+// ✅ FIX: moved above /:id AND changed to isEmployee (no permission needed)
+router.get('/my/:projectId', isEmployee, taskSheetController.myTask);
 
-// Get my tasks for a project
-router.get('/my/:projectId', permissionMiddleware(['viewTaskSheet']), taskSheetController.myTask);
+// Dynamic route AFTER /my/:projectId
+router.get('/:id', permissionMiddleware(['viewTaskSheet']), taskSheetController.getTaskSheet);
 
 // Create new task sheet
 router.post('/', permissionMiddleware(['createTaskSheet']), taskSheetController.create);
