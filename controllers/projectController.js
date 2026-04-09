@@ -85,6 +85,16 @@ exports.showAll = async (req, res) => {
       });
     }
 
+    // Add taskCount per project
+    const projectIds = projects.map(p => p._id);
+    const taskCounts = await Tasksheet.aggregate([
+      { $match: { project: { $in: projectIds } } },
+      { $group: { _id: "$project", count: { $sum: 1 } } }
+    ]);
+    const taskCountMap = {};
+    taskCounts.forEach(t => { taskCountMap[t._id.toString()] = t.count; });
+    projects.forEach(p => { p.taskCount = taskCountMap[p._id.toString()] || 0; });
+
     const totalRecords = await Project.countDocuments(query);
     const totalPages = Math.ceil(totalRecords / limit);
     const hasNextPage = page < totalPages;
@@ -196,31 +206,26 @@ exports.create = async (req, res) => {
     let POCopyUrl = null;
     if (POCopy) {
       try {
-        // Must be a string
         if (typeof POCopy !== 'string') {
           return res.status(400).json({ success: false, error: "Invalid POCopy format: expected base64 string" });
         }
 
         let base64String = POCopy.trim();
 
-        // Strip data URI prefix e.g. "data:application/pdf;base64,"
         if (base64String.includes(',')) {
           base64String = base64String.split(',')[1];
         }
 
-        // Must not be empty after stripping
         if (!base64String || base64String.length < 100) {
           return res.status(400).json({ success: false, error: "POCopy file data is empty or corrupted" });
         }
 
         const buffer = Buffer.from(base64String, 'base64');
 
-        // Validate it is actually a PDF (%PDF magic bytes)
         if (buffer.length < 4 || buffer.toString('utf8', 0, 4) !== '%PDF') {
           return res.status(400).json({ success: false, error: "Uploaded file is not a valid PDF" });
         }
 
-        // Max 2MB
         if (buffer.length > 2 * 1024 * 1024) {
           return res.status(400).json({ success: false, error: "POCopy file must be less than 2MB" });
         }
