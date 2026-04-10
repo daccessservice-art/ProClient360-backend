@@ -19,6 +19,10 @@ exports.getCustomer = async (req, res) => {
   }
 };
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📄 FILE: controllers/customerController.js (ONLY update the showAll function)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
@@ -27,7 +31,6 @@ exports.showAll = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     let skip = (page - 1) * limit;
 
-    // ✅ UPDATED: Destructure new filter params
     const { q, createdBy, ownedBy } = req.query;
 
     const companyId = user.company || user._id;
@@ -56,12 +59,12 @@ exports.showAll = async (req, res) => {
       };
     }
 
-    // ✅ NEW: Owned By filter — ownedBy is a plain string field
+    // ✅ Owned By filter — ownedBy is a plain string field
     if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
       query.ownedBy = ownedBy.trim();
     }
 
-    // ✅ NEW: Created By filter — createdBy is a ref to Employee; match by name
+    // ✅ Created By filter — createdBy is a ref to Employee; match by name
     if (createdBy && createdBy.trim() !== "" && createdBy.toLowerCase() !== "null") {
       try {
         const Employee = require("../models/employeeModel");
@@ -73,7 +76,7 @@ exports.showAll = async (req, res) => {
         if (emp) {
           query.createdBy = emp._id;
         } else {
-          // No employee found with that name — return empty result immediately
+          // No employee found with that name — return empty result with pagination
           return res.status(200).json({
             success: true,
             customers: [],
@@ -92,6 +95,12 @@ exports.showAll = async (req, res) => {
       }
     }
 
+    // ✅ FIX: Always get total count FIRST (even if 0 results)
+    const totalCustomers = await Customer.countDocuments(query);
+    const totalPages = Math.ceil(totalCustomers / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
     const customers = await Customer.find(query)
       .skip(skip)
       .limit(limit)
@@ -99,14 +108,22 @@ exports.showAll = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // ✅ FIX: Return success with empty array instead of 404 when filtered results are 0
+    // This is important for the dashboard count to work properly
     if (customers.length === 0) {
-      return res.status(404).json({ success: false, error: "No customers found" });
+      return res.status(200).json({
+        success: true,
+        customers: [],
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalCustomers,  // This will be 0 if no matches
+          limit,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      });
     }
-
-    const totalCustomers = await Customer.countDocuments(query);
-    const totalPages = Math.ceil(totalCustomers / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
 
     res.status(200).json({
       success: true,
@@ -127,7 +144,6 @@ exports.showAll = async (req, res) => {
     });
   }
 };
-
 exports.createCustomer = async (req, res) => {
   try {
     console.log('=== CREATE CUSTOMER START ===');
