@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const POCounter = require('./counterModel');
 
 const purchaseOrderItemSchema = new mongoose.Schema({
   brandName: {
@@ -164,7 +165,6 @@ const purchaseOrderSchema = new mongoose.Schema({
       default: 0,
     },
   },
-  // New fields for terms and conditions
   deliveryDate: {
     type: Date,
   },
@@ -180,47 +180,32 @@ const purchaseOrderSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Pre-save hook to generate order number
-purchaseOrderSchema.pre('save', async function(next) {
-  // Only generate order number if it's not already set
-  if (!this.orderNumber) {
+purchaseOrderSchema.pre('save', async function (next) {
+  if (this.orderNumber) return next();
+
+  try {
     const orderDate = new Date(this.orderDate);
-    const currentYear = orderDate.getFullYear();
-    const nextYear = currentYear + 1;
-    const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
-    
-    // Calculate financial year start and end dates
-    let startOfYear, endOfYear;
-    
-    // Financial year starts from April 1st
-    if (orderDate.getMonth() >= 3) { // Month is 3-based (0=Jan, 3=Apr)
-      startOfYear = new Date(currentYear, 3, 1); // April 1st of current year
-      endOfYear = new Date(nextYear, 2, 31); // March 31st of next year
-    } else {
-      startOfYear = new Date(currentYear - 1, 3, 1); // April 1st of previous year
-      endOfYear = new Date(currentYear, 2, 31); // March 31st of current year
-    }
-    
-    try {
-      // Count existing orders for this financial year
-      const count = await mongoose.model('PurchaseOrder').countDocuments({
-        orderDate: {
-          $gte: startOfYear,
-          $lte: endOfYear
-        },
-        company: this.company // Ensure count is per company
-      });
-      
-      // Generate serial number with leading zeros
-      const serialNumber = String(count + 1).padStart(3, '0');
-      this.orderNumber = `DA/${financialYear}/${serialNumber}`;
-    } catch (error) {
-      console.error('Error generating order number:', error);
-      // Fallback to timestamp if there's an error
-      this.orderNumber = `DA/${financialYear}/${Date.now().toString().slice(-6)}`;
-    }
+    const month = orderDate.getMonth();
+
+    const fyStart = month >= 3 ? orderDate.getFullYear() : orderDate.getFullYear() - 1;
+    const fyEnd   = fyStart + 1;
+    const financialYear = `${fyStart}-${String(fyEnd).slice(-2)}`;
+
+    const counterKey = `PO_${financialYear}_${this.company}`;
+
+    const counter = await POCounter.findOneAndUpdate(
+      { key: counterKey },
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+
+    this.orderNumber = `DA/${financialYear}/${String(counter.seq).padStart(3, '0')}`;
+    return next();
+  } catch (error) {
+    console.error('Error generating order number:', error);
+    this.orderNumber = `DA/FALLBACK/${Date.now().toString().slice(-6)}`;
+    return next();
   }
-  next();
 });
 
 const PurchaseOrder = mongoose.model('PurchaseOrder', purchaseOrderSchema);
