@@ -35,28 +35,15 @@ const taskSheetSchema = new Schema({
     enum: ['stuck', 'inprocess', 'completed', 'upcoming'],
     default: 'upcoming'
   },
+  // ✅ REMOVED: min-date validators so back dates are allowed
   startDate: {
     type: Date,
     required: [true, 'Start date is required'],
-    validate: {
-      validator: function(value) {
-        // Ensure start date is not before today
-        return !value || value >= new Date(new Date().setHours(0, 0, 0, 0));
-      },
-      message: 'Start date cannot be before today'
-    }
   },
   endDate: {
     type: Date,
     required: [true, 'End date is required'],
     validate: [
-      {
-        validator: function(value) {
-          // Ensure end date is not before today
-          return !value || value >= new Date(new Date().setHours(0, 0, 0, 0));
-        },
-        message: 'End date cannot be before today'
-      },
       {
         validator: function(value) {
           // Ensure end date is after or equal to start date
@@ -85,7 +72,7 @@ const taskSheetSchema = new Schema({
     type: String 
   }
 }, {
-  timestamps: true // Add timestamps for createdAt and updatedAt
+  timestamps: true
 });
 
 const TaskSheet = mongoose.model('TaskSheet', taskSheetSchema);

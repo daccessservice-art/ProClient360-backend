@@ -7,14 +7,17 @@ const { permissionMiddleware, isEmployee, isLoggedIn } = require('../middlewares
 // Get all task sheets
 router.get('/', permissionMiddleware(['viewTaskSheet']), taskSheetController.showAll);
 
-// ✅ FIXED: /my/:projectId ABOVE /:id + isEmployee middleware
+// ✅ /my/:projectId ABOVE /:id
 router.get('/my/:projectId', isEmployee, taskSheetController.myTask);
 
-// ✅ FIXED: isLoggedIn so project employees can access /:id on mobile
+// ✅ isLoggedIn so project employees can access /:id on mobile
 router.get('/:id', isLoggedIn, taskSheetController.getTaskSheet);
 
 // Create new task sheet
 router.post('/', permissionMiddleware(['createTaskSheet']), taskSheetController.create);
+
+// ✅ NEW: Task completion notification — sends email to assignedBy
+router.post('/notify-completion', isLoggedIn, taskSheetController.notifyCompletion);
 
 // Update task sheet
 router.put('/:id', permissionMiddleware(['updateTaskSheet']), taskSheetController.update);

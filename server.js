@@ -5,13 +5,12 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 
-// const { Server } = require('socket.io');
-
 const dotenv = require('dotenv');
 dotenv.config();
 
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
 const { initCallUnansweredMailScheduler } = require('./mailsService/callUnansweredMailService');
+const { initializeDailyTaskSheetReportScheduler } = require('./mailsService/dailyTaskSheetReport');
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
@@ -75,6 +74,9 @@ const startServer = async () => {
 
     console.log('Initializing call unanswered mail scheduler...');
     initCallUnansweredMailScheduler();
+
+    console.log('Initializing daily task sheet report scheduler...');
+    initializeDailyTaskSheetReportScheduler();                        
     
     console.log('Initializing auto-mark stale leads scheduler...');
     cron.schedule('0 2 * * *', async () => {
@@ -97,7 +99,6 @@ const startServer = async () => {
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      
     });
   } catch (error) {
     console.error('Failed to start server:', error);

@@ -5,6 +5,7 @@ const Project = require('../models/projectModel');
 const Designation = require('../models/designationModel');
 const Employee = require('../models/employeeModel');
 const { newTaskAssignedMail } = require("../mailsService/newTaskAssign");
+const { taskCompletedMail } = require("../mailsService/taskCompletedMail");
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
 exports.showAll = async (req, res) => {
@@ -85,35 +86,19 @@ exports.myTask = async (req, res) => {
     const user = req.user;
     const { projectId } = req.params;
 
-    console.log('=== myTask DEBUG ===');
-    console.log('user._id:', user._id);
-    console.log('user.company:', user.company);
-    console.log('projectId:', projectId);
-
-    // ✅ FIXED: user.company may be undefined when coming through
-    // isEmployee middleware (no population). So we build query
-    // safely — only add company filter if it actually exists.
     const query = {
       employees: user._id,
       project: projectId
     };
 
-    // ✅ Only add company to query if it exists on the user object
     if (user.company) {
       query.company = user.company;
     }
-
-    console.log('Final query:', JSON.stringify(query));
 
     const task = await TaskSheet.find(query)
       .populate('taskName', 'name')
       .populate('assignedBy', 'name');
 
-    console.log('Tasks found:', task ? task.length : 0);
-    console.log('===================');
-
-    // ✅ Always return 200 with empty array — never 404
-    // Mobile shows blank screen on 404
     res.status(200).json({
       task: task || [],
       success: true,
@@ -121,8 +106,58 @@ exports.myTask = async (req, res) => {
     });
 
   } catch (error) {
-    console.log('myTask ERROR:', error.message);
     res.status(500).json({ error: "Error in myTask controller: " + error.message });
+  }
+};
+
+// ✅ NEW: Send completion email to the person who assigned the task
+exports.notifyCompletion = async (req, res) => {
+  try {
+    const { taskId, assignedById, employeeId, taskName } = req.body;
+
+    if (!taskId || !assignedById) {
+      return res.status(400).json({ success: false, error: "taskId and assignedById are required" });
+    }
+
+    // Fetch task details
+    const task = await TaskSheet.findById(taskId)
+      .populate('taskName', 'name')
+      .populate('project', 'name')
+      .populate('employees', 'name');
+
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    // Only send if task is actually 100% complete
+    if (task.taskLevel !== 100) {
+      return res.status(200).json({ success: false, message: "Task is not yet 100% complete, no email sent" });
+    }
+
+    // Get the assigner's details
+    const assigner = await Employee.findById(assignedById).select('name email');
+    if (!assigner || !assigner.email) {
+      return res.status(404).json({ success: false, error: "Assigner not found or has no email" });
+    }
+
+    // Get assigned employee details
+    const employee = await Employee.findById(employeeId).select('name');
+
+    // Send completion mail to the assigner
+    await taskCompletedMail({
+      assignerEmail: assigner.email,
+      assignerName: assigner.name,
+      employeeName: employee?.name || 'An employee',
+      taskName: task.taskName?.name || taskName || 'Task',
+      projectName: task.project?.name || 'Project',
+      startDate: task.startDate,
+      endDate: task.endDate,
+    });
+
+    res.status(200).json({ success: true, message: "Completion notification sent successfully" });
+  } catch (error) {
+    console.error("Error in notifyCompletion:", error);
+    res.status(500).json({ error: "Error sending completion notification: " + error.message });
   }
 };
 
@@ -130,8 +165,6 @@ exports.create = async (req, res) => {
   try {
     const { project, employees, taskName, startDate, endDate, remark, priority } = req.body;
     const user = req.user;
-
-    console.log("Creating task sheet with user:", user._id);
 
     if (!project || !employees || !taskName || !startDate || !endDate || !priority) {
       return res.status(400).json({
@@ -196,7 +229,6 @@ exports.create = async (req, res) => {
               const { logAssignment } = require('../helpers/activityLogHelper');
               await logAssignment(populatedTask, employee, user, req, 'Task');
               newTaskAssignedMail(employeeId, task, existingProject.name);
-              console.log(`Task assigned to employee: ${employee.name}`);
             }
           } catch (emailError) {
             console.error("Failed to send email:", emailError);
@@ -239,11 +271,6 @@ exports.update = async (req, res) => {
     const { id } = req.params;
     const user = req.user;
     const updateData = req.body;
-    
-    console.log('=== UPDATE TASKSHEET START ===');
-    console.log('TaskSheet ID:', id);
-    console.log('Update Data:', updateData);
-    console.log('User:', user.name);
     
     const existingTask = await TaskSheet.findById(id)
       .populate('taskName', 'name')
@@ -322,7 +349,6 @@ exports.update = async (req, res) => {
           const employee = await Employee.findById(employeeId);
           if (employee) {
             await logAssignment(task, employee, user, req, 'Task');
-            console.log(`Task assigned to new employee: ${employee.name}`);
           }
         } catch (error) {
           console.error('Error logging employee assignment:', error);
@@ -352,11 +378,31 @@ exports.update = async (req, res) => {
                 userAgent: req.headers['user-agent']
               }
             });
-            console.log(`Task unassigned from employee: ${employee.name}`);
           }
         } catch (error) {
           console.error('Error logging employee removal:', error);
         }
+      }
+    }
+
+    // ✅ If task just reached 100%, send completion email to assignedBy
+    if (task.taskLevel === 100 && existingTask.taskLevel < 100 && task.assignedBy) {
+      try {
+        const assigner = await Employee.findById(task.assignedBy._id || task.assignedBy).select('name email');
+        if (assigner && assigner.email) {
+          await taskCompletedMail({
+            assignerEmail: assigner.email,
+            assignerName: assigner.name,
+            employeeName: task.employees?.map(e => e.name).join(', ') || 'Employee',
+            taskName: task.taskName?.name || 'Task',
+            projectName: task.project?.name || 'Project',
+            startDate: task.startDate,
+            endDate: task.endDate,
+          });
+          console.log(`Completion email sent to assigner: ${assigner.email}`);
+        }
+      } catch (mailErr) {
+        console.error("Failed to send completion email:", mailErr);
       }
     }
 
@@ -387,10 +433,6 @@ exports.delete = async (req, res) => {
     const taskSheetId = req.params.id;
     const user = req.user;
 
-    console.log('=== DELETE TASKSHEET START ===');
-    console.log('TaskSheet ID:', taskSheetId);
-    console.log('User:', user.name);
-
     const task = await TaskSheet.findById(taskSheetId);
 
     if (!task) {
@@ -403,8 +445,6 @@ exports.delete = async (req, res) => {
     await logDeletion(task, user, req, 'Task');
     await TaskSheet.findByIdAndDelete(taskSheetId);
     await Action.deleteMany({ task: taskSheetId });
-
-    console.log('=== DELETE TASKSHEET COMPLETE ===');
 
     res.status(200).json({
       success: true,
