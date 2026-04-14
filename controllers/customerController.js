@@ -34,7 +34,9 @@ exports.showAll = async (req, res) => {
     const { q, createdBy, ownedBy } = req.query;
 
     const companyId = user.company || user._id;
-    let query = { company: companyId };
+    
+    // ✅ Build query with proper $and structure for complex filters
+    let conditions = [{ company: companyId }];
 
     // ── Search filter ──
     if (
@@ -47,8 +49,7 @@ exports.showAll = async (req, res) => {
       const searchRegex = new RegExp(q, "i");
       skip = 0;
       page = 1;
-      query = {
-        company: companyId,
+      conditions.push({
         $or: [
           { custName: { $regex: searchRegex } },
           { email: { $regex: searchRegex } },
@@ -56,12 +57,26 @@ exports.showAll = async (req, res) => {
           { phoneNumber1: { $regex: searchRegex } },
           { industryType: { $regex: searchRegex } },
         ],
-      };
+      });
     }
 
-    // ✅ Owned By filter — ownedBy is a plain string field
+    // ✅ FIXED: Owned By filter — handle "NA" to find customers with no owner
     if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
-      query.ownedBy = ownedBy.trim();
+      if (ownedBy.trim().toLowerCase() === "na") {
+        // Find customers with no owner or owner is NA/N/A/empty
+        conditions.push({
+          $or: [
+            { ownedBy: { $exists: false } },
+            { ownedBy: null },
+            { ownedBy: "" },
+            { ownedBy: { $regex: /^na$/i } },
+            { ownedBy: "N/A" },
+            { ownedBy: "n/a" }
+          ]
+        });
+      } else {
+        conditions.push({ ownedBy: ownedBy.trim() });
+      }
     }
 
     // ✅ Created By filter — createdBy is a ref to Employee; match by name
@@ -74,7 +89,7 @@ exports.showAll = async (req, res) => {
         }).select("_id");
 
         if (emp) {
-          query.createdBy = emp._id;
+          conditions.push({ createdBy: emp._id });
         } else {
           // No employee found with that name — return empty result with pagination
           return res.status(200).json({
@@ -95,7 +110,10 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ✅ FIX: Always get total count FIRST (even if 0 results)
+    // Build final query from conditions
+    const query = conditions.length > 1 ? { $and: conditions } : conditions[0];
+
+    // ✅ Always get total count FIRST
     const totalCustomers = await Customer.countDocuments(query);
     const totalPages = Math.ceil(totalCustomers / limit);
     const hasNextPage = page < totalPages;
@@ -108,8 +126,7 @@ exports.showAll = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // ✅ FIX: Return success with empty array instead of 404 when filtered results are 0
-    // This is important for the dashboard count to work properly
+    // ✅ Return success with empty array instead of 404 when filtered results are 0
     if (customers.length === 0) {
       return res.status(200).json({
         success: true,
@@ -117,7 +134,7 @@ exports.showAll = async (req, res) => {
         pagination: {
           currentPage: page,
           totalPages,
-          totalCustomers,  // This will be 0 if no matches
+          totalCustomers,
           limit,
           hasNextPage: false,
           hasPrevPage: false,

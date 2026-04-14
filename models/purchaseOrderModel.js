@@ -51,6 +51,12 @@ const purchaseOrderItemSchema = new mongoose.Schema({
   netValue: {
     type: Number,
   },
+  warranty: {
+    type: String,
+    trim: true,
+    maxlength: [200, 'Warranty cannot exceed 200 characters'],
+    default: '',
+  },
 });
 
 const purchaseOrderSchema = new mongoose.Schema({

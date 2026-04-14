@@ -93,7 +93,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       }
     }
 
-    // FIXED: added billingAddress, manualAddress, typeOfVendor to vendor populate
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor gstin phoneNumber1 email')
       .populate('project',   'name')
@@ -141,7 +140,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     let y = M;
 
     // ════════════════════════════════════════════════════════════
-    // 1. HEADER — Logo (left) | "Purchase Order" centered
+    // 1. HEADER
     // ════════════════════════════════════════════════════════════
 
     const HEADER_H  = 50;
@@ -181,7 +180,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += 6;
 
     // ════════════════════════════════════════════════════════════
-    // 2. VENDOR DETAILS  +  INVOICE DETAILS
+    // 2. VENDOR DETAILS + INVOICE DETAILS
     // ════════════════════════════════════════════════════════════
 
     const leftW  = CW * 0.52;
@@ -208,7 +207,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
        .text(vendor.vendorName || 'N/A', M + 4, vy, { width: leftW - 8 });
     vy += 13;
 
-    //  FIXED: build address from billingAddress object or manualAddress string
     const vendorAddress = vendor.typeOfVendor === 'Import'
       ? (vendor.manualAddress || null)
       : vendor.billingAddress?.add
@@ -247,21 +245,22 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += boxH + 6;
 
     // ════════════════════════════════════════════════════════════
-    // 3. ITEMS TABLE — includes DISC.% column
+    // 3. ITEMS TABLE — includes WARRANTY column
     // ════════════════════════════════════════════════════════════
 
     const itemCols = [
       { key: 'sr',       label: 'SR.',            w: 22,  align: 'center' },
-      { key: 'item',     label: 'ITEM DETAILS',   w: 120, align: 'left'   },
-      { key: 'hsn',      label: 'HSN/SAC',        w: 44,  align: 'center' },
-      { key: 'uom',      label: 'UOM',            w: 28,  align: 'center' },
-      { key: 'qty',      label: 'QTY',            w: 32,  align: 'right'  },
-      { key: 'rate',     label: 'RATE',           w: 44,  align: 'right'  },
-      { key: 'disc',     label: 'DISC.%',         w: 34,  align: 'center' },
-      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 52,  align: 'right'  },
-      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 58,  align: 'right'  },
-      { key: 'gst',      label: 'GST%/AMT.',      w: 44,  align: 'center' },
-      { key: 'net',      label: 'NET AMT.(Rs)',   w: 77,  align: 'right'  },
+      { key: 'item',     label: 'ITEM DETAILS',   w: 110, align: 'left'   },
+      { key: 'hsn',      label: 'HSN/SAC',        w: 40,  align: 'center' },
+      { key: 'uom',      label: 'UOM',            w: 26,  align: 'center' },
+      { key: 'qty',      label: 'QTY',            w: 28,  align: 'right'  },
+      { key: 'rate',     label: 'RATE',           w: 40,  align: 'right'  },
+      { key: 'disc',     label: 'DISC.%',         w: 30,  align: 'center' },
+      { key: 'warranty', label: 'WARRANTY',       w: 44,  align: 'center' },
+      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 46,  align: 'right'  },
+      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 50,  align: 'right'  },
+      { key: 'gst',      label: 'GST%/AMT.',      w: 40,  align: 'center' },
+      { key: 'net',      label: 'NET AMT.(Rs)',   w: 79,  align: 'right'  },
     ];
 
     const rowH = 16;
@@ -284,14 +283,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       cx = M;
 
       if (item) {
-        const qty     = Number(item.quantity)        || 0;
-        const rate    = Number(item.price)           || 0;
-        const disc    = Number(item.discountPercent) || 0;
-        const taxPct  = Number(item.taxPercent)      || 0;
-        const lineAmt = qty * rate * (1 - disc / 100);
-        const taxAmt  = lineAmt * taxPct / 100;
-        const netVal  = lineAmt + taxAmt;
-        const gstText = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
+        const qty      = Number(item.quantity)        || 0;
+        const rate     = Number(item.price)           || 0;
+        const disc     = Number(item.discountPercent) || 0;
+        const taxPct   = Number(item.taxPercent)      || 0;
+        const lineAmt  = qty * rate * (1 - disc / 100);
+        const taxAmt   = lineAmt * taxPct / 100;
+        const netVal   = lineAmt + taxAmt;
+        const gstText  = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
         const discText = disc > 0 ? `${disc}%` : '-';
         const itemName = [item.brandName, item.description || item.modelNo].filter(Boolean).join('  ');
 
@@ -303,6 +302,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           { text: qty.toFixed(2),                   align: 'right'  },
           { text: rate.toFixed(2),                  align: 'right'  },
           { text: discText,                          align: 'center' },
+          { text: item.warranty || '-',             align: 'center' },
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: lineAmt.toFixed(2),               align: 'right'  },
           { text: gstText,                           align: 'center' },
@@ -338,6 +338,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { text: totalQty.toFixed(2),   align: 'right',  bold: true },
       { text: '',                     align: 'right'  },
       { text: '',                     align: 'center' },
+      { text: '',                     align: 'center' },
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalAmt.toFixed(2),   align: 'right',  bold: true },
       { text: totalTax.toFixed(2),   align: 'right',  bold: true },
@@ -354,7 +355,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += rowH + 6;
 
     // ════════════════════════════════════════════════════════════
-    // 4. HSN/SAC SUMMARY  +  TOTALS SUMMARY
+    // 4. HSN/SAC SUMMARY + TOTALS SUMMARY
     // ════════════════════════════════════════════════════════════
 
     const hsnW = CW * 0.58;
@@ -457,7 +458,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += rowH + 4;
 
     // ════════════════════════════════════════════════════════════
-    // 5. TOTAL IN WORDS  +  GRAND TOTAL
+    // 5. TOTAL IN WORDS + GRAND TOTAL
     // ════════════════════════════════════════════════════════════
 
     const wordsW   = CW * 0.60;
@@ -487,7 +488,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += wordRowH + 4;
 
     // ════════════════════════════════════════════════════════════
-    // 6. PAYMENT TERMS  +  SIGNATURE
+    // 6. PAYMENT TERMS + SIGNATURE
     // ════════════════════════════════════════════════════════════
 
     const footerH = 55;
