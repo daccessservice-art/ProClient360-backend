@@ -19,10 +19,6 @@ exports.getCustomer = async (req, res) => {
   }
 };
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📄 FILE: controllers/customerController.js (ONLY update the showAll function)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
@@ -34,16 +30,13 @@ exports.showAll = async (req, res) => {
     const { q, createdBy, ownedBy } = req.query;
 
     const companyId = user.company || user._id;
-    
-    // ✅ Build query with proper $and structure for complex filters
+
     let conditions = [{ company: companyId }];
 
     // ── Search filter ──
     if (
-      q !== undefined &&
-      q !== null &&
-      q.trim() !== "" &&
-      q.trim().toLowerCase() !== "null" &&
+      q !== undefined && q !== null &&
+      q.trim() !== "" && q.trim().toLowerCase() !== "null" &&
       q.trim().toLowerCase() !== "undefined"
     ) {
       const searchRegex = new RegExp(q, "i");
@@ -60,10 +53,9 @@ exports.showAll = async (req, res) => {
       });
     }
 
-    // ✅ FIXED: Owned By filter — handle "NA" to find customers with no owner
+    // ── Owned By filter ──
     if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
       if (ownedBy.trim().toLowerCase() === "na") {
-        // Find customers with no owner or owner is NA/N/A/empty
         conditions.push({
           $or: [
             { ownedBy: { $exists: false } },
@@ -71,15 +63,15 @@ exports.showAll = async (req, res) => {
             { ownedBy: "" },
             { ownedBy: { $regex: /^na$/i } },
             { ownedBy: "N/A" },
-            { ownedBy: "n/a" }
-          ]
+            { ownedBy: "n/a" },
+          ],
         });
       } else {
         conditions.push({ ownedBy: ownedBy.trim() });
       }
     }
 
-    // ✅ Created By filter — createdBy is a ref to Employee; match by name
+    // ── Created By filter ──
     if (createdBy && createdBy.trim() !== "" && createdBy.toLowerCase() !== "null") {
       try {
         const Employee = require("../models/employeeModel");
@@ -91,17 +83,12 @@ exports.showAll = async (req, res) => {
         if (emp) {
           conditions.push({ createdBy: emp._id });
         } else {
-          // No employee found with that name — return empty result with pagination
           return res.status(200).json({
             success: true,
             customers: [],
             pagination: {
-              currentPage: page,
-              totalPages: 0,
-              totalCustomers: 0,
-              limit,
-              hasNextPage: false,
-              hasPrevPage: false,
+              currentPage: page, totalPages: 0, totalCustomers: 0,
+              limit, hasNextPage: false, hasPrevPage: false,
             },
           });
         }
@@ -110,10 +97,8 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // Build final query from conditions
     const query = conditions.length > 1 ? { $and: conditions } : conditions[0];
 
-    // ✅ Always get total count FIRST
     const totalCustomers = await Customer.countDocuments(query);
     const totalPages = Math.ceil(totalCustomers / limit);
     const hasNextPage = page < totalPages;
@@ -126,18 +111,13 @@ exports.showAll = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    // ✅ Return success with empty array instead of 404 when filtered results are 0
     if (customers.length === 0) {
       return res.status(200).json({
         success: true,
         customers: [],
         pagination: {
-          currentPage: page,
-          totalPages,
-          totalCustomers,
-          limit,
-          hasNextPage: false,
-          hasPrevPage: false,
+          currentPage: page, totalPages, totalCustomers,
+          limit, hasNextPage: false, hasPrevPage: false,
         },
       });
     }
@@ -146,12 +126,8 @@ exports.showAll = async (req, res) => {
       success: true,
       customers,
       pagination: {
-        currentPage: page,
-        totalPages,
-        totalCustomers,
-        limit,
-        hasNextPage,
-        hasPrevPage,
+        currentPage: page, totalPages, totalCustomers,
+        limit, hasNextPage, hasPrevPage,
       },
     });
   } catch (error) {
@@ -161,25 +137,24 @@ exports.showAll = async (req, res) => {
     });
   }
 };
+
 exports.createCustomer = async (req, res) => {
   try {
-    console.log('=== CREATE CUSTOMER START ===');
     const user = req.user;
 
     const {
-      custName,
-      billingAddress,
-      email,
-      GSTNo,
-      customerContactPersonName1,
-      phoneNumber1,
-      customerContactPersonName2,
-      phoneNumber2,
-      zone,
-      ownedBy,
-      industryType,
-      industryTypeOther,
-      customerPriority,
+      custName, billingAddress, email, GSTNo,
+      customerContactPersonName1, phoneNumber1,
+      customerContactPersonEmail1, customerContactPersonDesignation1,
+      customerContactPersonName2, phoneNumber2,
+      customerContactPersonEmail2, customerContactPersonDesignation2,
+      customerContactPersonName3, phoneNumber3,
+      customerContactPersonEmail3, customerContactPersonDesignation3,
+      customerContactPersonName4, phoneNumber4,
+      customerContactPersonEmail4, customerContactPersonDesignation4,
+      customerContactPersonName5, phoneNumber5,
+      customerContactPersonEmail5, customerContactPersonDesignation5,
+      zone, ownedBy, industryType, industryTypeOther, customerPriority,
     } = req.body;
 
     const existingCustomer = await Customer.findOne({
@@ -188,15 +163,24 @@ exports.createCustomer = async (req, res) => {
     });
 
     if (existingCustomer) {
-      return res.status(409).json({ success: false, error: "Customer already exist please use different email Id" });
+      return res.status(409).json({
+        success: false,
+        error: "Customer already exist please use different email Id",
+      });
     }
 
     if (industryType === 'Other' && (!industryTypeOther || industryTypeOther.trim() === '')) {
-      return res.status(400).json({ success: false, error: "Please specify the industry type when selecting 'Other'" });
+      return res.status(400).json({
+        success: false,
+        error: "Please specify the industry type when selecting 'Other'",
+      });
     }
 
     if (!customerPriority || !['P1', 'P2', 'P3'].includes(customerPriority)) {
-      return res.status(400).json({ success: false, error: "Customer priority must be P1, P2, or P3" });
+      return res.status(400).json({
+        success: false,
+        error: "Customer priority must be P1, P2, or P3",
+      });
     }
 
     const newCust = new Customer({
@@ -206,10 +190,31 @@ exports.createCustomer = async (req, res) => {
       email: email.toLowerCase().trim(),
       createdBy: user._id,
       ownedBy: ownedBy || user.name,
+      // Contact 1
       customerContactPersonName1,
       phoneNumber1,
-      customerContactPersonName2,
-      phoneNumber2,
+      customerContactPersonEmail1: customerContactPersonEmail1 || '',
+      customerContactPersonDesignation1: customerContactPersonDesignation1 || '',
+      // Contact 2
+      customerContactPersonName2: customerContactPersonName2 || '',
+      phoneNumber2: phoneNumber2 || '',
+      customerContactPersonEmail2: customerContactPersonEmail2 || '',
+      customerContactPersonDesignation2: customerContactPersonDesignation2 || '',
+      // Contact 3
+      customerContactPersonName3: customerContactPersonName3 || '',
+      phoneNumber3: phoneNumber3 || '',
+      customerContactPersonEmail3: customerContactPersonEmail3 || '',
+      customerContactPersonDesignation3: customerContactPersonDesignation3 || '',
+      // Contact 4
+      customerContactPersonName4: customerContactPersonName4 || '',
+      phoneNumber4: phoneNumber4 || '',
+      customerContactPersonEmail4: customerContactPersonEmail4 || '',
+      customerContactPersonDesignation4: customerContactPersonDesignation4 || '',
+      // Contact 5
+      customerContactPersonName5: customerContactPersonName5 || '',
+      phoneNumber5: phoneNumber5 || '',
+      customerContactPersonEmail5: customerContactPersonEmail5 || '',
+      customerContactPersonDesignation5: customerContactPersonDesignation5 || '',
       billingAddress,
       zone,
       industryType,
@@ -225,7 +230,11 @@ exports.createCustomer = async (req, res) => {
       console.error('Error logging customer creation:', logError);
     }
 
-    res.status(201).json({ success: true, message: "Customer created successfully", customer: savedCustomer });
+    res.status(201).json({
+      success: true,
+      message: "Customer created successfully",
+      customer: savedCustomer,
+    });
   } catch (error) {
     console.error('Error in createCustomer:', error);
     if (error.name === "ValidationError") {
@@ -243,7 +252,10 @@ exports.deleteCustomer = async (req, res) => {
 
     const projects = await Project.find({ custId: customerId });
     if (projects.length > 0) {
-      return res.status(400).json({ success: false, error: "Customer cannot be deleted as they have associated projects." });
+      return res.status(400).json({
+        success: false,
+        error: "Customer cannot be deleted as they have associated projects.",
+      });
     }
 
     const customer = await Customer.findById(customerId);
@@ -272,11 +284,17 @@ exports.updateCustomer = async (req, res) => {
     }
 
     if (updatedData.industryType === 'Other' && (!updatedData.industryTypeOther || updatedData.industryTypeOther.trim() === '')) {
-      return res.status(400).json({ success: false, error: "Please specify the industry type when selecting 'Other'" });
+      return res.status(400).json({
+        success: false,
+        error: "Please specify the industry type when selecting 'Other'",
+      });
     }
 
     if (updatedData.customerPriority && !['P1', 'P2', 'P3'].includes(updatedData.customerPriority)) {
-      return res.status(400).json({ success: false, error: "Customer priority must be P1, P2, or P3" });
+      return res.status(400).json({
+        success: false,
+        error: "Customer priority must be P1, P2, or P3",
+      });
     }
 
     const oldCustomerData = {
@@ -292,19 +310,18 @@ exports.updateCustomer = async (req, res) => {
         city: existingCustomer.billingAddress.city,
         state: existingCustomer.billingAddress.state,
         country: existingCustomer.billingAddress.country,
-        pincode: existingCustomer.billingAddress.pincode
+        pincode: existingCustomer.billingAddress.pincode,
       } : {},
       zone: existingCustomer.zone,
       ownedBy: existingCustomer.ownedBy,
       industryType: existingCustomer.industryType,
       industryTypeOther: existingCustomer.industryTypeOther,
       customerPriority: existingCustomer.customerPriority,
-      _id: existingCustomer._id
+      _id: existingCustomer._id,
     };
 
     let changes = [];
     const trackChanges = (fieldName, oldValue, newValue) => {
-      // ✅ FIX: Normalize undefined/null to "" so CustomerHistory validation never fails
       const normalizedOld = (oldValue === undefined || oldValue === null) ? "" : String(oldValue);
       const normalizedNew = (newValue === undefined || newValue === null) ? "" : String(newValue);
       if (normalizedOld !== normalizedNew) {
@@ -324,8 +341,12 @@ exports.updateCustomer = async (req, res) => {
     trackChanges("ownedBy", existingCustomer.ownedBy, updatedData.ownedBy);
     trackChanges("customerContactPersonName1", existingCustomer.customerContactPersonName1, updatedData.customerContactPersonName1);
     trackChanges("phoneNumber1", existingCustomer.phoneNumber1, updatedData.phoneNumber1);
+    trackChanges("customerContactPersonEmail1", existingCustomer.customerContactPersonEmail1, updatedData.customerContactPersonEmail1);
+    trackChanges("customerContactPersonDesignation1", existingCustomer.customerContactPersonDesignation1, updatedData.customerContactPersonDesignation1);
     trackChanges("customerContactPersonName2", existingCustomer.customerContactPersonName2, updatedData.customerContactPersonName2);
     trackChanges("phoneNumber2", existingCustomer.phoneNumber2, updatedData.phoneNumber2);
+    trackChanges("customerContactPersonEmail2", existingCustomer.customerContactPersonEmail2, updatedData.customerContactPersonEmail2);
+    trackChanges("customerContactPersonDesignation2", existingCustomer.customerContactPersonDesignation2, updatedData.customerContactPersonDesignation2);
     trackChanges("zone", existingCustomer.zone, updatedData.zone);
     trackChanges("industryType", existingCustomer.industryType, updatedData.industryType);
     trackChanges("industryTypeOther", existingCustomer.industryTypeOther, updatedData.industryTypeOther);
@@ -339,17 +360,8 @@ exports.updateCustomer = async (req, res) => {
       trackChanges("billingAddress.pincode", existingCustomer.billingAddress?.pincode, updatedData.billingAddress.pincode);
     }
 
-    if (updatedData.deliveryAddress) {
-      trackChanges("deliveryAddress.add", existingCustomer.deliveryAddress?.add, updatedData.deliveryAddress.add);
-      trackChanges("deliveryAddress.city", existingCustomer.deliveryAddress?.city, updatedData.deliveryAddress.city);
-      trackChanges("deliveryAddress.state", existingCustomer.deliveryAddress?.state, updatedData.deliveryAddress.state);
-      trackChanges("deliveryAddress.country", existingCustomer.deliveryAddress?.country, updatedData.deliveryAddress.country);
-      trackChanges("deliveryAddress.pincode", existingCustomer.deliveryAddress?.pincode, updatedData.deliveryAddress.pincode);
-    }
-
     const updatedCustomerDoc = await Customer.findByIdAndUpdate(id, updatedData, {
-      new: true,
-      runValidators: true,
+      new: true, runValidators: true,
     }).populate("createdBy", "name email");
 
     const updatedCustomer = {
@@ -365,14 +377,14 @@ exports.updateCustomer = async (req, res) => {
         city: updatedCustomerDoc.billingAddress.city,
         state: updatedCustomerDoc.billingAddress.state,
         country: updatedCustomerDoc.billingAddress.country,
-        pincode: updatedCustomerDoc.billingAddress.pincode
+        pincode: updatedCustomerDoc.billingAddress.pincode,
       } : {},
       zone: updatedCustomerDoc.zone,
       ownedBy: updatedCustomerDoc.ownedBy,
       industryType: updatedCustomerDoc.industryType,
       industryTypeOther: updatedCustomerDoc.industryTypeOther,
       customerPriority: updatedCustomerDoc.customerPriority,
-      _id: updatedCustomerDoc._id
+      _id: updatedCustomerDoc._id,
     };
 
     if (changes.length > 0) {
@@ -381,21 +393,25 @@ exports.updateCustomer = async (req, res) => {
 
     await logUpdate(oldCustomerData, updatedCustomer, user, req, 'Customer');
 
-    res.status(200).json({ success: true, message: "Customer updated successfully", updatedCustomer: updatedCustomerDoc });
+    res.status(200).json({
+      success: true,
+      message: "Customer updated successfully",
+      updatedCustomer: updatedCustomerDoc,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, error: "Error updating customer: " + error.message });
   }
 };
 
-// PDF Export Function
+// ── PDF Export ────────────────────────────────────────────────────────────────
 exports.exportCustomersPDF = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
       .populate("createdBy", "name")
       .sort({ createdAt: -1 });
 
@@ -403,7 +419,7 @@ exports.exportCustomersPDF = async (req, res) => {
       margin: 30,
       size: 'A4',
       layout: 'landscape',
-      info: { Title: 'Customer Master Export', Author: 'ProClient360', Subject: 'Customer Data Export', CreationDate: new Date() }
+      info: { Title: 'Customer Master Export', Author: 'ProClient360', Subject: 'Customer Data Export', CreationDate: new Date() },
     });
 
     const filename = `customers_export_${new Date().toISOString().split('T')[0]}.pdf`;
@@ -432,15 +448,19 @@ exports.exportCustomersPDF = async (req, res) => {
     doc.moveDown();
 
     const tableTop = doc.y;
-    const headers = ['Sr No','Name','Email','Phone 1','Phone 2','Contact Person 1','Contact Person 2','GST No','Zone','Industry Type','Priority','Address','City','State','Pincode','Created By','Owned By'];
-    const columnWidth = [30,60,70,50,50,60,60,50,35,60,40,70,45,45,40,50,50];
+    const headers = [
+      'Sr No', 'Name', 'Email', 'Phone 1', 'Contact 1', 'Email 1', 'Designation 1',
+      'Contact 2', 'Email 2', 'Designation 2',
+      'GST No', 'Zone', 'Industry', 'Priority', 'City', 'State', 'Created By', 'Owned By',
+    ];
+    const columnWidth = [25, 55, 65, 45, 50, 60, 55, 50, 60, 55, 50, 30, 50, 35, 40, 40, 45, 45];
     const rowHeight = 25;
 
     const drawHeaders = (yPosition) => {
       let currentX = 30;
-      doc.rect(30, yPosition, 770, rowHeight).fill('#3498db');
+      doc.rect(30, yPosition, 810, rowHeight).fill('#3498db');
       doc.fillColor('#ffffff');
-      doc.fontSize(8);
+      doc.fontSize(7);
       headers.forEach((header, i) => {
         doc.text(header, currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
         currentX += columnWidth[i];
@@ -457,19 +477,34 @@ exports.exportCustomersPDF = async (req, res) => {
         yPosition = 50;
         yPosition = drawHeaders(yPosition);
       }
-      if (alternateRow) doc.rect(30, yPosition, 770, rowHeight).fill('#f8f9fa');
+      if (alternateRow) doc.rect(30, yPosition, 810, rowHeight).fill('#f8f9fa');
       alternateRow = !alternateRow;
 
       let currentX = 30;
-      doc.fontSize(7).fillColor('#2c3e50');
-      const industryDisplay = customer.industryType === 'Other' ? (customer.industryTypeOther || 'Other') : (customer.industryType || '');
+      doc.fontSize(6).fillColor('#2c3e50');
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
       const rowData = [
-        index + 1, customer.custName || '', customer.email || '', customer.phoneNumber1 || '',
-        customer.phoneNumber2 || '', customer.customerContactPersonName1 || '', customer.customerContactPersonName2 || '',
-        customer.GSTNo || '', customer.zone || '', industryDisplay, customer.customerPriority || 'P2',
-        customer.billingAddress?.add || '', customer.billingAddress?.city || '',
-        customer.billingAddress?.state || '', customer.billingAddress?.pincode || '',
-        customer.createdBy?.name || '', customer.ownedBy || ''
+        index + 1,
+        customer.custName || '',
+        customer.email || '',
+        customer.phoneNumber1 || '',
+        customer.customerContactPersonName1 || '',
+        customer.customerContactPersonEmail1 || '',
+        customer.customerContactPersonDesignation1 || '',
+        customer.customerContactPersonName2 || '',
+        customer.customerContactPersonEmail2 || '',
+        customer.customerContactPersonDesignation2 || '',
+        customer.GSTNo || '',
+        customer.zone || '',
+        industryDisplay,
+        customer.customerPriority || 'P2',
+        customer.billingAddress?.city || '',
+        customer.billingAddress?.state || '',
+        customer.createdBy?.name || '',
+        customer.ownedBy || '',
       ];
 
       rowData.forEach((text, i) => {
@@ -482,7 +517,9 @@ exports.exportCustomersPDF = async (req, res) => {
     const range = doc.bufferedPageRange();
     for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
-      doc.fontSize(8).fillColor('#95a5a6').text(`Page ${i + 1} of ${range.count}`, 30, doc.page.height - 30, { align: 'center' });
+      doc.fontSize(8).fillColor('#95a5a6').text(
+        `Page ${i + 1} of ${range.count}`, 30, doc.page.height - 30, { align: 'center' }
+      );
     }
 
     doc.end();
@@ -492,14 +529,14 @@ exports.exportCustomersPDF = async (req, res) => {
   }
 };
 
-// Excel Export Function
+// ── Excel Export ──────────────────────────────────────────────────────────────
 exports.exportCustomersExcel = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonName2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
 
@@ -510,17 +547,22 @@ exports.exportCustomersExcel = async (req, res) => {
     const worksheet = workbook.addWorksheet('Customers');
 
     worksheet.columns = [
-      { header: 'Sr No', key: 'srNo', width: 10 },
+      { header: 'Sr No', key: 'srNo', width: 8 },
       { header: 'Customer Name', key: 'custName', width: 25 },
       { header: 'Email', key: 'email', width: 30 },
       { header: 'Phone 1', key: 'phoneNumber1', width: 15 },
-      { header: 'Phone 2', key: 'phoneNumber2', width: 15 },
-      { header: 'Contact Person 1', key: 'customerContactPersonName1', width: 20 },
-      { header: 'Contact Person 2', key: 'customerContactPersonName2', width: 20 },
       { header: 'GST No', key: 'GSTNo', width: 15 },
       { header: 'Zone', key: 'zone', width: 10 },
       { header: 'Industry Type', key: 'industryType', width: 25 },
       { header: 'Priority', key: 'customerPriority', width: 10 },
+      { header: 'Contact 1 Name', key: 'contactName1', width: 20 },
+      { header: 'Contact 1 Phone', key: 'contactPhone1', width: 15 },
+      { header: 'Contact 1 Email', key: 'contactEmail1', width: 28 },
+      { header: 'Contact 1 Designation', key: 'contactDesig1', width: 22 },
+      { header: 'Contact 2 Name', key: 'contactName2', width: 20 },
+      { header: 'Contact 2 Phone', key: 'contactPhone2', width: 15 },
+      { header: 'Contact 2 Email', key: 'contactEmail2', width: 28 },
+      { header: 'Contact 2 Designation', key: 'contactDesig2', width: 22 },
       { header: 'Address', key: 'address', width: 35 },
       { header: 'City', key: 'city', width: 15 },
       { header: 'State', key: 'state', width: 15 },
@@ -529,7 +571,7 @@ exports.exportCustomersExcel = async (req, res) => {
       { header: 'Created By', key: 'createdByName', width: 15 },
       { header: 'Created By Email', key: 'createdByEmail', width: 25 },
       { header: 'Owned By', key: 'ownedByName', width: 15 },
-      { header: 'Created Date', key: 'createdAt', width: 15 }
+      { header: 'Created Date', key: 'createdAt', width: 15 },
     ];
 
     const headerRow = worksheet.getRow(1);
@@ -538,23 +580,34 @@ exports.exportCustomersExcel = async (req, res) => {
       cell.font = { bold: true, color: { argb: 'FFFFFF' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '3498db' } };
       cell.alignment = { vertical: 'middle', horizontal: 'center' };
-      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      cell.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' },
+      };
     });
 
     customers.forEach((customer, index) => {
-      const industryDisplay = customer.industryType === 'Other' ? (customer.industryTypeOther || 'Other') : (customer.industryType || '');
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
       const row = worksheet.addRow({
         srNo: index + 1,
         custName: customer.custName || '',
         email: customer.email || '',
         phoneNumber1: customer.phoneNumber1 || '',
-        phoneNumber2: customer.phoneNumber2 || '',
-        customerContactPersonName1: customer.customerContactPersonName1 || '',
-        customerContactPersonName2: customer.customerContactPersonName2 || '',
         GSTNo: customer.GSTNo || '',
         zone: customer.zone || '',
         industryType: industryDisplay,
         customerPriority: customer.customerPriority || 'P2',
+        contactName1: customer.customerContactPersonName1 || '',
+        contactPhone1: customer.phoneNumber1 || '',
+        contactEmail1: customer.customerContactPersonEmail1 || '',
+        contactDesig1: customer.customerContactPersonDesignation1 || '',
+        contactName2: customer.customerContactPersonName2 || '',
+        contactPhone2: customer.phoneNumber2 || '',
+        contactEmail2: customer.customerContactPersonEmail2 || '',
+        contactDesig2: customer.customerContactPersonDesignation2 || '',
         address: customer.billingAddress?.add || '',
         city: customer.billingAddress?.city || '',
         state: customer.billingAddress?.state || '',
@@ -563,13 +616,16 @@ exports.exportCustomersExcel = async (req, res) => {
         createdByName: customer.createdBy?.name || '',
         createdByEmail: customer.createdBy?.email || '',
         ownedByName: customer.ownedBy || '',
-        createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : ''
+        createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : '',
       });
 
       row.height = 20;
       row.eachCell((cell) => {
         cell.alignment = { vertical: 'middle', wrapText: true };
-        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+        cell.border = {
+          top: { style: 'thin' }, left: { style: 'thin' },
+          bottom: { style: 'thin' }, right: { style: 'thin' },
+        };
       });
 
       if (index % 2 === 0) {
@@ -579,7 +635,9 @@ exports.exportCustomersExcel = async (req, res) => {
       }
     });
 
-    const summaryRow = worksheet.addRow({ srNo: '', custName: 'Total Customers:', email: customers.length });
+    const summaryRow = worksheet.addRow({
+      srNo: '', custName: 'Total Customers:', email: customers.length,
+    });
     summaryRow.height = 25;
     summaryRow.eachCell((cell, colNumber) => {
       if (colNumber === 2 || colNumber === 3) {

@@ -35,39 +35,40 @@ const customerSchema = new mongoose.Schema({
     },
     city: {
       type: String,
-      maxLength: [50, 'City cannot exceed 50 characters'],
+      maxlength: [50, 'City cannot exceed 50 characters'],
       required: [true, 'City is required'],
     },
     state: {
       type: String,
-      maxLength: [50, 'State cannot exceed 50 characters'],
+      maxlength: [50, 'State cannot exceed 50 characters'],
       required: [true, 'State is required'],
     },
     country: {
       type: String,
-      maxLength: [50, 'Country cannot exceed 50 characters'],
+      maxlength: [50, 'Country cannot exceed 50 characters'],
       required: [true, 'Country is required'],
     },
     pincode: {
       type: Number,
-      maxLength: [6, 'Pincode cannot exceed 6 digits'],
       required: [true, 'Pincode is required'],
     },
   },
   company: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Company'
+    ref: 'Company',
   },
   GSTNo: {
     type: String,
     required: [true, 'GST number is required'],
-    maxLength: [15, 'GST number cannot exceed 15 characters'],
+    maxlength: [15, 'GST number cannot exceed 15 characters'],
   },
+
+  // ── Contact Person 1 ──
   customerContactPersonName1: {
     type: String,
     required: [true, 'Customer Contact Person Name is required'],
-    minlength: [2, 'Customer Contact Person Name must be at least 3 characters long'],
-    maxlength: [50, 'Customer Contact Person Name cannot exceed 50 characters'],
+    minlength: [2, 'Customer Contact Person Name must be at least 2 characters long'],
+    maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
     trim: true,
   },
   phoneNumber1: {
@@ -76,15 +77,124 @@ const customerSchema = new mongoose.Schema({
     maxlength: [11, 'Phone number cannot exceed 11 digits'],
     match: [/^\d+$/, 'Invalid Phone number, It must contain only numbers'],
   },
+  customerContactPersonEmail1: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: [100, 'Email cannot exceed 100 characters'],
+    default: '',
+  },
+  customerContactPersonDesignation1: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Designation cannot exceed 100 characters'],
+    default: '',
+  },
+
+  // ── Contact Person 2 ──
   customerContactPersonName2: {
     type: String,
-    maxlength: [50, 'Customer Contact Person Name cannot exceed 50 characters'],
+    maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
+    default: '',
   },
   phoneNumber2: {
     type: String,
     maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d+$/, 'Invalid Phone number, It must contain only numbers'],
+    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    default: '',
   },
+  customerContactPersonEmail2: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: [100, 'Email cannot exceed 100 characters'],
+    default: '',
+  },
+  customerContactPersonDesignation2: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Designation cannot exceed 100 characters'],
+    default: '',
+  },
+
+  // ── Contact Person 3 ──
+  customerContactPersonName3: {
+    type: String,
+    maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
+    default: '',
+  },
+  phoneNumber3: {
+    type: String,
+    maxlength: [11, 'Phone number cannot exceed 11 digits'],
+    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    default: '',
+  },
+  customerContactPersonEmail3: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: [100, 'Email cannot exceed 100 characters'],
+    default: '',
+  },
+  customerContactPersonDesignation3: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Designation cannot exceed 100 characters'],
+    default: '',
+  },
+
+  // ── Contact Person 4 ──
+  customerContactPersonName4: {
+    type: String,
+    maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
+    default: '',
+  },
+  phoneNumber4: {
+    type: String,
+    maxlength: [11, 'Phone number cannot exceed 11 digits'],
+    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    default: '',
+  },
+  customerContactPersonEmail4: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: [100, 'Email cannot exceed 100 characters'],
+    default: '',
+  },
+  customerContactPersonDesignation4: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Designation cannot exceed 100 characters'],
+    default: '',
+  },
+
+  // ── Contact Person 5 ──
+  customerContactPersonName5: {
+    type: String,
+    maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
+    default: '',
+  },
+  phoneNumber5: {
+    type: String,
+    maxlength: [11, 'Phone number cannot exceed 11 digits'],
+    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    default: '',
+  },
+  customerContactPersonEmail5: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: [100, 'Email cannot exceed 100 characters'],
+    default: '',
+  },
+  customerContactPersonDesignation5: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Designation cannot exceed 100 characters'],
+    default: '',
+  },
+
   zone: {
     type: String,
     required: [true, 'Zone is required'],
@@ -113,7 +223,8 @@ const customerSchema = new mongoose.Schema({
         'Telecom',
         'Pharmaceuticals',
         'Automotive',
-        'Other'
+        'Dealer',
+        'Other',
       ],
       message: 'Please select a valid industry type',
     },
@@ -123,7 +234,6 @@ const customerSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Industry type description cannot exceed 100 characters'],
   },
-  // ✅ NEW FIELD: Customer Priority
   customerPriority: {
     type: String,
     required: [true, 'Customer priority is required'],
