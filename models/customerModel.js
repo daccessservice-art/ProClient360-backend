@@ -27,30 +27,41 @@ const customerSchema = new mongoose.Schema({
     minlength: [2, 'Customer name must be at least 2 characters long'],
     maxlength: [300, 'Customer name cannot exceed 300 characters'],
   },
+  // ── Customer Type: Main or Branch ──
+  customerType: {
+    type: String,
+    enum: ['main', 'branch'],
+    default: 'main',
+  },
+  branchOf: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Customer',
+    default: null,
+  },
   billingAddress: {
     add: {
       type: String,
       maxlength: [500, 'Address cannot exceed 500 characters'],
-      required: [true, 'Address is required'],
+      default: '',
     },
     city: {
       type: String,
       maxlength: [50, 'City cannot exceed 50 characters'],
-      required: [true, 'City is required'],
+      default: '',
     },
     state: {
       type: String,
       maxlength: [50, 'State cannot exceed 50 characters'],
-      required: [true, 'State is required'],
+      default: '',
     },
     country: {
       type: String,
       maxlength: [50, 'Country cannot exceed 50 characters'],
-      required: [true, 'Country is required'],
+      default: '',
     },
     pincode: {
-      type: Number,
-      required: [true, 'Pincode is required'],
+      type: String,
+      default: '',
     },
   },
   company: {
@@ -73,9 +84,8 @@ const customerSchema = new mongoose.Schema({
   },
   phoneNumber1: {
     type: String,
-    required: [true, 'Phone number is required'],
-    maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d+$/, 'Invalid Phone number, It must contain only numbers'],
+    maxlength: [25, 'Phone number cannot exceed 25 characters'],
+    default: '',
   },
   customerContactPersonEmail1: {
     type: String,
@@ -99,8 +109,7 @@ const customerSchema = new mongoose.Schema({
   },
   phoneNumber2: {
     type: String,
-    maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    maxlength: [25, 'Phone number cannot exceed 25 characters'],
     default: '',
   },
   customerContactPersonEmail2: {
@@ -125,8 +134,7 @@ const customerSchema = new mongoose.Schema({
   },
   phoneNumber3: {
     type: String,
-    maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    maxlength: [25, 'Phone number cannot exceed 25 characters'],
     default: '',
   },
   customerContactPersonEmail3: {
@@ -151,8 +159,7 @@ const customerSchema = new mongoose.Schema({
   },
   phoneNumber4: {
     type: String,
-    maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    maxlength: [25, 'Phone number cannot exceed 25 characters'],
     default: '',
   },
   customerContactPersonEmail4: {
@@ -177,8 +184,7 @@ const customerSchema = new mongoose.Schema({
   },
   phoneNumber5: {
     type: String,
-    maxlength: [11, 'Phone number cannot exceed 11 digits'],
-    match: [/^\d*$/, 'Invalid Phone number, It must contain only numbers'],
+    maxlength: [25, 'Phone number cannot exceed 25 characters'],
     default: '',
   },
   customerContactPersonEmail5: {
@@ -224,6 +230,11 @@ const customerSchema = new mongoose.Schema({
         'Pharmaceuticals',
         'Automotive',
         'Dealer',
+        'Hotel',
+        'Gym & Clubs',
+        'Facility Services',
+        'Labour Contractor',
+        'Security Systems Dealer',
         'Other',
       ],
       message: 'Please select a valid industry type',
@@ -246,6 +257,10 @@ const customerSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+// Index for branch queries
+customerSchema.index({ branchOf: 1 });
+customerSchema.index({ customerType: 1 });
 
 const Customer = mongoose.model('Customer', customerSchema);
 

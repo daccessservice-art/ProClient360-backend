@@ -9,7 +9,8 @@ const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogH
 exports.getCustomer = async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id)
-      .populate("createdBy", "name email");
+      .populate("createdBy", "name email")
+      .populate("branchOf", "custName email");
     if (!customer) {
       return res.status(404).json({ success: false, error: "Customer not found" });
     }
@@ -27,13 +28,13 @@ exports.showAll = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     let skip = (page - 1) * limit;
 
-    const { q, createdBy, ownedBy } = req.query;
+    const { q, createdBy, ownedBy, priority, industryType, customerType } = req.query;
 
     const companyId = user.company || user._id;
 
     let conditions = [{ company: companyId }];
 
-    // ── Search filter ──
+    // ── Search ──
     if (
       q !== undefined && q !== null &&
       q.trim() !== "" && q.trim().toLowerCase() !== "null" &&
@@ -53,7 +54,7 @@ exports.showAll = async (req, res) => {
       });
     }
 
-    // ── Owned By filter ──
+    // ── Owned By ──
     if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
       if (ownedBy.trim().toLowerCase() === "na") {
         conditions.push({
@@ -71,7 +72,7 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ── Created By filter ──
+    // ── Created By ──
     if (createdBy && createdBy.trim() !== "" && createdBy.toLowerCase() !== "null") {
       try {
         const Employee = require("../models/employeeModel");
@@ -97,6 +98,41 @@ exports.showAll = async (req, res) => {
       }
     }
 
+    // ── Customer Priority ──
+    if (priority && priority.trim() !== "") {
+      if (priority.trim().toUpperCase() === "NA") {
+        conditions.push({
+          $or: [
+            { customerPriority: { $exists: false } },
+            { customerPriority: null },
+            { customerPriority: "" },
+          ],
+        });
+      } else {
+        conditions.push({ customerPriority: priority.trim().toUpperCase() });
+      }
+    }
+
+    // ── Industry Type ──
+    if (industryType && industryType.trim() !== "") {
+      if (industryType.trim().toUpperCase() === "NA") {
+        conditions.push({
+          $or: [
+            { industryType: { $exists: false } },
+            { industryType: null },
+            { industryType: "" },
+          ],
+        });
+      } else {
+        conditions.push({ industryType: industryType.trim() });
+      }
+    }
+
+    // ── Customer Type ──
+    if (customerType && customerType.trim() !== "") {
+      conditions.push({ customerType: customerType.trim().toLowerCase() });
+    }
+
     const query = conditions.length > 1 ? { $and: conditions } : conditions[0];
 
     const totalCustomers = await Customer.countDocuments(query);
@@ -108,19 +144,9 @@ exports.showAll = async (req, res) => {
       .skip(skip)
       .limit(limit)
       .populate("createdBy", "name email")
+      .populate("branchOf", "custName email")
       .sort({ createdAt: -1 })
       .lean();
-
-    if (customers.length === 0) {
-      return res.status(200).json({
-        success: true,
-        customers: [],
-        pagination: {
-          currentPage: page, totalPages, totalCustomers,
-          limit, hasNextPage: false, hasPrevPage: false,
-        },
-      });
-    }
 
     res.status(200).json({
       success: true,
@@ -135,6 +161,39 @@ exports.showAll = async (req, res) => {
       success: false,
       error: "Error while fetching customers: " + error.message,
     });
+  }
+};
+
+// ── Get ALL customers for branch selection dropdown ──
+exports.getCustomersForBranch = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+    const { search } = req.query;
+
+    let query = { company: companyId };
+
+    if (search && search.trim() !== "") {
+      const searchRegex = new RegExp(search, "i");
+      query = {
+        company: companyId,
+        $or: [
+          { custName: { $regex: searchRegex } },
+          { email: { $regex: searchRegex } },
+          { GSTNo: { $regex: searchRegex } },
+        ],
+      };
+    }
+
+    const customers = await Customer.find(query)
+      .select("_id custName email GSTNo customerType")
+      .sort({ custName: 1 })
+      .limit(50000)
+      .lean();
+
+    res.status(200).json({ success: true, customers });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching customers: " + error.message });
   }
 };
 
@@ -155,6 +214,7 @@ exports.createCustomer = async (req, res) => {
       customerContactPersonName5, phoneNumber5,
       customerContactPersonEmail5, customerContactPersonDesignation5,
       zone, ownedBy, industryType, industryTypeOther, customerPriority,
+      customerType, branchOf,
     } = req.body;
 
     const existingCustomer = await Customer.findOne({
@@ -183,6 +243,22 @@ exports.createCustomer = async (req, res) => {
       });
     }
 
+    if (customerType === 'branch') {
+      if (!branchOf) {
+        return res.status(400).json({
+          success: false,
+          error: "Please select a customer for this branch",
+        });
+      }
+      const parentCustomer = await Customer.findById(branchOf);
+      if (!parentCustomer) {
+        return res.status(400).json({
+          success: false,
+          error: "Selected customer not found",
+        });
+      }
+    }
+
     const newCust = new Customer({
       custName,
       GSTNo,
@@ -190,32 +266,29 @@ exports.createCustomer = async (req, res) => {
       email: email.toLowerCase().trim(),
       createdBy: user._id,
       ownedBy: ownedBy || user.name,
-      // Contact 1
+      customerType: customerType || 'main',
+      branchOf: customerType === 'branch' ? branchOf : null,
       customerContactPersonName1,
-      phoneNumber1,
+      phoneNumber1: phoneNumber1 || '',
       customerContactPersonEmail1: customerContactPersonEmail1 || '',
       customerContactPersonDesignation1: customerContactPersonDesignation1 || '',
-      // Contact 2
       customerContactPersonName2: customerContactPersonName2 || '',
       phoneNumber2: phoneNumber2 || '',
       customerContactPersonEmail2: customerContactPersonEmail2 || '',
       customerContactPersonDesignation2: customerContactPersonDesignation2 || '',
-      // Contact 3
       customerContactPersonName3: customerContactPersonName3 || '',
       phoneNumber3: phoneNumber3 || '',
       customerContactPersonEmail3: customerContactPersonEmail3 || '',
       customerContactPersonDesignation3: customerContactPersonDesignation3 || '',
-      // Contact 4
       customerContactPersonName4: customerContactPersonName4 || '',
       phoneNumber4: phoneNumber4 || '',
       customerContactPersonEmail4: customerContactPersonEmail4 || '',
       customerContactPersonDesignation4: customerContactPersonDesignation4 || '',
-      // Contact 5
       customerContactPersonName5: customerContactPersonName5 || '',
       phoneNumber5: phoneNumber5 || '',
       customerContactPersonEmail5: customerContactPersonEmail5 || '',
       customerContactPersonDesignation5: customerContactPersonDesignation5 || '',
-      billingAddress,
+      billingAddress: billingAddress || { add: '', city: '', state: '', country: '', pincode: '' },
       zone,
       industryType,
       industryTypeOther: industryType === 'Other' ? industryTypeOther : undefined,
@@ -229,6 +302,8 @@ exports.createCustomer = async (req, res) => {
     } catch (logError) {
       console.error('Error logging customer creation:', logError);
     }
+
+    await savedCustomer.populate("branchOf", "custName email");
 
     res.status(201).json({
       success: true,
@@ -249,6 +324,14 @@ exports.deleteCustomer = async (req, res) => {
   try {
     const user = req.user;
     const customerId = req.params.id;
+
+    const branches = await Customer.find({ branchOf: customerId });
+    if (branches.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Customer cannot be deleted as it has associated branches. Delete branches first.",
+      });
+    }
 
     const projects = await Project.find({ custId: customerId });
     if (projects.length > 0) {
@@ -297,6 +380,39 @@ exports.updateCustomer = async (req, res) => {
       });
     }
 
+    if (updatedData.customerType === 'branch') {
+      if (!updatedData.branchOf) {
+        return res.status(400).json({
+          success: false,
+          error: "Please select a customer for this branch",
+        });
+      }
+      if (updatedData.branchOf === id) {
+        return res.status(400).json({
+          success: false,
+          error: "Customer cannot be a branch of itself",
+        });
+      }
+      const parentCustomer = await Customer.findById(updatedData.branchOf);
+      if (!parentCustomer) {
+        return res.status(400).json({
+          success: false,
+          error: "Selected customer not found",
+        });
+      }
+    }
+
+    if (existingCustomer.customerType === 'branch' && updatedData.customerType === 'main') {
+      const branches = await Customer.find({ branchOf: id });
+      if (branches.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Cannot change to main customer as it has associated branches",
+        });
+      }
+      updatedData.branchOf = null;
+    }
+
     const oldCustomerData = {
       custName: existingCustomer.custName,
       email: existingCustomer.email,
@@ -317,6 +433,8 @@ exports.updateCustomer = async (req, res) => {
       industryType: existingCustomer.industryType,
       industryTypeOther: existingCustomer.industryTypeOther,
       customerPriority: existingCustomer.customerPriority,
+      customerType: existingCustomer.customerType,
+      branchOf: existingCustomer.branchOf,
       _id: existingCustomer._id,
     };
 
@@ -351,6 +469,8 @@ exports.updateCustomer = async (req, res) => {
     trackChanges("industryType", existingCustomer.industryType, updatedData.industryType);
     trackChanges("industryTypeOther", existingCustomer.industryTypeOther, updatedData.industryTypeOther);
     trackChanges("customerPriority", existingCustomer.customerPriority, updatedData.customerPriority);
+    trackChanges("customerType", existingCustomer.customerType, updatedData.customerType);
+    trackChanges("branchOf", existingCustomer.branchOf, updatedData.branchOf);
 
     if (updatedData.billingAddress) {
       trackChanges("billingAddress.add", existingCustomer.billingAddress?.add, updatedData.billingAddress.add);
@@ -362,7 +482,7 @@ exports.updateCustomer = async (req, res) => {
 
     const updatedCustomerDoc = await Customer.findByIdAndUpdate(id, updatedData, {
       new: true, runValidators: true,
-    }).populate("createdBy", "name email");
+    }).populate("createdBy", "name email").populate("branchOf", "custName email");
 
     const updatedCustomer = {
       custName: updatedCustomerDoc.custName,
@@ -384,6 +504,8 @@ exports.updateCustomer = async (req, res) => {
       industryType: updatedCustomerDoc.industryType,
       industryTypeOther: updatedCustomerDoc.industryTypeOther,
       customerPriority: updatedCustomerDoc.customerPriority,
+      customerType: updatedCustomerDoc.customerType,
+      branchOf: updatedCustomerDoc.branchOf,
       _id: updatedCustomerDoc._id,
     };
 
@@ -411,8 +533,9 @@ exports.exportCustomersPDF = async (req, res) => {
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf')
       .populate("createdBy", "name")
+      .populate("branchOf", "custName")
       .sort({ createdAt: -1 });
 
     const doc = new PDFDocument({
@@ -451,14 +574,14 @@ exports.exportCustomersPDF = async (req, res) => {
     const headers = [
       'Sr No', 'Name', 'Email', 'Phone 1', 'Contact 1', 'Email 1', 'Designation 1',
       'Contact 2', 'Email 2', 'Designation 2',
-      'GST No', 'Zone', 'Industry', 'Priority', 'City', 'State', 'Created By', 'Owned By',
+      'GST No', 'Zone', 'Industry', 'Priority', 'Type', 'Branch Of', 'City', 'State', 'Created By', 'Owned By',
     ];
-    const columnWidth = [25, 55, 65, 45, 50, 60, 55, 50, 60, 55, 50, 30, 50, 35, 40, 40, 45, 45];
+    const columnWidth = [25, 50, 60, 45, 45, 55, 50, 45, 55, 50, 45, 28, 45, 30, 30, 50, 35, 35, 40, 40];
     const rowHeight = 25;
 
     const drawHeaders = (yPosition) => {
       let currentX = 30;
-      doc.rect(30, yPosition, 810, rowHeight).fill('#3498db');
+      doc.rect(30, yPosition, 820, rowHeight).fill('#3498db');
       doc.fillColor('#ffffff');
       doc.fontSize(7);
       headers.forEach((header, i) => {
@@ -477,7 +600,7 @@ exports.exportCustomersPDF = async (req, res) => {
         yPosition = 50;
         yPosition = drawHeaders(yPosition);
       }
-      if (alternateRow) doc.rect(30, yPosition, 810, rowHeight).fill('#f8f9fa');
+      if (alternateRow) doc.rect(30, yPosition, 820, rowHeight).fill('#f8f9fa');
       alternateRow = !alternateRow;
 
       let currentX = 30;
@@ -501,6 +624,8 @@ exports.exportCustomersPDF = async (req, res) => {
         customer.zone || '',
         industryDisplay,
         customer.customerPriority || 'P2',
+        customer.customerType === 'branch' ? 'Branch' : 'Main',
+        customer.branchOf?.custName || '',
         customer.billingAddress?.city || '',
         customer.billingAddress?.state || '',
         customer.createdBy?.name || '',
@@ -536,8 +661,9 @@ exports.exportCustomersExcel = async (req, res) => {
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf')
       .populate("createdBy", "name email")
+      .populate("branchOf", "custName email")
       .sort({ createdAt: -1 });
 
     const workbook = new ExcelJS.Workbook();
@@ -549,18 +675,20 @@ exports.exportCustomersExcel = async (req, res) => {
     worksheet.columns = [
       { header: 'Sr No', key: 'srNo', width: 8 },
       { header: 'Customer Name', key: 'custName', width: 25 },
+      { header: 'Type', key: 'customerType', width: 10 },
+      { header: 'Branch Of', key: 'branchOf', width: 25 },
       { header: 'Email', key: 'email', width: 30 },
-      { header: 'Phone 1', key: 'phoneNumber1', width: 15 },
+      { header: 'Phone 1', key: 'phoneNumber1', width: 18 },
       { header: 'GST No', key: 'GSTNo', width: 15 },
       { header: 'Zone', key: 'zone', width: 10 },
       { header: 'Industry Type', key: 'industryType', width: 25 },
       { header: 'Priority', key: 'customerPriority', width: 10 },
       { header: 'Contact 1 Name', key: 'contactName1', width: 20 },
-      { header: 'Contact 1 Phone', key: 'contactPhone1', width: 15 },
+      { header: 'Contact 1 Phone', key: 'contactPhone1', width: 18 },
       { header: 'Contact 1 Email', key: 'contactEmail1', width: 28 },
       { header: 'Contact 1 Designation', key: 'contactDesig1', width: 22 },
       { header: 'Contact 2 Name', key: 'contactName2', width: 20 },
-      { header: 'Contact 2 Phone', key: 'contactPhone2', width: 15 },
+      { header: 'Contact 2 Phone', key: 'contactPhone2', width: 18 },
       { header: 'Contact 2 Email', key: 'contactEmail2', width: 28 },
       { header: 'Contact 2 Designation', key: 'contactDesig2', width: 22 },
       { header: 'Address', key: 'address', width: 35 },
@@ -594,6 +722,8 @@ exports.exportCustomersExcel = async (req, res) => {
       const row = worksheet.addRow({
         srNo: index + 1,
         custName: customer.custName || '',
+        customerType: customer.customerType === 'branch' ? 'Branch' : 'Main',
+        branchOf: customer.branchOf?.custName || '',
         email: customer.email || '',
         phoneNumber1: customer.phoneNumber1 || '',
         GSTNo: customer.GSTNo || '',
@@ -640,7 +770,7 @@ exports.exportCustomersExcel = async (req, res) => {
     });
     summaryRow.height = 25;
     summaryRow.eachCell((cell, colNumber) => {
-      if (colNumber === 2 || colNumber === 3) {
+      if (colNumber === 2 || colNumber === 4) {
         cell.font = { bold: true };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'e8f5e9' } };
       }

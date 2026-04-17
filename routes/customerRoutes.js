@@ -1,12 +1,14 @@
 const express = require('express');
 const { permissionMiddleware, isCompany } = require('../middlewares/auth');
-const { showAll, createCustomer, updateCustomer, deleteCustomer, getCustomer, exportCustomersPDF, exportCustomersExcel } = require('../controllers/customerController');
+const { showAll, createCustomer, updateCustomer, deleteCustomer, getCustomer, exportCustomersPDF, exportCustomersExcel, getCustomersForBranch } = require('../controllers/customerController');
 const router = express.Router();
 
-// IMPORTANT: Export routes MUST come BEFORE parameterized routes like /:id
-// Otherwise Express treats 'export' as an ID parameter
+// Export routes MUST come BEFORE parameterized routes
 router.get('/export/pdf', permissionMiddleware(['viewCustomer']), exportCustomersPDF);
 router.get('/export/excel', permissionMiddleware(['viewCustomer']), exportCustomersExcel);
+
+// Get ALL customers for branch dropdown (with search)
+router.get('/branch-customers', permissionMiddleware(['viewCustomer']), getCustomersForBranch);
 
 // General routes
 router.get('/', permissionMiddleware(['viewCustomer']), showAll);
@@ -14,9 +16,6 @@ router.get('/', permissionMiddleware(['viewCustomer']), showAll);
 // Parameterized routes come AFTER specific routes
 router.get('/:id', permissionMiddleware(['viewCustomer']), getCustomer);
 
-// ✅ FIX: Allow 'createCustomer' OR 'createLead' permission.
-// Sales employees already have 'createLead', so they can now create customers from leads.
-// Managers/company with 'createCustomer' continue to work as before.
 router.post('/', permissionMiddleware(['createCustomer', 'createLead']), createCustomer);
 
 router.put('/:id', permissionMiddleware(['updateCustomer']), updateCustomer);
