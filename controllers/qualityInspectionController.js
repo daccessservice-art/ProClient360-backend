@@ -1,10 +1,63 @@
 const QualityInspection = require("../models/qualityInspectionModel");
 
+// Helper function to generate assets
+function generateAssetsForItem(qcDoc, item) {
+  const assets = [];
+  const qcOkQty = item.qcOkQuantity || 0;
+  const itemsPerBox = item.itemsPerBox || 1;
+  const warrantyMonths = item.serviceWarrantyMonths || 0;
+  const inDate = new Date(qcDoc.qcDate);
+  
+  let warrantyExpiryDate = null;
+  if (warrantyMonths > 0) {
+    warrantyExpiryDate = new Date(inDate);
+    warrantyExpiryDate.setMonth(warrantyExpiryDate.getMonth() + warrantyMonths);
+  }
+
+  const totalBoxes = Math.ceil(qcOkQty / itemsPerBox);
+  let assetSerial = 1;
+  
+  // Use your LIVE frontend URL here
+  const frontendUrl = process.env.FRONTEND_URL || 'https://proclient360.com';
+  
+  for (let boxNum = 1; boxNum <= totalBoxes; boxNum++) {
+    const itemsInThisBox = (boxNum === totalBoxes) 
+      ? (qcOkQty - (boxNum - 1) * itemsPerBox) 
+      : itemsPerBox;
+
+    for (let itemInBox = 1; itemInBox <= itemsInThisBox; itemInBox++) {
+      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${item.brandName.substring(0, 3).toUpperCase()}-${String(assetSerial).padStart(4, '0')}`;
+      
+      // CHANGED: Using URL instead of JSON for mobile scanning
+      const qrCodeData = `${frontendUrl}/asset/${assetId}`;
+
+      assets.push({
+        assetId,
+        qrCodeData,
+        brandName: item.brandName,
+        modelNo: item.modelNo,
+        unit: item.unit,
+        inDate,
+        outDate: null,
+        serviceWarrantyMonths: warrantyMonths,
+        warrantyExpiryDate,
+        status: 'In Warehouse',
+        boxNumber: itemsPerBox > 1 ? `Box-${boxNum}` : null,
+      });
+
+      assetSerial++;
+    }
+  }
+
+  return assets;
+}
+
 exports.getQualityInspection = async (req, res) => {
   try {
     const qc = await QualityInspection.findById(req.params.id)
       .populate('createdBy', 'name email')
-      .populate('company', 'name');
+      .populate('company', 'name')
+      .populate('items.assets.assignedTo', 'customerName');
     
     if (!qc) {
       return res.status(404).json({ success: false, error: "Quality inspection not found" });
@@ -99,14 +152,34 @@ exports.createQualityInspection = async (req, res) => {
       ...qcData,
       company: user.company ? user.company : user._id,
       createdBy: user._id,
+      status: 'Completed',
     });
+
+    let totalAssets = 0;
+    for (const item of newQC.items) {
+      const qcOkQty = item.qcOkQuantity || 0;
+      totalAssets += qcOkQty;
+    }
+    newQC.totalAssets = totalAssets;
 
     if (newQC) {
       await newQC.save();
       
+      for (const item of newQC.items) {
+        if (!item.assets || item.assets.length === 0) {
+          const assets = generateAssetsForItem(newQC, item);
+          item.assets = assets;
+        }
+      }
+      await newQC.save();
+
+      await newQC.populate('createdBy', 'name email');
+      await newQC.populate('company', 'name');
+      
       res.status(201).json({
         success: true,
-        message: "Quality inspection created successfully",
+        message: "Quality inspection created successfully with assets",
+        qualityInspection: newQC,
       });
     } else {
       res.status(400).json({ 
@@ -166,6 +239,38 @@ exports.updateQualityInspection = async (req, res) => {
       });
     }
 
+    if (updatedData.items) {
+      let totalAssets = 0;
+      
+      for (let i = 0; i < updatedData.items.length; i++) {
+        const item = updatedData.items[i];
+        const existingItem = existingQC.items[i];
+        
+        if (existingItem && (
+          item.qcOkQuantity !== existingItem.qcOkQuantity ||
+          item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
+          item.itemsPerBox !== existingItem.itemsPerBox
+        )) {
+          const existingAssets = existingItem.assets?.filter(a => a.status === 'Dispatched' || a.status === 'In Service') || [];
+          
+          const newAssetsNeeded = item.qcOkQuantity - existingAssets.length;
+          if (newAssetsNeeded > 0) {
+            const tempQC = { ...existingQC.toObject(), items: [item] };
+            const newAssets = generateAssetsForItem(tempQC, item);
+            item.assets = [...existingAssets, ...newAssets.slice(0, newAssetsNeeded)];
+          } else {
+            item.assets = existingAssets.slice(0, item.qcOkQuantity);
+          }
+        } else if (existingItem?.assets) {
+          item.assets = existingItem.assets;
+        }
+        
+        totalAssets += item.qcOkQuantity || 0;
+      }
+      
+      updatedData.totalAssets = totalAssets;
+    }
+
     const updatedQC = await QualityInspection.findByIdAndUpdate(
       id, 
       updatedData, 
@@ -173,7 +278,9 @@ exports.updateQualityInspection = async (req, res) => {
         new: true,
         runValidators: true,
       }
-    );
+    ).populate('createdBy', 'name email')
+      .populate('company', 'name')
+      .populate('items.assets.assignedTo', 'customerName');
 
     res.status(200).json({ 
       success: true, 
@@ -186,5 +293,269 @@ exports.updateQualityInspection = async (req, res) => {
       success: false, 
       error: "Error updating quality inspection: " + error.message 
     });
+  }
+};
+
+exports.getAssetByQR = async (req, res) => {
+  try {
+    const { qrData } = req.params;
+    
+    let searchQuery;
+    
+    try {
+      const parsedData = JSON.parse(decodeURIComponent(qrData));
+      searchQuery = { 'items.assets.assetId': parsedData.assetId };
+    } catch {
+      searchQuery = { 'items.assets.assetId': qrData };
+    }
+
+    const qc = await QualityInspection.findOne(searchQuery)
+      .populate('createdBy', 'name email')
+      .populate('company', 'name')
+      .populate('items.assets.assignedTo', 'customerName')
+      .lean();
+    
+    if (!qc) {
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
+
+    let asset = null;
+    let itemInfo = null;
+    
+    for (const item of qc.items) {
+      const foundAsset = item.assets?.find(a => {
+        try {
+          const parsedData = JSON.parse(decodeURIComponent(qrData));
+          return a.assetId === parsedData.assetId;
+        } catch {
+          return a.assetId === qrData;
+        }
+      });
+      
+      if (foundAsset) {
+        asset = foundAsset;
+        itemInfo = {
+          brandName: item.brandName,
+          modelNo: item.modelNo,
+          receivedQuantity: item.receivedQuantity,
+          unit: item.unit,
+          qcOkQuantity: item.qcOkQuantity,
+        };
+        break;
+      }
+    }
+
+    if (!asset) {
+      return res.status(404).json({ success: false, error: "Asset not found in QC" });
+    }
+
+    if (asset.warrantyExpiryDate && new Date() > new Date(asset.warrantyExpiryDate) && asset.status !== 'Warranty Expired') {
+      await QualityInspection.updateOne(
+        { 'items.assets.assetId': asset.assetId },
+        { $set: { 'items.$.assets.$[elem].status': 'Warranty Expired' } },
+        { arrayFilters: [{ 'elem.assetId': asset.assetId }] }
+      );
+      asset.status = 'Warranty Expired';
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Asset found",
+      asset: {
+        ...asset,
+        qcNumber: qc.qcNumber,
+        grnNumber: qc.grnNumber,
+        qcDate: qc.qcDate,
+        company: qc.company,
+        itemInfo,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error fetching asset: " + error.message });
+  }
+};
+
+exports.updateAssetStatus = async (req, res) => {
+  try {
+    const { qcId, assetId } = req.params;
+    const { status, outDate, assignedTo, serviceNote } = req.body;
+
+    const qc = await QualityInspection.findById(qcId);
+    if (!qc) {
+      return res.status(404).json({ success: false, error: "QC not found" });
+    }
+
+    let assetFound = false;
+
+    for (const item of qc.items) {
+      for (const asset of item.assets) {
+        if (asset.assetId === assetId) {
+          if (status) asset.status = status;
+          if (outDate) asset.outDate = new Date(outDate);
+          if (assignedTo) asset.assignedTo = assignedTo;
+          if (serviceNote) {
+            asset.serviceHistory = asset.serviceHistory || [];
+            asset.serviceHistory.push({
+              date: new Date(),
+              description: serviceNote,
+              servicedBy: req.user?.name || 'System',
+            });
+          }
+          assetFound = true;
+          break;
+        }
+      }
+      if (assetFound) break;
+    }
+
+    if (!assetFound) {
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
+
+    await qc.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Asset status updated successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error updating asset status: " + error.message,
+    });
+  }
+};
+
+exports.getAllAssets = async (req, res) => {
+  try {
+    const user = req.user;
+    let page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    let skip = (page - 1) * limit;
+
+    const { q, status, warrantyStatus } = req.query;
+    
+    let baseQuery = {
+      company: user.company || user._id,
+      'items.assets.0': { $exists: true },
+    };
+
+    if (q && q.trim() !== "" && q.toLowerCase() !== "null" && q.toLowerCase() !== "undefined") {
+      const searchRegex = new RegExp(q, "i");
+      baseQuery.$or = [
+        { qcNumber: { $regex: searchRegex } },
+        { grnNumber: { $regex: searchRegex } },
+        { 'items.assets.assetId': { $regex: searchRegex } },
+        { 'items.brandName': { $regex: searchRegex } },
+        { 'items.modelNo': { $regex: searchRegex } },
+      ];
+    }
+
+    const qcs = await QualityInspection.find(baseQuery)
+      .skip(skip)
+      .limit(limit)
+      .populate('createdBy', 'name email')
+      .populate('company', 'name')
+      .populate('items.assets.assignedTo', 'customerName')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    let allAssets = [];
+    for (const qc of qcs) {
+      for (const item of qc.items) {
+        if (item.assets && item.assets.length > 0) {
+          for (const asset of item.assets) {
+            if (status && status !== 'All' && asset.status !== status) continue;
+            
+            if (warrantyStatus) {
+              const now = new Date();
+              if (warrantyStatus === 'Active' && (!asset.warrantyExpiryDate || now > new Date(asset.warrantyExpiryDate))) continue;
+              if (warrantyStatus === 'Expired' && (!asset.warrantyExpiryDate || now <= new Date(asset.warrantyExpiryDate))) continue;
+              if (warrantyStatus === 'No Warranty' && asset.serviceWarrantyMonths > 0) continue;
+            }
+
+            allAssets.push({
+              ...asset,
+              qcNumber: qc.qcNumber,
+              qcId: qc._id,
+              grnNumber: qc.grnNumber,
+              qcDate: qc.qcDate,
+              brandName: item.brandName,
+              modelNo: item.modelNo,
+              companyName: qc.company?.name,
+            });
+          }
+        }
+      }
+    }
+
+    const totalQCs = await QualityInspection.countDocuments(baseQuery);
+    const totalPages = Math.ceil(totalQCs / limit);
+
+    res.status(200).json({
+      success: true,
+      assets: allAssets,
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalAssets: allAssets.length,
+        limit,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error fetching assets: " + error.message,
+    });
+  }
+};
+
+// PUBLIC route - No auth required for mobile scanning
+exports.getPublicAssetByAssetId = async (req, res) => {
+  try {
+    const { assetId } = req.params;
+    
+    const qc = await QualityInspection.findOne({
+      'items.assets.assetId': assetId
+    }).lean();
+    
+    if (!qc) {
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
+
+    let asset = null;
+    
+    for (const item of qc.items) {
+      const foundAsset = item.assets?.find(a => a.assetId === assetId);
+      if (foundAsset) {
+        asset = foundAsset;
+        break;
+      }
+    }
+
+    if (!asset) {
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      asset: {
+        assetId: asset.assetId,
+        brandName: asset.brandName,
+        modelNo: asset.modelNo,
+        unit: asset.unit,
+        inDate: asset.inDate,
+        outDate: asset.outDate,
+        serviceWarrantyMonths: asset.serviceWarrantyMonths,
+        warrantyExpiryDate: asset.warrantyExpiryDate,
+        status: asset.status,
+        boxNumber: asset.boxNumber,
+        serviceHistory: asset.serviceHistory || [],
+        qcNumber: qc.qcNumber,
+        grnNumber: qc.grnNumber,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching asset: " + error.message });
   }
 };
