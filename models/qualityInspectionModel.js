@@ -182,16 +182,22 @@ const qualityInspectionSchema = new mongoose.Schema({
 qualityInspectionSchema.index({ 'items.assets.assetId': 1 });
 qualityInspectionSchema.index({ 'items.assets.qrCodeData': 1 });
 
+// ─── PRE-SAVE: Auto-generate QC Number ───────────────────────────────────────
+// NOTE: The post-save hook that used to generate assets has been REMOVED.
+// Asset generation is handled exclusively in the controller (qualityInspectionController.js)
+// using URL-based QR codes so that mobile scanning opens the browser directly.
+// Having both the hook and controller generate assets caused every item to get
+// double the assets (2 QR codes per asset instead of 1).
 qualityInspectionSchema.pre('save', async function(next) {
   if (!this.qcNumber) {
     const qcDate = new Date(this.qcDate);
     const currentYear = qcDate.getFullYear();
     const nextYear = currentYear + 1;
     const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
-    
-    const startOfYear = new Date(currentYear, 3, 1); 
-    const endOfYear = new Date(nextYear, 2, 31); 
-    
+
+    const startOfYear = new Date(currentYear, 3, 1);
+    const endOfYear = new Date(nextYear, 2, 31);
+
     try {
       const latestQC = await mongoose.model('QualityInspection').findOne({
         qcDate: {
@@ -199,7 +205,7 @@ qualityInspectionSchema.pre('save', async function(next) {
           $lte: endOfYear
         }
       }).sort({ qcNumber: -1 });
-      
+
       let serialNumber = 1;
       if (latestQC && latestQC.qcNumber) {
         const parts = latestQC.qcNumber.split('/');
@@ -210,10 +216,10 @@ qualityInspectionSchema.pre('save', async function(next) {
           }
         }
       }
-      
+
       const formattedSerial = String(serialNumber).padStart(3, '0');
       this.qcNumber = `QC/${financialYear}/${formattedSerial}`;
-      
+
       next();
     } catch (error) {
       next(error);
@@ -223,105 +229,6 @@ qualityInspectionSchema.pre('save', async function(next) {
   }
 });
 
-// Post-save hook to generate assets
-qualityInspectionSchema.post('save', async function(doc, next) {
-  try {
-    // Only generate assets if QC is completed and assets don't exist
-    if (doc.status === 'Completed') {
-      let needsUpdate = false;
-      let totalAssets = 0;
-
-      for (const item of doc.items) {
-        if (!item.assets || item.assets.length === 0) {
-          const assets = generateAssetsForItem(doc, item);
-          item.assets = assets;
-          totalAssets += assets.length;
-          needsUpdate = true;
-        } else {
-          totalAssets += item.assets.length;
-        }
-      }
-
-      if (needsUpdate) {
-        doc.totalAssets = totalAssets;
-        await doc.save();
-      } else if (doc.totalAssets !== totalAssets) {
-        doc.totalAssets = totalAssets;
-        await doc.save();
-      }
-    }
-    next();
-  } catch (error) {
-    console.error('Error generating assets:', error);
-    next();
-  }
-});
-
-// Function to generate assets for an item
-function generateAssetsForItem(qcDoc, item) {
-  const assets = [];
-  const qcOkQty = item.qcOkQuantity || 0;
-  const itemsPerBox = item.itemsPerBox || 1;
-  const warrantyMonths = item.serviceWarrantyMonths || 0;
-  const inDate = new Date(qcDoc.qcDate);
-  
-  // Calculate warranty expiry date
-  let warrantyExpiryDate = null;
-  if (warrantyMonths > 0) {
-    warrantyExpiryDate = new Date(inDate);
-    warrantyExpiryDate.setMonth(warrantyExpiryDate.getMonth() + warrantyMonths);
-  }
-
-  // Calculate number of boxes
-  const totalBoxes = Math.ceil(qcOkQty / itemsPerBox);
-  
-  let assetSerial = 1;
-  
-  for (let boxNum = 1; boxNum <= totalBoxes; boxNum++) {
-    const itemsInThisBox = (boxNum === totalBoxes) 
-      ? (qcOkQty - (boxNum - 1) * itemsPerBox) 
-      : itemsPerBox;
-
-    for (let itemInBox = 1; itemInBox <= itemsInThisBox; itemInBox++) {
-      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${item.brandName.substring(0, 3).toUpperCase()}-${String(assetSerial).padStart(4, '0')}`;
-      
-      const qrCodeData = JSON.stringify({
-        assetId,
-        qcNumber: qcDoc.qcNumber,
-        grnNumber: qcDoc.grnNumber,
-        brandName: item.brandName,
-        modelNo: item.modelNo,
-        unit: item.unit,
-        inDate: inDate.toISOString(),
-        warrantyMonths,
-        warrantyExpiryDate: warrantyExpiryDate ? warrantyExpiryDate.toISOString() : null,
-        boxNumber: itemsPerBox > 1 ? `Box-${boxNum}` : null,
-        itemInBox: itemsPerBox > 1 ? `${itemInBox}/${itemsInThisBox}` : null,
-        company: qcDoc.company?.toString(),
-      });
-
-      assets.push({
-        assetId,
-        qrCodeData,
-        brandName: item.brandName,
-        modelNo: item.modelNo,
-        unit: item.unit,
-        inDate,
-        outDate: null,
-        serviceWarrantyMonths: warrantyMonths,
-        warrantyExpiryDate,
-        status: 'In Warehouse',
-        boxNumber: itemsPerBox > 1 ? `Box-${boxNum}` : null,
-      });
-
-      assetSerial++;
-    }
-  }
-
-  return assets;
-}
-
 const QualityInspection = mongoose.model('QualityInspection', qualityInspectionSchema);
 
 module.exports = QualityInspection;
-module.exports.generateAssetsForItem = generateAssetsForItem;

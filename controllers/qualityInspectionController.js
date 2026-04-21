@@ -1,13 +1,16 @@
 const QualityInspection = require("../models/qualityInspectionModel");
 
-// Helper function to generate assets
+// ─── SINGLE source of truth for asset generation ─────────────────────────────
+// Generates URL-based QR codes so mobile scanning opens the browser directly.
+// This function is the ONLY place assets are created — the model's post-save
+// hook has been removed to prevent duplicate assets (2 QR per item).
 function generateAssetsForItem(qcDoc, item) {
   const assets = [];
   const qcOkQty = item.qcOkQuantity || 0;
   const itemsPerBox = item.itemsPerBox || 1;
   const warrantyMonths = item.serviceWarrantyMonths || 0;
   const inDate = new Date(qcDoc.qcDate);
-  
+
   let warrantyExpiryDate = null;
   if (warrantyMonths > 0) {
     warrantyExpiryDate = new Date(inDate);
@@ -16,19 +19,22 @@ function generateAssetsForItem(qcDoc, item) {
 
   const totalBoxes = Math.ceil(qcOkQty / itemsPerBox);
   let assetSerial = 1;
-  
-  // Use your LIVE frontend URL here
+
+  // URL QR code — when scanned on mobile, opens the browser to the asset page
   const frontendUrl = process.env.FRONTEND_URL || 'https://proclient360.com';
-  
+
   for (let boxNum = 1; boxNum <= totalBoxes; boxNum++) {
-    const itemsInThisBox = (boxNum === totalBoxes) 
-      ? (qcOkQty - (boxNum - 1) * itemsPerBox) 
-      : itemsPerBox;
+    const itemsInThisBox =
+      boxNum === totalBoxes
+        ? qcOkQty - (boxNum - 1) * itemsPerBox
+        : itemsPerBox;
 
     for (let itemInBox = 1; itemInBox <= itemsInThisBox; itemInBox++) {
-      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${item.brandName.substring(0, 3).toUpperCase()}-${String(assetSerial).padStart(4, '0')}`;
-      
-      // CHANGED: Using URL instead of JSON for mobile scanning
+      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${item.brandName
+        .substring(0, 3)
+        .toUpperCase()}-${String(assetSerial).padStart(4, '0')}`;
+
+      // URL stored in QR — scanning with any phone camera opens the asset page
       const qrCodeData = `${frontendUrl}/asset/${assetId}`;
 
       assets.push({
@@ -58,15 +64,15 @@ exports.getQualityInspection = async (req, res) => {
       .populate('createdBy', 'name email')
       .populate('company', 'name')
       .populate('items.assets.assignedTo', 'customerName');
-    
+
     if (!qc) {
       return res.status(404).json({ success: false, error: "Quality inspection not found" });
     }
-    
-    res.status(200).json({ 
-      success: true, 
-      message: "Quality inspection fetched successfully", 
-      qc 
+
+    res.status(200).json({
+      success: true,
+      message: "Quality inspection fetched successfully",
+      qc
     });
   } catch (error) {
     res.status(500).json({ error: "Error in getting quality inspection: " + error.message });
@@ -101,9 +107,7 @@ exports.showAll = async (req, res) => {
         ],
       };
     } else {
-      query = {
-        company: user.company || user._id,
-      };
+      query = { company: user.company || user._id };
     }
 
     const qualityInspections = await QualityInspection.find(query)
@@ -126,14 +130,7 @@ exports.showAll = async (req, res) => {
     res.status(200).json({
       success: true,
       qualityInspections,
-      pagination: {
-        currentPage: page,
-        totalPages,
-        totalQCs,
-        limit,
-        hasNextPage,
-        hasPrevPage,
-      },
+      pagination: { currentPage: page, totalPages, totalQCs, limit, hasNextPage, hasPrevPage },
     });
   } catch (error) {
     res.status(500).json({
@@ -143,11 +140,18 @@ exports.showAll = async (req, res) => {
   }
 };
 
+// ─── CREATE QC ────────────────────────────────────────────────────────────────
+// Flow:
+//   1. Save QC (pre-save hook assigns qcNumber, nothing else)
+//   2. Generate assets with URL QR codes using the qcNumber we now have
+//   3. Attach assets to items and save once more
+// This is a single clean two-step save — no post-save hook, no duplicate assets.
 exports.createQualityInspection = async (req, res) => {
   try {
     const user = req.user;
     const qcData = req.body;
 
+    // Step 1 — save to get the auto-generated qcNumber from the pre-save hook
     const newQC = new QualityInspection({
       ...qcData,
       company: user.company ? user.company : user._id,
@@ -155,48 +159,35 @@ exports.createQualityInspection = async (req, res) => {
       status: 'Completed',
     });
 
+    await newQC.save();
+
+    // Step 2 — generate URL-based assets now that qcNumber is available
     let totalAssets = 0;
+
     for (const item of newQC.items) {
-      const qcOkQty = item.qcOkQuantity || 0;
-      totalAssets += qcOkQty;
+      const assets = generateAssetsForItem(newQC, item);
+      item.assets = assets;
+      totalAssets += assets.length;
     }
+
     newQC.totalAssets = totalAssets;
 
-    if (newQC) {
-      await newQC.save();
-      
-      for (const item of newQC.items) {
-        if (!item.assets || item.assets.length === 0) {
-          const assets = generateAssetsForItem(newQC, item);
-          item.assets = assets;
-        }
-      }
-      await newQC.save();
+    // Step 3 — save with assets (pre-save hook skips qcNumber since it already exists)
+    await newQC.save();
 
-      await newQC.populate('createdBy', 'name email');
-      await newQC.populate('company', 'name');
-      
-      res.status(201).json({
-        success: true,
-        message: "Quality inspection created successfully with assets",
-        qualityInspection: newQC,
-      });
-    } else {
-      res.status(400).json({ 
-        success: false,
-        error: "Invalid quality inspection data" 
-      });
-    }
+    await newQC.populate('createdBy', 'name email');
+    await newQC.populate('company', 'name');
+
+    res.status(201).json({
+      success: true,
+      message: "Quality inspection created successfully with assets",
+      qualityInspection: newQC,
+    });
   } catch (error) {
     if (error.name === "ValidationError") {
-      res.status(400).json({ 
-        success: false, 
-        error: error.message 
-      });
+      res.status(400).json({ success: false, error: error.message });
     } else {
-      res.status(500).json({ 
-        error: "Error creating quality inspection: " + error.message 
-      });
+      res.status(500).json({ error: "Error creating quality inspection: " + error.message });
     }
   }
 };
@@ -207,16 +198,10 @@ exports.deleteQualityInspection = async (req, res) => {
     const qc = await QualityInspection.findByIdAndDelete(qcId);
 
     if (!qc) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Quality inspection not found" 
-      });
+      return res.status(404).json({ success: false, error: "Quality inspection not found" });
     }
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Quality inspection deleted successfully" 
-    });
+    res.status(200).json({ success: true, message: "Quality inspection deleted successfully" });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -233,26 +218,28 @@ exports.updateQualityInspection = async (req, res) => {
     const existingQC = await QualityInspection.findById(id);
 
     if (!existingQC) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Quality inspection not found" 
-      });
+      return res.status(404).json({ success: false, error: "Quality inspection not found" });
     }
 
     if (updatedData.items) {
       let totalAssets = 0;
-      
+
       for (let i = 0; i < updatedData.items.length; i++) {
         const item = updatedData.items[i];
         const existingItem = existingQC.items[i];
-        
-        if (existingItem && (
-          item.qcOkQuantity !== existingItem.qcOkQuantity ||
-          item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
-          item.itemsPerBox !== existingItem.itemsPerBox
-        )) {
-          const existingAssets = existingItem.assets?.filter(a => a.status === 'Dispatched' || a.status === 'In Service') || [];
-          
+
+        if (
+          existingItem &&
+          (item.qcOkQuantity !== existingItem.qcOkQuantity ||
+            item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
+            item.itemsPerBox !== existingItem.itemsPerBox)
+        ) {
+          // Preserve dispatched/in-service assets, regenerate the rest
+          const existingAssets =
+            existingItem.assets?.filter(
+              a => a.status === 'Dispatched' || a.status === 'In Service'
+            ) || [];
+
           const newAssetsNeeded = item.qcOkQuantity - existingAssets.length;
           if (newAssetsNeeded > 0) {
             const tempQC = { ...existingQC.toObject(), items: [item] };
@@ -264,74 +251,75 @@ exports.updateQualityInspection = async (req, res) => {
         } else if (existingItem?.assets) {
           item.assets = existingItem.assets;
         }
-        
+
         totalAssets += item.qcOkQuantity || 0;
       }
-      
+
       updatedData.totalAssets = totalAssets;
     }
 
-    const updatedQC = await QualityInspection.findByIdAndUpdate(
-      id, 
-      updatedData, 
-      {
-        new: true,
-        runValidators: true,
-      }
-    ).populate('createdBy', 'name email')
+    const updatedQC = await QualityInspection.findByIdAndUpdate(id, updatedData, {
+      new: true,
+      runValidators: true,
+    })
+      .populate('createdBy', 'name email')
       .populate('company', 'name')
       .populate('items.assets.assignedTo', 'customerName');
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Quality inspection updated successfully", 
-      updatedQC 
+    res.status(200).json({
+      success: true,
+      message: "Quality inspection updated successfully",
+      updatedQC
     });
   } catch (error) {
     console.error(error);
     res.status(500).json({
-      success: false, 
-      error: "Error updating quality inspection: " + error.message 
+      success: false,
+      error: "Error updating quality inspection: " + error.message
     });
   }
 };
 
+// ─── GET ASSET BY QR / ASSET ID ──────────────────────────────────────────────
+// Handles both old JSON-based QR codes and new URL-based QR codes.
+// When the user types an Asset ID manually, the plain ID is used directly.
 exports.getAssetByQR = async (req, res) => {
   try {
     const { qrData } = req.params;
-    
-    let searchQuery;
-    
+
+    // Resolve the actual assetId from whatever was passed:
+    //   - Full URL:  https://proclient360.com/asset/QC-2026-27-002-MIC-0001
+    //   - Plain ID:  QC-2026-27-002-MIC-0001
+    //   - Old JSON:  {"assetId":"QC-...","qcNumber":"...",...}
+    let assetId = qrData;
+
     try {
-      const parsedData = JSON.parse(decodeURIComponent(qrData));
-      searchQuery = { 'items.assets.assetId': parsedData.assetId };
+      // Case 1: old JSON-based QR code
+      const parsed = JSON.parse(decodeURIComponent(qrData));
+      if (parsed.assetId) assetId = parsed.assetId;
     } catch {
-      searchQuery = { 'items.assets.assetId': qrData };
+      // Case 2: URL-based QR code — extract the last path segment
+      if (qrData.startsWith('http')) {
+        assetId = qrData.split('/').pop();
+      }
+      // Case 3: plain asset ID — use as-is
     }
 
-    const qc = await QualityInspection.findOne(searchQuery)
+    const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId })
       .populate('createdBy', 'name email')
       .populate('company', 'name')
       .populate('items.assets.assignedTo', 'customerName')
       .lean();
-    
+
     if (!qc) {
       return res.status(404).json({ success: false, error: "Asset not found" });
     }
 
     let asset = null;
     let itemInfo = null;
-    
+
     for (const item of qc.items) {
-      const foundAsset = item.assets?.find(a => {
-        try {
-          const parsedData = JSON.parse(decodeURIComponent(qrData));
-          return a.assetId === parsedData.assetId;
-        } catch {
-          return a.assetId === qrData;
-        }
-      });
-      
+      const foundAsset = item.assets?.find(a => a.assetId === assetId);
       if (foundAsset) {
         asset = foundAsset;
         itemInfo = {
@@ -349,11 +337,16 @@ exports.getAssetByQR = async (req, res) => {
       return res.status(404).json({ success: false, error: "Asset not found in QC" });
     }
 
-    if (asset.warrantyExpiryDate && new Date() > new Date(asset.warrantyExpiryDate) && asset.status !== 'Warranty Expired') {
+    // Auto-expire warranty status
+    if (
+      asset.warrantyExpiryDate &&
+      new Date() > new Date(asset.warrantyExpiryDate) &&
+      asset.status !== 'Warranty Expired'
+    ) {
       await QualityInspection.updateOne(
-        { 'items.assets.assetId': asset.assetId },
+        { 'items.assets.assetId': assetId },
         { $set: { 'items.$.assets.$[elem].status': 'Warranty Expired' } },
-        { arrayFilters: [{ 'elem.assetId': asset.assetId }] }
+        { arrayFilters: [{ 'elem.assetId': assetId }] }
       );
       asset.status = 'Warranty Expired';
     }
@@ -414,14 +407,11 @@ exports.updateAssetStatus = async (req, res) => {
 
     await qc.save();
 
-    res.status(200).json({
-      success: true,
-      message: "Asset status updated successfully",
-    });
+    res.status(200).json({ success: true, message: "Asset status updated successfully" });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: "Error updating asset status: " + error.message,
+      error: "Error updating asset status: " + error.message
     });
   }
 };
@@ -431,10 +421,10 @@ exports.getAllAssets = async (req, res) => {
     const user = req.user;
     let page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
-    let skip = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     const { q, status, warrantyStatus } = req.query;
-    
+
     let baseQuery = {
       company: user.company || user._id,
       'items.assets.0': { $exists: true },
@@ -466,7 +456,7 @@ exports.getAllAssets = async (req, res) => {
         if (item.assets && item.assets.length > 0) {
           for (const asset of item.assets) {
             if (status && status !== 'All' && asset.status !== status) continue;
-            
+
             if (warrantyStatus) {
               const now = new Date();
               if (warrantyStatus === 'Active' && (!asset.warrantyExpiryDate || now > new Date(asset.warrantyExpiryDate))) continue;
@@ -495,36 +485,31 @@ exports.getAllAssets = async (req, res) => {
     res.status(200).json({
       success: true,
       assets: allAssets,
-      pagination: {
-        currentPage: page,
-        totalPages,
-        totalAssets: allAssets.length,
-        limit,
-      },
+      pagination: { currentPage: page, totalPages, totalAssets: allAssets.length, limit },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: "Error fetching assets: " + error.message,
+      error: "Error fetching assets: " + error.message
     });
   }
 };
 
-// PUBLIC route - No auth required for mobile scanning
+// PUBLIC route — no auth required for mobile QR scanning
 exports.getPublicAssetByAssetId = async (req, res) => {
   try {
     const { assetId } = req.params;
-    
+
     const qc = await QualityInspection.findOne({
       'items.assets.assetId': assetId
     }).lean();
-    
+
     if (!qc) {
       return res.status(404).json({ success: false, error: "Asset not found" });
     }
 
     let asset = null;
-    
+
     for (const item of qc.items) {
       const foundAsset = item.assets?.find(a => a.assetId === assetId);
       if (foundAsset) {
