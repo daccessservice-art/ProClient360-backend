@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
+const mongoose = require('mongoose');
 
 const dotenv = require('dotenv');
 dotenv.config();
@@ -69,6 +70,24 @@ const startServer = async () => {
 
     await connectDB();
     
+    // ===== FORCE DROP OLD QC ASSET INDEXES =====
+    const db = mongoose.connection.db;
+    if (db) {
+      try {
+        await db.collection('qualityinspections').dropIndex('items.assets.assetId_1');
+        console.log('✅ Dropped old items.assets.assetId_1 index');
+      } catch (e) {
+        // Ignore error if index doesn't exist
+      }
+      try {
+        await db.collection('qualityinspections').dropIndex('items.assets.qrCodeData_1');
+        console.log('✅ Dropped old items.assets.qrCodeData_1 index');
+      } catch (e) {
+        // Ignore error if index doesn't exist
+      }
+    }
+    // ===== END INDEX FIX =====
+
     console.log('Initializing daily lead report scheduler...');
     initializeDailyLeadReportScheduler();
 
