@@ -1,9 +1,12 @@
+// controllers/qualityInspectionController.js
 const QualityInspection = require("../models/qualityInspectionModel");
 
-// Single source of truth for asset generation — URL-based QR codes
 function generateAssetsForItem(qcDoc, item) {
   const assets = [];
   const qcOkQty = item.qcOkQuantity || 0;
+  
+  if (qcOkQty <= 0) return assets;
+  
   const itemsPerBox = item.itemsPerBox || 1;
   const warrantyMonths = item.serviceWarrantyMonths || 0;
   const inDate = new Date(qcDoc.qcDate);
@@ -23,16 +26,15 @@ function generateAssetsForItem(qcDoc, item) {
       boxNum === totalBoxes ? qcOkQty - (boxNum - 1) * itemsPerBox : itemsPerBox;
 
     for (let itemInBox = 1; itemInBox <= itemsInThisBox; itemInBox++) {
-      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${item.brandName
-        .substring(0, 3)
-        .toUpperCase()}-${String(assetSerial).padStart(4, '0')}`;
+      const brandPrefix = (item.brandName || 'XXX').substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'X');
+      const assetId = `${qcDoc.qcNumber.replace(/\//g, '-')}-${brandPrefix}-${String(assetSerial).padStart(4, '0')}`;
 
       assets.push({
         assetId,
         qrCodeData: `${frontendUrl}/asset/${assetId}`,
-        brandName: item.brandName,
-        modelNo: item.modelNo,
-        unit: item.unit,
+        brandName: item.brandName || '',
+        modelNo: item.modelNo || '',
+        unit: item.unit || 'No.',
         inDate,
         outDate: null,
         serviceWarrantyMonths: warrantyMonths,
@@ -109,37 +111,63 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ─── CREATE QC ────────────────────────────────────────────────────────────────
-// Production fix: use findByIdAndUpdate (runValidators: false) for the second
-// save so Mongoose subdocument validators don't re-run and block asset saving.
-// Root cause: on the first save validators pass fine; the second save (to attach
-// assets) re-runs faultyQuantity/qcOkQuantity cross-field validators which can
-// fail when Mongoose re-evaluates subdoc state from the raw update payload.
 exports.createQualityInspection = async (req, res) => {
   try {
     const user = req.user;
     const qcData = req.body;
 
-    // Step 1 — first save: bare document, pre-save hook assigns qcNumber
+    if (!qcData.items || qcData.items.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one item is required" });
+    }
+
+    for (const item of qcData.items) {
+      const total = (item.qcOkQuantity || 0) + (item.faultyQuantity || 0);
+      if (total !== item.receivedQuantity) {
+        return res.status(400).json({ 
+          success: false, 
+          error: `QC OK + Faulty must equal received quantity for ${item.brandName} ${item.modelNo}` 
+        });
+      }
+    }
+
+    const itemsWithoutAssets = qcData.items.map(item => ({
+      brandName: item.brandName,
+      modelNo: item.modelNo,
+      receivedQuantity: item.receivedQuantity,
+      unit: item.unit,
+      baseUOM: item.baseUOM || '',
+      qcOkQuantity: item.qcOkQuantity,
+      faultyQuantity: item.faultyQuantity,
+      remark: item.remark || '',
+      itemsPerBox: item.itemsPerBox || 1,
+      serviceWarrantyMonths: item.serviceWarrantyMonths || 0,
+      assets: [],
+    }));
+
     const newQC = new QualityInspection({
-      ...qcData,
+      qcDate: qcData.qcDate,
+      grnNumber: qcData.grnNumber,
+      items: itemsWithoutAssets,
       company: user.company ? user.company : user._id,
       createdBy: user._id,
       status: 'Completed',
+      totalAssets: 0,
     });
 
     await newQC.save();
 
-    // Step 2 — build items with assets using the now-available qcNumber
     const itemsWithAssets = newQC.items.map(item => {
       const plain = item.toObject();
-      plain.assets = generateAssetsForItem(newQC, item);
+      if (item.qcOkQuantity > 0) {
+        plain.assets = generateAssetsForItem(newQC, item);
+      } else {
+        plain.assets = [];
+      }
       return plain;
     });
 
-    const totalAssets = itemsWithAssets.reduce((sum, item) => sum + item.assets.length, 0);
+    const totalAssets = itemsWithAssets.reduce((sum, item) => sum + (item.assets?.length || 0), 0);
 
-    // Step 3 — patch with findByIdAndUpdate, bypassing validators
     await QualityInspection.findByIdAndUpdate(
       newQC._id,
       { $set: { items: itemsWithAssets, totalAssets } },
@@ -157,10 +185,18 @@ exports.createQualityInspection = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in createQualityInspection:", error);
-    if (error.name === "ValidationError") {
+    
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      const value = error.keyValue[field];
+      res.status(400).json({ 
+        success: false, 
+        error: `Duplicate value for ${field}: ${value}. Please try again.` 
+      });
+    } else if (error.name === "ValidationError") {
       res.status(400).json({ success: false, error: error.message });
     } else {
-      res.status(500).json({ error: "Error creating quality inspection: " + error.message });
+      res.status(500).json({ success: false, error: "Error creating quality inspection: " + error.message });
     }
   }
 };
@@ -194,19 +230,28 @@ exports.updateQualityInspection = async (req, res) => {
           item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
           item.itemsPerBox !== existingItem.itemsPerBox
         )) {
-          const existingAssets = existingItem.assets?.filter(a => a.status === 'Dispatched' || a.status === 'In Service') || [];
+          const existingAssets = existingItem.assets?.filter(a => 
+            a.status === 'Dispatched' || a.status === 'In Service'
+          ) || [];
+          
           const newAssetsNeeded = item.qcOkQuantity - existingAssets.length;
+          
           if (newAssetsNeeded > 0) {
             const tempQC = { ...existingQC.toObject(), items: [item] };
             const newAssets = generateAssetsForItem(tempQC, item);
             item.assets = [...existingAssets, ...newAssets.slice(0, newAssetsNeeded)];
-          } else {
+          } else if (newAssetsNeeded < 0) {
             item.assets = existingAssets.slice(0, item.qcOkQuantity);
+          } else {
+            item.assets = existingAssets;
           }
         } else if (existingItem?.assets) {
           item.assets = existingItem.assets;
+        } else {
+          item.assets = [];
         }
-        totalAssets += item.qcOkQuantity || 0;
+        
+        totalAssets += item.assets?.length || 0;
       }
       updatedData.totalAssets = totalAssets;
     }
@@ -244,7 +289,17 @@ exports.getAssetByQR = async (req, res) => {
     let asset = null, itemInfo = null;
     for (const item of qc.items) {
       const found = item.assets?.find(a => a.assetId === assetId);
-      if (found) { asset = found; itemInfo = { brandName: item.brandName, modelNo: item.modelNo, receivedQuantity: item.receivedQuantity, unit: item.unit, qcOkQuantity: item.qcOkQuantity }; break; }
+      if (found) { 
+        asset = found; 
+        itemInfo = { 
+          brandName: item.brandName, 
+          modelNo: item.modelNo, 
+          receivedQuantity: item.receivedQuantity, 
+          unit: item.unit, 
+          qcOkQuantity: item.qcOkQuantity 
+        }; 
+        break; 
+      }
     }
 
     if (!asset) return res.status(404).json({ success: false, error: "Asset not found in QC" });
@@ -258,7 +313,18 @@ exports.getAssetByQR = async (req, res) => {
       asset.status = 'Warranty Expired';
     }
 
-    res.status(200).json({ success: true, message: "Asset found", asset: { ...asset, qcNumber: qc.qcNumber, grnNumber: qc.grnNumber, qcDate: qc.qcDate, company: qc.company, itemInfo } });
+    res.status(200).json({ 
+      success: true, 
+      message: "Asset found", 
+      asset: { 
+        ...asset, 
+        qcNumber: qc.qcNumber, 
+        grnNumber: qc.grnNumber, 
+        qcDate: qc.qcDate, 
+        company: qc.company, 
+        itemInfo 
+      } 
+    });
   } catch (error) {
     res.status(500).json({ error: "Error fetching asset: " + error.message });
   }
@@ -280,9 +346,14 @@ exports.updateAssetStatus = async (req, res) => {
           if (assignedTo) asset.assignedTo = assignedTo;
           if (serviceNote) {
             asset.serviceHistory = asset.serviceHistory || [];
-            asset.serviceHistory.push({ date: new Date(), description: serviceNote, servicedBy: req.user?.name || 'System' });
+            asset.serviceHistory.push({ 
+              date: new Date(), 
+              description: serviceNote, 
+              servicedBy: req.user?.name || 'System' 
+            });
           }
-          assetFound = true; break;
+          assetFound = true; 
+          break;
         }
       }
       if (assetFound) break;
@@ -308,8 +379,10 @@ exports.getAllAssets = async (req, res) => {
     if (q && q.trim() !== "" && q.toLowerCase() !== "null" && q.toLowerCase() !== "undefined") {
       const searchRegex = new RegExp(q, "i");
       baseQuery.$or = [
-        { qcNumber: { $regex: searchRegex } }, { grnNumber: { $regex: searchRegex } },
-        { 'items.assets.assetId': { $regex: searchRegex } }, { 'items.brandName': { $regex: searchRegex } },
+        { qcNumber: { $regex: searchRegex } }, 
+        { grnNumber: { $regex: searchRegex } },
+        { 'items.assets.assetId': { $regex: searchRegex } }, 
+        { 'items.brandName': { $regex: searchRegex } },
         { 'items.modelNo': { $regex: searchRegex } },
       ];
     }
@@ -323,6 +396,8 @@ exports.getAllAssets = async (req, res) => {
       for (const item of qc.items) {
         if (item.assets?.length > 0) {
           for (const asset of item.assets) {
+            if (!asset.assetId) continue;
+            
             if (status && status !== 'All' && asset.status !== status) continue;
             if (warrantyStatus) {
               const now = new Date();
@@ -330,20 +405,37 @@ exports.getAllAssets = async (req, res) => {
               if (warrantyStatus === 'Expired' && (!asset.warrantyExpiryDate || now <= new Date(asset.warrantyExpiryDate))) continue;
               if (warrantyStatus === 'No Warranty' && asset.serviceWarrantyMonths > 0) continue;
             }
-            allAssets.push({ ...asset, qcNumber: qc.qcNumber, qcId: qc._id, grnNumber: qc.grnNumber, qcDate: qc.qcDate, brandName: item.brandName, modelNo: item.modelNo, companyName: qc.company?.name });
+            allAssets.push({ 
+              ...asset, 
+              qcNumber: qc.qcNumber, 
+              qcId: qc._id, 
+              grnNumber: qc.grnNumber, 
+              qcDate: qc.qcDate, 
+              brandName: item.brandName, 
+              modelNo: item.modelNo, 
+              companyName: qc.company?.name 
+            });
           }
         }
       }
     }
 
     const totalQCs = await QualityInspection.countDocuments(baseQuery);
-    res.status(200).json({ success: true, assets: allAssets, pagination: { currentPage: page, totalPages: Math.ceil(totalQCs / limit), totalAssets: allAssets.length, limit } });
+    res.status(200).json({ 
+      success: true, 
+      assets: allAssets, 
+      pagination: { 
+        currentPage: page, 
+        totalPages: Math.ceil(totalQCs / limit), 
+        totalAssets: allAssets.length, 
+        limit 
+      } 
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error fetching assets: " + error.message });
   }
 };
 
-// PUBLIC — no auth required for mobile QR scanning
 exports.getPublicAssetByAssetId = async (req, res) => {
   try {
     const { assetId } = req.params;
@@ -361,10 +453,19 @@ exports.getPublicAssetByAssetId = async (req, res) => {
     res.status(200).json({
       success: true,
       asset: {
-        assetId: asset.assetId, brandName: asset.brandName, modelNo: asset.modelNo, unit: asset.unit,
-        inDate: asset.inDate, outDate: asset.outDate, serviceWarrantyMonths: asset.serviceWarrantyMonths,
-        warrantyExpiryDate: asset.warrantyExpiryDate, status: asset.status, boxNumber: asset.boxNumber,
-        serviceHistory: asset.serviceHistory || [], qcNumber: qc.qcNumber, grnNumber: qc.grnNumber,
+        assetId: asset.assetId, 
+        brandName: asset.brandName, 
+        modelNo: asset.modelNo, 
+        unit: asset.unit,
+        inDate: asset.inDate, 
+        outDate: asset.outDate, 
+        serviceWarrantyMonths: asset.serviceWarrantyMonths,
+        warrantyExpiryDate: asset.warrantyExpiryDate, 
+        status: asset.status, 
+        boxNumber: asset.boxNumber,
+        serviceHistory: asset.serviceHistory || [], 
+        qcNumber: qc.qcNumber, 
+        grnNumber: qc.grnNumber,
       }
     });
   } catch (error) {

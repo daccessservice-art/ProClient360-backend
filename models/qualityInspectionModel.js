@@ -4,8 +4,8 @@ const mongoose = require('mongoose');
 const assetSchema = new mongoose.Schema({
   assetId: {
     type: String,
-    unique: true,
     required: true,
+    trim: true,
   },
   qrCodeData: {
     type: String,
@@ -61,6 +61,7 @@ const assetSchema = new mongoose.Schema({
     servicedBy: String,
   }],
 }, {
+  _id: false,
   timestamps: true,
 });
 
@@ -95,23 +96,11 @@ const qcItemSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'QC OK quantity is required'],
     min: [0, 'QC OK quantity cannot be negative'],
-    validate: {
-      validator: function(value) {
-        return value <= this.receivedQuantity;
-      },
-      message: 'QC OK quantity cannot exceed received quantity'
-    }
   },
   faultyQuantity: {
     type: Number,
     required: [true, 'Faulty quantity is required'],
     min: [0, 'Faulty quantity cannot be negative'],
-    validate: {
-      validator: function(value) {
-        return (this.qcOkQuantity + value) === this.receivedQuantity;
-      },
-      message: 'QC OK quantity + Faulty quantity must equal received quantity'
-    }
   },
   remark: {
     type: String,
@@ -129,6 +118,8 @@ const qcItemSchema = new mongoose.Schema({
     min: [0, 'Service warranty months cannot be negative'],
   },
   assets: [assetSchema],
+}, {
+  _id: false,
 });
 
 const qualityInspectionSchema = new mongoose.Schema({
@@ -178,16 +169,9 @@ const qualityInspectionSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Index for QR code lookup
-qualityInspectionSchema.index({ 'items.assets.assetId': 1 });
-qualityInspectionSchema.index({ 'items.assets.qrCodeData': 1 });
+qualityInspectionSchema.index({ 'items.assets.assetId': 1 }, { sparse: true });
+qualityInspectionSchema.index({ 'items.assets.qrCodeData': 1 }, { sparse: true });
 
-// ─── PRE-SAVE: Auto-generate QC Number ───────────────────────────────────────
-// NOTE: The post-save hook that used to generate assets has been REMOVED.
-// Asset generation is handled exclusively in the controller (qualityInspectionController.js)
-// using URL-based QR codes so that mobile scanning opens the browser directly.
-// Having both the hook and controller generate assets caused every item to get
-// double the assets (2 QR codes per asset instead of 1).
 qualityInspectionSchema.pre('save', async function(next) {
   if (!this.qcNumber) {
     const qcDate = new Date(this.qcDate);
