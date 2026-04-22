@@ -1,3 +1,4 @@
+// routes/qcRoutes.js
 const express = require('express');
 const { permissionMiddleware } = require('../middlewares/auth');
 const { 
@@ -14,7 +15,8 @@ const {
 
 const router = express.Router();
 
-// PUBLIC ROUTE - No auth required (Must be at the very top)
+// PUBLIC ROUTES - No auth required (Must be at the very top)
+// This handles both asset QR and box QR for public/customers
 router.get('/public/asset/:assetId', getPublicAssetByAssetId);
 
 // Protected routes below

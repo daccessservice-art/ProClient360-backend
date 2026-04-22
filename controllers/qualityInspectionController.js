@@ -3,13 +3,15 @@ const QualityInspection = require("../models/qualityInspectionModel");
 
 function generateAssetsForItem(qcDoc, item) {
   const assets = [];
+  const boxes = [];
   const qcOkQty = item.qcOkQuantity || 0;
   
-  if (qcOkQty <= 0) return assets;
+  if (qcOkQty <= 0) return { assets, boxes };
   
   const itemsPerBox = item.itemsPerBox || 1;
   const warrantyMonths = item.serviceWarrantyMonths || 0;
   const inDate = new Date(qcDoc.qcDate);
+  const frontendUrl = process.env.FRONTEND_URL || 'https://proclient360.com';
 
   let warrantyExpiryDate = null;
   if (warrantyMonths > 0) {
@@ -19,11 +21,23 @@ function generateAssetsForItem(qcDoc, item) {
 
   const totalBoxes = Math.ceil(qcOkQty / itemsPerBox);
   let assetSerial = 1;
-  const frontendUrl = process.env.FRONTEND_URL || 'https://proclient360.com';
 
   for (let boxNum = 1; boxNum <= totalBoxes; boxNum++) {
-    const itemsInThisBox =
-      boxNum === totalBoxes ? qcOkQty - (boxNum - 1) * itemsPerBox : itemsPerBox;
+    const boxNumber = itemsPerBox > 1 ? `Box-${boxNum}` : null;
+    const itemsInThisBox = boxNum === totalBoxes 
+      ? qcOkQty - (boxNum - 1) * itemsPerBox 
+      : itemsPerBox;
+
+    if (itemsPerBox > 1) {
+      const boxId = `BOX-${qcDoc.qcNumber.replace(/\//g, '-')}-${boxNum}`;
+      boxes.push({
+        boxNumber,
+        boxQrCodeData: `${frontendUrl}/asset/${boxId}`,
+        assetCount: itemsInThisBox,
+        brandName: item.brandName || '',
+        modelNo: item.modelNo || '',
+      });
+    }
 
     for (let itemInBox = 1; itemInBox <= itemsInThisBox; itemInBox++) {
       const brandPrefix = (item.brandName || 'XXX').substring(0, 3).toUpperCase().replace(/[^A-Z]/g, 'X');
@@ -40,14 +54,53 @@ function generateAssetsForItem(qcDoc, item) {
         serviceWarrantyMonths: warrantyMonths,
         warrantyExpiryDate,
         status: 'In Warehouse',
-        boxNumber: itemsPerBox > 1 ? `Box-${boxNum}` : null,
+        boxNumber,
       });
 
       assetSerial++;
     }
   }
 
-  return assets;
+  return { assets, boxes };
+}
+
+function isQualityEngineer(user) {
+  return user?.user === 'company' || user?.permissions?.includes('updateQC');
+}
+
+function filterAssetForPublic(asset) {
+  return {
+    assetId: asset.assetId,
+    brandName: asset.brandName,
+    modelNo: asset.modelNo,
+    unit: asset.unit,
+    outDate: asset.outDate,
+    status: asset.status,
+    serviceWarrantyMonths: asset.serviceWarrantyMonths,
+    warrantyExpiryDate: asset.warrantyExpiryDate,
+    isWarrantyExpired: asset.warrantyExpiryDate ? new Date() > new Date(asset.warrantyExpiryDate) : null,
+    hasWarranty: asset.serviceWarrantyMonths > 0,
+    isDispatched: asset.status === 'Dispatched' || asset.status === 'In Service',
+  };
+}
+
+function filterAssetForViewOnly(asset, qcInfo) {
+  return {
+    ...asset,
+    qcNumber: qcInfo.qcNumber,
+    grnNumber: qcInfo.grnNumber,
+    canUpdate: false,
+  };
+}
+
+function filterAssetForQE(asset, qcInfo) {
+  return {
+    ...asset,
+    qcNumber: qcInfo.qcNumber,
+    grnNumber: qcInfo.grnNumber,
+    qcDate: qcInfo.qcDate,
+    canUpdate: true,
+  };
 }
 
 exports.getQualityInspection = async (req, res) => {
@@ -142,6 +195,7 @@ exports.createQualityInspection = async (req, res) => {
       itemsPerBox: item.itemsPerBox || 1,
       serviceWarrantyMonths: item.serviceWarrantyMonths || 0,
       assets: [],
+      boxes: [],
     }));
 
     const newQC = new QualityInspection({
@@ -152,25 +206,32 @@ exports.createQualityInspection = async (req, res) => {
       createdBy: user._id,
       status: 'Completed',
       totalAssets: 0,
+      totalBoxes: 0,
     });
 
     await newQC.save();
 
+    let totalAssets = 0;
+    let totalBoxes = 0;
+
     const itemsWithAssets = newQC.items.map(item => {
       const plain = item.toObject();
       if (item.qcOkQuantity > 0) {
-        plain.assets = generateAssetsForItem(newQC, item);
+        const { assets, boxes } = generateAssetsForItem(newQC, item);
+        plain.assets = assets;
+        plain.boxes = boxes;
+        totalAssets += assets.length;
+        totalBoxes += boxes.length;
       } else {
         plain.assets = [];
+        plain.boxes = [];
       }
       return plain;
     });
 
-    const totalAssets = itemsWithAssets.reduce((sum, item) => sum + (item.assets?.length || 0), 0);
-
     await QualityInspection.findByIdAndUpdate(
       newQC._id,
-      { $set: { items: itemsWithAssets, totalAssets } },
+      { $set: { items: itemsWithAssets, totalAssets, totalBoxes } },
       { runValidators: false }
     );
 
@@ -221,39 +282,74 @@ exports.updateQualityInspection = async (req, res) => {
 
     if (updatedData.items) {
       let totalAssets = 0;
+      let totalBoxes = 0;
+      
       for (let i = 0; i < updatedData.items.length; i++) {
         const item = updatedData.items[i];
         const existingItem = existingQC.items[i];
 
-        if (existingItem && (
-          item.qcOkQuantity !== existingItem.qcOkQuantity ||
-          item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
-          item.itemsPerBox !== existingItem.itemsPerBox
-        )) {
-          const existingAssets = existingItem.assets?.filter(a => 
-            a.status === 'Dispatched' || a.status === 'In Service'
-          ) || [];
+        if (!existingItem) continue;
+
+        let currentAssets = [...(existingItem.assets || [])];
+
+        const newOutDate = item.outDate ? new Date(item.outDate) : null;
+        const existingOutDate = existingItem.outDate ? new Date(existingItem.outDate) : null;
+        
+        if (newOutDate && (!existingOutDate || newOutDate.getTime() !== existingOutDate.getTime())) {
+          for (const asset of currentAssets) {
+            if (asset.status === 'In Warehouse') {
+              asset.outDate = newOutDate;
+              asset.status = 'Dispatched';
+            }
+          }
+        }
+
+        if (item.qcOkQuantity !== existingItem.qcOkQuantity ||
+            item.serviceWarrantyMonths !== existingItem.serviceWarrantyMonths ||
+            item.itemsPerBox !== existingItem.itemsPerBox) {
           
-          const newAssetsNeeded = item.qcOkQuantity - existingAssets.length;
+          const existingDispatched = currentAssets.filter(a => 
+            a.status === 'Dispatched' || a.status === 'In Service'
+          );
+          
+          const newAssetsNeeded = item.qcOkQuantity - existingDispatched.length;
           
           if (newAssetsNeeded > 0) {
-            const tempQC = { ...existingQC.toObject(), items: [item] };
-            const newAssets = generateAssetsForItem(tempQC, item);
-            item.assets = [...existingAssets, ...newAssets.slice(0, newAssetsNeeded)];
+            const tempQC = { ...existingQC.toObject(), items: [{ ...item, outDate: null }] };
+            const { assets, boxes } = generateAssetsForItem(tempQC, item);
+            
+            if (newOutDate) {
+              for (const asset of assets) {
+                asset.outDate = newOutDate;
+                asset.status = 'Dispatched';
+              }
+            }
+            
+            currentAssets = [...existingDispatched, ...assets.slice(0, newAssetsNeeded)];
           } else if (newAssetsNeeded < 0) {
-            item.assets = existingAssets.slice(0, item.qcOkQuantity);
-          } else {
-            item.assets = existingAssets;
+            currentAssets = existingDispatched.slice(0, item.qcOkQuantity);
           }
-        } else if (existingItem?.assets) {
-          item.assets = existingItem.assets;
+          
+          const itemsPerBox = item.itemsPerBox || 1;
+          if (itemsPerBox > 1 && currentAssets.length > 0) {
+            const tempQC = { ...existingQC.toObject(), items: [{ ...item, qcOkQuantity: currentAssets.length }] };
+            const { boxes } = generateAssetsForItem(tempQC, item);
+            item.boxes = boxes;
+          } else {
+            item.boxes = existingItem.boxes || [];
+          }
         } else {
-          item.assets = [];
+          item.boxes = existingItem.boxes || [];
         }
+
+        item.assets = currentAssets;
+        item.outDate = newOutDate;
         
         totalAssets += item.assets?.length || 0;
+        totalBoxes += item.boxes?.length || 0;
       }
       updatedData.totalAssets = totalAssets;
+      updatedData.totalBoxes = totalBoxes;
     }
 
     const updatedQC = await QualityInspection.findByIdAndUpdate(id, updatedData, { new: true, runValidators: false })
@@ -271,20 +367,103 @@ exports.updateQualityInspection = async (req, res) => {
 exports.getAssetByQR = async (req, res) => {
   try {
     const { qrData } = req.params;
+    const user = req.user;
     let assetId = qrData;
+    let isBoxRequest = false;
 
-    try {
-      const parsed = JSON.parse(decodeURIComponent(qrData));
-      if (parsed.assetId) assetId = parsed.assetId;
-    } catch {
-      if (qrData.startsWith('http')) assetId = qrData.split('/').pop();
+    if (qrData.startsWith('BOX-')) {
+      isBoxRequest = true;
+    } else {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(qrData));
+        if (parsed.assetId) assetId = parsed.assetId;
+        if (parsed.assetId?.startsWith('BOX-')) isBoxRequest = true;
+      } catch {
+        if (qrData.startsWith('http')) {
+          const lastSegment = qrData.split('/').pop();
+          if (lastSegment.startsWith('BOX-')) {
+            isBoxRequest = true;
+            assetId = lastSegment;
+          } else {
+            assetId = lastSegment;
+          }
+        }
+      }
     }
 
-    const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId })
-      .populate('createdBy', 'name email').populate('company', 'name')
-      .populate('items.assets.assignedTo', 'customerName').lean();
+    if (isBoxRequest) {
+      const boxParts = assetId.replace('BOX-', '').split('-');
+      const qcNumberFromBox = boxParts.slice(0, 4).join('-').replace(/^QC-/, 'QC/');
+      const boxNum = parseInt(boxParts[4]) || 1;
+      const boxNumber = `Box-${boxNum}`;
 
-    if (!qc) return res.status(404).json({ success: false, error: "Asset not found" });
+      const qcByNumber = await QualityInspection.findOne({ 
+        qcNumber: qcNumberFromBox,
+        company: user.company || user._id
+      })
+        .populate('company', 'name')
+        .lean();
+
+      if (!qcByNumber) return res.status(404).json({ success: false, error: "Box not found" });
+
+      let boxAssets = [];
+      let boxInfo = null;
+      let itemInfo = null;
+
+      for (const item of qcByNumber.items) {
+        const foundBox = item.boxes?.find(b => b.boxNumber === boxNumber);
+        if (foundBox) {
+          boxInfo = foundBox;
+          itemInfo = { brandName: item.brandName, modelNo: item.modelNo, unit: item.unit };
+          boxAssets = (item.assets || []).filter(a => a.boxNumber === boxNumber);
+          break;
+        }
+      }
+
+      if (!boxInfo) return res.status(404).json({ success: false, error: "Box not found in QC" });
+
+      const isQE = isQualityEngineer(user);
+      
+      let filteredAssets;
+      if (isQE) {
+        filteredAssets = boxAssets.map(a => filterAssetForQE(a, qcByNumber));
+      } else {
+        filteredAssets = boxAssets.map(a => filterAssetForViewOnly(a, qcByNumber));
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Box found",
+        isBox: true,
+        box: {
+          boxNumber: boxInfo.boxNumber,
+          boxQrCodeData: boxInfo.boxQrCodeData,
+          assetCount: boxInfo.assetCount,
+          brandName: boxInfo.brandName,
+          modelNo: boxInfo.modelNo,
+        },
+        itemInfo,
+        assets: filteredAssets,
+        qcNumber: qcByNumber.qcNumber,
+        grnNumber: qcByNumber.grnNumber,
+        qcDate: qcByNumber.qcDate,
+        companyName: qcByNumber.company?.name,
+        canUpdate: isQE,
+        showInDate: isQE,
+      });
+    }
+
+    // FIXED: Search for QC document that CONTAINS this specific assetId
+    const qc = await QualityInspection.findOne({
+      company: user.company || user._id,
+      'items.assets.assetId': assetId
+    })
+      .populate('createdBy', 'name email')
+      .populate('company', 'name')
+      .populate('items.assets.assignedTo', 'customerName')
+      .lean();
+
+    if (!qc) return res.status(404).json({ success: false, error: "Asset not found in QC" });
 
     let asset = null, itemInfo = null;
     for (const item of qc.items) {
@@ -313,20 +492,90 @@ exports.getAssetByQR = async (req, res) => {
       asset.status = 'Warranty Expired';
     }
 
+    const isQE = isQualityEngineer(user);
+    let filteredAsset;
+    
+    if (isQE) {
+      filteredAsset = filterAssetForQE(asset, qc);
+    } else {
+      filteredAsset = filterAssetForViewOnly(asset, qc);
+    }
+
     res.status(200).json({ 
       success: true, 
       message: "Asset found", 
-      asset: { 
-        ...asset, 
-        qcNumber: qc.qcNumber, 
-        grnNumber: qc.grnNumber, 
-        qcDate: qc.qcDate, 
-        company: qc.company, 
-        itemInfo 
-      } 
+      isBox: false,
+      asset: filteredAsset,
+      itemInfo,
+      canUpdate: isQE,
+      showInDate: isQE,
     });
   } catch (error) {
     res.status(500).json({ error: "Error fetching asset: " + error.message });
+  }
+};
+
+exports.getPublicAssetByAssetId = async (req, res) => {
+  try {
+    const { assetId } = req.params;
+    let isBoxRequest = assetId.startsWith('BOX-');
+
+    if (isBoxRequest) {
+      const boxParts = assetId.replace('BOX-', '').split('-');
+      const qcNumberFromBox = boxParts.slice(0, 4).join('-').replace(/^QC-/, 'QC/');
+      const boxNum = parseInt(boxParts[4]) || 1;
+      const boxNumber = `Box-${boxNum}`;
+
+      const qc = await QualityInspection.findOne({ qcNumber: qcNumberFromBox }).lean();
+      if (!qc) return res.status(404).json({ success: false, error: "Box not found" });
+
+      let boxInfo = null;
+      let boxAssets = [];
+
+      for (const item of qc.items) {
+        const foundBox = item.boxes?.find(b => b.boxNumber === boxNumber);
+        if (foundBox) {
+          boxInfo = foundBox;
+          boxAssets = (item.assets || []).filter(a => a.boxNumber === boxNumber);
+          break;
+        }
+      }
+
+      if (!boxInfo) return res.status(404).json({ success: false, error: "Box not found" });
+
+      return res.status(200).json({
+        success: true,
+        isBox: true,
+        isPublic: true,
+        box: {
+          boxNumber: boxInfo.boxNumber,
+          assetCount: boxInfo.assetCount,
+          brandName: boxInfo.brandName,
+          modelNo: boxInfo.modelNo,
+        },
+        assets: boxAssets.map(a => filterAssetForPublic(a)),
+      });
+    }
+
+    const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId }).lean();
+    if (!qc) return res.status(404).json({ success: false, error: "Asset not found" });
+
+    let asset = null;
+    for (const item of qc.items) {
+      const found = item.assets?.find(a => a.assetId === assetId);
+      if (found) { asset = found; break; }
+    }
+
+    if (!asset) return res.status(404).json({ success: false, error: "Asset not found" });
+
+    res.status(200).json({
+      success: true,
+      isBox: false,
+      isPublic: true,
+      asset: filterAssetForPublic(asset),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching asset: " + error.message });
   }
 };
 
@@ -334,6 +583,15 @@ exports.updateAssetStatus = async (req, res) => {
   try {
     const { qcId, assetId } = req.params;
     const { status, outDate, assignedTo, serviceNote } = req.body;
+    const user = req.user;
+
+    if (!isQualityEngineer(user)) {
+      return res.status(403).json({ 
+        success: false, 
+        error: "Only Quality Engineer can update asset status" 
+      });
+    }
+
     const qc = await QualityInspection.findById(qcId);
     if (!qc) return res.status(404).json({ success: false, error: "QC not found" });
 
@@ -349,7 +607,7 @@ exports.updateAssetStatus = async (req, res) => {
             asset.serviceHistory.push({ 
               date: new Date(), 
               description: serviceNote, 
-              servicedBy: req.user?.name || 'System' 
+              servicedBy: user?.name || 'System' 
             });
           }
           assetFound = true; 
@@ -392,6 +650,8 @@ exports.getAllAssets = async (req, res) => {
       .populate('items.assets.assignedTo', 'customerName').sort({ createdAt: -1 }).lean();
 
     let allAssets = [];
+    const isQE = isQualityEngineer(user);
+
     for (const qc of qcs) {
       for (const item of qc.items) {
         if (item.assets?.length > 0) {
@@ -405,7 +665,8 @@ exports.getAllAssets = async (req, res) => {
               if (warrantyStatus === 'Expired' && (!asset.warrantyExpiryDate || now <= new Date(asset.warrantyExpiryDate))) continue;
               if (warrantyStatus === 'No Warranty' && asset.serviceWarrantyMonths > 0) continue;
             }
-            allAssets.push({ 
+
+            const assetData = {
               ...asset, 
               qcNumber: qc.qcNumber, 
               qcId: qc._id, 
@@ -413,8 +674,16 @@ exports.getAllAssets = async (req, res) => {
               qcDate: qc.qcDate, 
               brandName: item.brandName, 
               modelNo: item.modelNo, 
-              companyName: qc.company?.name 
-            });
+              companyName: qc.company?.name,
+              canUpdate: isQE,
+              showInDate: isQE,
+            };
+
+            if (!isQE) {
+              delete assetData.inDate;
+            }
+
+            allAssets.push(assetData);
           }
         }
       }
@@ -433,42 +702,5 @@ exports.getAllAssets = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error fetching assets: " + error.message });
-  }
-};
-
-exports.getPublicAssetByAssetId = async (req, res) => {
-  try {
-    const { assetId } = req.params;
-    const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId }).lean();
-    if (!qc) return res.status(404).json({ success: false, error: "Asset not found" });
-
-    let asset = null;
-    for (const item of qc.items) {
-      const found = item.assets?.find(a => a.assetId === assetId);
-      if (found) { asset = found; break; }
-    }
-
-    if (!asset) return res.status(404).json({ success: false, error: "Asset not found" });
-
-    res.status(200).json({
-      success: true,
-      asset: {
-        assetId: asset.assetId, 
-        brandName: asset.brandName, 
-        modelNo: asset.modelNo, 
-        unit: asset.unit,
-        inDate: asset.inDate, 
-        outDate: asset.outDate, 
-        serviceWarrantyMonths: asset.serviceWarrantyMonths,
-        warrantyExpiryDate: asset.warrantyExpiryDate, 
-        status: asset.status, 
-        boxNumber: asset.boxNumber,
-        serviceHistory: asset.serviceHistory || [], 
-        qcNumber: qc.qcNumber, 
-        grnNumber: qc.grnNumber,
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: "Error fetching asset: " + error.message });
   }
 };

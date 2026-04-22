@@ -65,6 +65,35 @@ const assetSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+const boxSchema = new mongoose.Schema({
+  boxNumber: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  boxQrCodeData: {
+    type: String,
+    required: true,
+  },
+  assetCount: {
+    type: Number,
+    required: true,
+    min: 1,
+  },
+  brandName: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+  modelNo: {
+    type: String,
+    required: true,
+    trim: true,
+  },
+}, {
+  _id: false,
+});
+
 const qcItemSchema = new mongoose.Schema({
   brandName: {
     type: String,
@@ -117,7 +146,12 @@ const qcItemSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Service warranty months cannot be negative'],
   },
+  outDate: {
+    type: Date,
+    default: null,
+  },
   assets: [assetSchema],
+  boxes: [boxSchema],
 }, {
   _id: false,
 });
@@ -165,12 +199,16 @@ const qualityInspectionSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  totalBoxes: {
+    type: Number,
+    default: 0,
+  },
 }, {
   timestamps: true,
 });
 
 qualityInspectionSchema.index({ 'items.assets.assetId': 1 }, { sparse: true });
-qualityInspectionSchema.index({ 'items.assets.qrCodeData': 1 }, { sparse: true });
+qualityInspectionSchema.index({ 'items.boxes.boxQrCodeData': 1 }, { sparse: true });
 
 qualityInspectionSchema.pre('save', async function(next) {
   if (!this.qcNumber) {
