@@ -69,18 +69,24 @@ function isQualityEngineer(user) {
 }
 
 function filterAssetForPublic(asset) {
+  const now = new Date();
+  const warrantyExpiryDate = asset.warrantyExpiryDate ? new Date(asset.warrantyExpiryDate) : null;
+  
   return {
     assetId: asset.assetId,
     brandName: asset.brandName,
     modelNo: asset.modelNo,
-    unit: asset.unit,
+    unit: asset.unit || 'No.',
+    inDate: asset.inDate,
     outDate: asset.outDate,
     status: asset.status,
-    serviceWarrantyMonths: asset.serviceWarrantyMonths,
+    serviceWarrantyMonths: asset.serviceWarrantyMonths || 0,
     warrantyExpiryDate: asset.warrantyExpiryDate,
-    isWarrantyExpired: asset.warrantyExpiryDate ? new Date() > new Date(asset.warrantyExpiryDate) : null,
-    hasWarranty: asset.serviceWarrantyMonths > 0,
+    isWarrantyExpired: warrantyExpiryDate ? now > warrantyExpiryDate : false,
+    hasWarranty: (asset.serviceWarrantyMonths || 0) > 0,
     isDispatched: asset.status === 'Dispatched' || asset.status === 'In Service',
+    warrantyDaysRemaining: warrantyExpiryDate ? Math.ceil((warrantyExpiryDate - now) / (1000 * 60 * 60 * 24)) : null,
+    boxNumber: asset.boxNumber,
   };
 }
 
@@ -103,36 +109,21 @@ function filterAssetForQE(asset, qcInfo) {
   };
 }
 
-// Helper function to parse Box ID and extract QC Number and Box Number
+// Parse Box ID: BOX-QC-YYYY-YY-NNN-N -> QC/YYYY-YY/NNN, Box-N
 function parseBoxId(boxId) {
-  // Box ID format: BOX-QC-YYYY-YY-NNN-boxNum
-  // Example: BOX-QC-2024-25-001-1
-  
-  // Remove BOX- prefix
   const withoutPrefix = boxId.replace(/^BOX-/, '');
-  
-  // Split by dash
   const parts = withoutPrefix.split('-');
   
-  // Expected parts: ["QC", "YYYY", "YY", "NNN", "boxNum"]
-  // Minimum 5 parts required
-  if (parts.length < 5) {
-    return null;
-  }
+  if (parts.length < 5) return null;
   
-  // Last part is always the box number
   const boxNum = parseInt(parts[parts.length - 1]);
-  if (isNaN(boxNum)) {
-    return null;
-  }
+  if (isNaN(boxNum)) return null;
   
-  // Everything before the last part is the QC number with dashes
-  // Example: QC-2024-25-001
-  const qcNumberWithDashes = parts.slice(0, parts.length - 1).join('-');
+  const year1 = parts[1];
+  const year2 = parts[2];
+  const serial = parts[3];
   
-  // Convert dashes back to slashes for QC number format
-  // QC-2024-25-001 -> QC/2024-25/001
-  const qcNumber = qcNumberWithDashes.replace(/^QC-/, 'QC/');
+  const qcNumber = `QC/${year1}-${year2}/${serial}`;
   
   return {
     qcNumber,
@@ -374,7 +365,7 @@ exports.updateQualityInspection = async (req, res) => {
             const { boxes } = generateAssetsForItem(tempQC, item);
             item.boxes = boxes;
           } else {
-            item.boxes = existingItem.boxes || [];
+            item.boxes = [];
           }
         } else {
           item.boxes = existingItem.boxes || [];
@@ -409,7 +400,6 @@ exports.getAssetByQR = async (req, res) => {
     let assetId = qrData;
     let isBoxRequest = false;
 
-    // Check if it's a box request
     if (qrData.startsWith('BOX-')) {
       isBoxRequest = true;
     } else {
@@ -431,17 +421,11 @@ exports.getAssetByQR = async (req, res) => {
     }
 
     if (isBoxRequest) {
-      console.log('=== BOX QR SCAN (Authenticated) ===');
-      console.log('Raw Box ID:', assetId);
-      
       const parsedBox = parseBoxId(assetId);
       
       if (!parsedBox) {
-        console.error('Failed to parse Box ID:', assetId);
         return res.status(400).json({ success: false, error: "Invalid Box ID format" });
       }
-      
-      console.log('Parsed Box:', parsedBox);
 
       const qcByNumber = await QualityInspection.findOne({ 
         qcNumber: parsedBox.qcNumber,
@@ -450,17 +434,8 @@ exports.getAssetByQR = async (req, res) => {
         .populate('company', 'name')
         .lean();
 
-      console.log('QC Found:', qcByNumber ? qcByNumber.qcNumber : 'NOT FOUND');
-
       if (!qcByNumber) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Box not found",
-          debug: { 
-            searchedQcNumber: parsedBox.qcNumber,
-            boxNumber: parsedBox.boxNumber
-          }
-        });
+        return res.status(404).json({ success: false, error: "Box not found" });
       }
 
       let boxAssets = [];
@@ -472,22 +447,14 @@ exports.getAssetByQR = async (req, res) => {
         if (foundBox) {
           boxInfo = foundBox;
           itemInfo = { brandName: item.brandName, modelNo: item.modelNo, unit: item.unit };
+          // Get all assets that belong to this box
           boxAssets = (item.assets || []).filter(a => a.boxNumber === parsedBox.boxNumber);
           break;
         }
       }
 
-      console.log('Box Found:', boxInfo ? boxInfo.boxNumber : 'NOT FOUND');
-      console.log('Box Assets Count:', boxAssets.length);
-
       if (!boxInfo) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Box not found in QC items",
-          debug: {
-            availableBoxes: qcByNumber.items?.flatMap(i => i.boxes?.map(b => b.boxNumber) || [])
-          }
-        });
+        return res.status(404).json({ success: false, error: "Box not found in QC items" });
       }
 
       const isQE = isQualityEngineer(user);
@@ -521,10 +488,7 @@ exports.getAssetByQR = async (req, res) => {
       });
     }
 
-    // Asset QR scan - search for QC document that CONTAINS this specific assetId
-    console.log('=== ASSET QR SCAN (Authenticated) ===');
-    console.log('Asset ID:', assetId);
-
+    // Asset QR scan
     const qc = await QualityInspection.findOne({
       company: user.company || user._id,
       'items.assets.assetId': assetId
@@ -590,35 +554,20 @@ exports.getAssetByQR = async (req, res) => {
 exports.getPublicAssetByAssetId = async (req, res) => {
   try {
     const { assetId } = req.params;
-    
-    console.log('=== PUBLIC ASSET/BOX REQUEST ===');
-    console.log('Asset/Box ID:', assetId);
 
     const isBoxRequest = assetId.startsWith('BOX-');
 
     if (isBoxRequest) {
-      console.log('Processing as BOX request');
-      
       const parsedBox = parseBoxId(assetId);
       
       if (!parsedBox) {
-        console.error('Failed to parse Box ID:', assetId);
         return res.status(400).json({ success: false, error: "Invalid Box ID format" });
       }
-      
-      console.log('Parsed Box:', parsedBox);
 
       const qc = await QualityInspection.findOne({ qcNumber: parsedBox.qcNumber }).lean();
       
-      console.log('QC Found:', qc ? qc.qcNumber : 'NOT FOUND');
-      console.log('Searched QC Number:', parsedBox.qcNumber);
-
       if (!qc) {
-        return res.status(404).json({ 
-          success: false, 
-          error: "Box not found",
-          debug: { searchedQcNumber: parsedBox.qcNumber }
-        });
+        return res.status(404).json({ success: false, error: "Box not found" });
       }
 
       let boxInfo = null;
@@ -628,59 +577,50 @@ exports.getPublicAssetByAssetId = async (req, res) => {
         const foundBox = item.boxes?.find(b => b.boxNumber === parsedBox.boxNumber);
         if (foundBox) {
           boxInfo = foundBox;
+          itemInfo = { brandName: item.brandName, modelNo: item.modelNo, unit: item.unit };
+          // Get all assets inside this box
           boxAssets = (item.assets || []).filter(a => a.boxNumber === parsedBox.boxNumber);
-          console.log('Box found in item:', item.brandName, item.modelNo);
-          console.log('Assets in box:', boxAssets.length);
           break;
         }
       }
 
       if (!boxInfo) {
-        console.log('Box not found in any item. Available boxes:');
-        qc.items?.forEach((item, idx) => {
-          console.log(`  Item ${idx} (${item.brandName} ${item.modelNo}):`, item.boxes?.map(b => b.boxNumber));
-        });
-        
-        return res.status(404).json({ 
-          success: false, 
-          error: "Box not found in QC items",
-          debug: {
-            searchedBoxNumber: parsedBox.boxNumber,
-            availableBoxes: qc.items?.flatMap(i => i.boxes?.map(b => b.boxNumber) || [])
-          }
-        });
+        return res.status(404).json({ success: false, error: "Box not found in QC" });
       }
 
       return res.status(200).json({
         success: true,
         isBox: true,
         isPublic: true,
+        qcNumber: qc.qcNumber,
+        grnNumber: qc.grnNumber,
+        qcDate: qc.qcDate,
         box: {
           boxNumber: boxInfo.boxNumber,
+          boxQrCodeData: boxInfo.boxQrCodeData,
           assetCount: boxInfo.assetCount,
           brandName: boxInfo.brandName,
           modelNo: boxInfo.modelNo,
         },
+        itemInfo,
         assets: boxAssets.map(a => filterAssetForPublic(a)),
       });
     }
 
     // Individual asset request
-    console.log('Processing as ASSET request');
-
     const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId }).lean();
     
     if (!qc) {
-      console.log('Asset not found in any QC');
       return res.status(404).json({ success: false, error: "Asset not found" });
     }
 
     let asset = null;
+    let itemInfo = null;
     for (const item of qc.items) {
       const found = item.assets?.find(a => a.assetId === assetId);
       if (found) { 
         asset = found; 
-        console.log('Asset found in QC:', qc.qcNumber);
+        itemInfo = { brandName: item.brandName, modelNo: item.modelNo };
         break; 
       }
     }
@@ -693,6 +633,9 @@ exports.getPublicAssetByAssetId = async (req, res) => {
       success: true,
       isBox: false,
       isPublic: true,
+      qcNumber: qc.qcNumber,
+      grnNumber: qc.grnNumber,
+      itemInfo,
       asset: filterAssetForPublic(asset),
     });
   } catch (error) {
@@ -708,10 +651,7 @@ exports.updateAssetStatus = async (req, res) => {
     const user = req.user;
 
     if (!isQualityEngineer(user)) {
-      return res.status(403).json({ 
-        success: false, 
-        error: "Only Quality Engineer can update asset status" 
-      });
+      return res.status(403).json({ success: false, error: "Only Quality Engineer can update asset status" });
     }
 
     const qc = await QualityInspection.findById(qcId);
