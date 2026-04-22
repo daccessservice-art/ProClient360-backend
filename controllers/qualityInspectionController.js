@@ -103,6 +103,44 @@ function filterAssetForQE(asset, qcInfo) {
   };
 }
 
+// Helper function to parse Box ID and extract QC Number and Box Number
+function parseBoxId(boxId) {
+  // Box ID format: BOX-QC-YYYY-YY-NNN-boxNum
+  // Example: BOX-QC-2024-25-001-1
+  
+  // Remove BOX- prefix
+  const withoutPrefix = boxId.replace(/^BOX-/, '');
+  
+  // Split by dash
+  const parts = withoutPrefix.split('-');
+  
+  // Expected parts: ["QC", "YYYY", "YY", "NNN", "boxNum"]
+  // Minimum 5 parts required
+  if (parts.length < 5) {
+    return null;
+  }
+  
+  // Last part is always the box number
+  const boxNum = parseInt(parts[parts.length - 1]);
+  if (isNaN(boxNum)) {
+    return null;
+  }
+  
+  // Everything before the last part is the QC number with dashes
+  // Example: QC-2024-25-001
+  const qcNumberWithDashes = parts.slice(0, parts.length - 1).join('-');
+  
+  // Convert dashes back to slashes for QC number format
+  // QC-2024-25-001 -> QC/2024-25/001
+  const qcNumber = qcNumberWithDashes.replace(/^QC-/, 'QC/');
+  
+  return {
+    qcNumber,
+    boxNum,
+    boxNumber: `Box-${boxNum}`
+  };
+}
+
 exports.getQualityInspection = async (req, res) => {
   try {
     const qc = await QualityInspection.findById(req.params.id)
@@ -371,6 +409,7 @@ exports.getAssetByQR = async (req, res) => {
     let assetId = qrData;
     let isBoxRequest = false;
 
+    // Check if it's a box request
     if (qrData.startsWith('BOX-')) {
       isBoxRequest = true;
     } else {
@@ -392,35 +431,64 @@ exports.getAssetByQR = async (req, res) => {
     }
 
     if (isBoxRequest) {
-      const boxParts = assetId.replace('BOX-', '').split('-');
-      const qcNumberFromBox = boxParts.slice(0, 4).join('-').replace(/^QC-/, 'QC/');
-      const boxNum = parseInt(boxParts[4]) || 1;
-      const boxNumber = `Box-${boxNum}`;
+      console.log('=== BOX QR SCAN (Authenticated) ===');
+      console.log('Raw Box ID:', assetId);
+      
+      const parsedBox = parseBoxId(assetId);
+      
+      if (!parsedBox) {
+        console.error('Failed to parse Box ID:', assetId);
+        return res.status(400).json({ success: false, error: "Invalid Box ID format" });
+      }
+      
+      console.log('Parsed Box:', parsedBox);
 
       const qcByNumber = await QualityInspection.findOne({ 
-        qcNumber: qcNumberFromBox,
+        qcNumber: parsedBox.qcNumber,
         company: user.company || user._id
       })
         .populate('company', 'name')
         .lean();
 
-      if (!qcByNumber) return res.status(404).json({ success: false, error: "Box not found" });
+      console.log('QC Found:', qcByNumber ? qcByNumber.qcNumber : 'NOT FOUND');
+
+      if (!qcByNumber) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Box not found",
+          debug: { 
+            searchedQcNumber: parsedBox.qcNumber,
+            boxNumber: parsedBox.boxNumber
+          }
+        });
+      }
 
       let boxAssets = [];
       let boxInfo = null;
       let itemInfo = null;
 
       for (const item of qcByNumber.items) {
-        const foundBox = item.boxes?.find(b => b.boxNumber === boxNumber);
+        const foundBox = item.boxes?.find(b => b.boxNumber === parsedBox.boxNumber);
         if (foundBox) {
           boxInfo = foundBox;
           itemInfo = { brandName: item.brandName, modelNo: item.modelNo, unit: item.unit };
-          boxAssets = (item.assets || []).filter(a => a.boxNumber === boxNumber);
+          boxAssets = (item.assets || []).filter(a => a.boxNumber === parsedBox.boxNumber);
           break;
         }
       }
 
-      if (!boxInfo) return res.status(404).json({ success: false, error: "Box not found in QC" });
+      console.log('Box Found:', boxInfo ? boxInfo.boxNumber : 'NOT FOUND');
+      console.log('Box Assets Count:', boxAssets.length);
+
+      if (!boxInfo) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Box not found in QC items",
+          debug: {
+            availableBoxes: qcByNumber.items?.flatMap(i => i.boxes?.map(b => b.boxNumber) || [])
+          }
+        });
+      }
 
       const isQE = isQualityEngineer(user);
       
@@ -453,7 +521,10 @@ exports.getAssetByQR = async (req, res) => {
       });
     }
 
-    // FIXED: Search for QC document that CONTAINS this specific assetId
+    // Asset QR scan - search for QC document that CONTAINS this specific assetId
+    console.log('=== ASSET QR SCAN (Authenticated) ===');
+    console.log('Asset ID:', assetId);
+
     const qc = await QualityInspection.findOne({
       company: user.company || user._id,
       'items.assets.assetId': assetId
@@ -511,6 +582,7 @@ exports.getAssetByQR = async (req, res) => {
       showInDate: isQE,
     });
   } catch (error) {
+    console.error('Error in getAssetByQR:', error);
     res.status(500).json({ error: "Error fetching asset: " + error.message });
   }
 };
@@ -518,30 +590,66 @@ exports.getAssetByQR = async (req, res) => {
 exports.getPublicAssetByAssetId = async (req, res) => {
   try {
     const { assetId } = req.params;
-    let isBoxRequest = assetId.startsWith('BOX-');
+    
+    console.log('=== PUBLIC ASSET/BOX REQUEST ===');
+    console.log('Asset/Box ID:', assetId);
+
+    const isBoxRequest = assetId.startsWith('BOX-');
 
     if (isBoxRequest) {
-      const boxParts = assetId.replace('BOX-', '').split('-');
-      const qcNumberFromBox = boxParts.slice(0, 4).join('-').replace(/^QC-/, 'QC/');
-      const boxNum = parseInt(boxParts[4]) || 1;
-      const boxNumber = `Box-${boxNum}`;
+      console.log('Processing as BOX request');
+      
+      const parsedBox = parseBoxId(assetId);
+      
+      if (!parsedBox) {
+        console.error('Failed to parse Box ID:', assetId);
+        return res.status(400).json({ success: false, error: "Invalid Box ID format" });
+      }
+      
+      console.log('Parsed Box:', parsedBox);
 
-      const qc = await QualityInspection.findOne({ qcNumber: qcNumberFromBox }).lean();
-      if (!qc) return res.status(404).json({ success: false, error: "Box not found" });
+      const qc = await QualityInspection.findOne({ qcNumber: parsedBox.qcNumber }).lean();
+      
+      console.log('QC Found:', qc ? qc.qcNumber : 'NOT FOUND');
+      console.log('Searched QC Number:', parsedBox.qcNumber);
+
+      if (!qc) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "Box not found",
+          debug: { searchedQcNumber: parsedBox.qcNumber }
+        });
+      }
 
       let boxInfo = null;
       let boxAssets = [];
 
       for (const item of qc.items) {
-        const foundBox = item.boxes?.find(b => b.boxNumber === boxNumber);
+        const foundBox = item.boxes?.find(b => b.boxNumber === parsedBox.boxNumber);
         if (foundBox) {
           boxInfo = foundBox;
-          boxAssets = (item.assets || []).filter(a => a.boxNumber === boxNumber);
+          boxAssets = (item.assets || []).filter(a => a.boxNumber === parsedBox.boxNumber);
+          console.log('Box found in item:', item.brandName, item.modelNo);
+          console.log('Assets in box:', boxAssets.length);
           break;
         }
       }
 
-      if (!boxInfo) return res.status(404).json({ success: false, error: "Box not found" });
+      if (!boxInfo) {
+        console.log('Box not found in any item. Available boxes:');
+        qc.items?.forEach((item, idx) => {
+          console.log(`  Item ${idx} (${item.brandName} ${item.modelNo}):`, item.boxes?.map(b => b.boxNumber));
+        });
+        
+        return res.status(404).json({ 
+          success: false, 
+          error: "Box not found in QC items",
+          debug: {
+            searchedBoxNumber: parsedBox.boxNumber,
+            availableBoxes: qc.items?.flatMap(i => i.boxes?.map(b => b.boxNumber) || [])
+          }
+        });
+      }
 
       return res.status(200).json({
         success: true,
@@ -557,16 +665,29 @@ exports.getPublicAssetByAssetId = async (req, res) => {
       });
     }
 
+    // Individual asset request
+    console.log('Processing as ASSET request');
+
     const qc = await QualityInspection.findOne({ 'items.assets.assetId': assetId }).lean();
-    if (!qc) return res.status(404).json({ success: false, error: "Asset not found" });
+    
+    if (!qc) {
+      console.log('Asset not found in any QC');
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
 
     let asset = null;
     for (const item of qc.items) {
       const found = item.assets?.find(a => a.assetId === assetId);
-      if (found) { asset = found; break; }
+      if (found) { 
+        asset = found; 
+        console.log('Asset found in QC:', qc.qcNumber);
+        break; 
+      }
     }
 
-    if (!asset) return res.status(404).json({ success: false, error: "Asset not found" });
+    if (!asset) {
+      return res.status(404).json({ success: false, error: "Asset not found" });
+    }
 
     res.status(200).json({
       success: true,
@@ -575,6 +696,7 @@ exports.getPublicAssetByAssetId = async (req, res) => {
       asset: filterAssetForPublic(asset),
     });
   } catch (error) {
+    console.error('Error in getPublicAssetByAssetId:', error);
     res.status(500).json({ success: false, error: "Error fetching asset: " + error.message });
   }
 };
