@@ -11,7 +11,7 @@ const Service = require('../models/serviceModel');
 const { newUserMail } = require('../mailsService/newEmpCreation');
 
 // ✅ FIXED: Removed status filter - Employee model doesn't have status field
-exports.getAllEmployees = async (req, res) => {
+exports.getAllEmployees = async (req, res) => {hourlyrate
   try {
     const user = req.user;
     
@@ -186,6 +186,7 @@ exports.search = async (req, res) => {
 exports.dashboard = async (req, res) => {
   try {
     const user=req.user;
+    const employeeData = await Employee.findById(user._id).select('target').lean();
     const uniqueProjectIds = await TaskSheet.distinct("project", { company: user.company, employees:user._id});
     const assignedTasks= await TaskSheet.find({company:user.company, employees:user._id, taskStatus:'upcomming'}).populate('taskName','name');
     const inprocessTasks= await TaskSheet.find({company:user.company, employees:user._id, taskStatus:'inprocess'}).populate('taskName','name');
@@ -211,6 +212,7 @@ exports.dashboard = async (req, res) => {
       completedCount,
       inprocessCount: inProcessProjects.length,
       totalProjects: (completedCount+ inProcessProjects.length + assignedProgects.length),
+      target: employeeData?.target || 0,
       success:true,
     });
   } catch (error) {
@@ -309,7 +311,7 @@ exports.updateEmployee = async (req, res) => {
   try {
     const {id} = req.params;
     const originalData = await Employee.findById(id);
-    const {name, department, mobileNo, hourlyRate, designation, email}= req.body
+    const {name, department, mobileNo, hourlyRate, designation, email, target}= req.body
 
     
     if (!originalData) {
@@ -322,7 +324,8 @@ exports.updateEmployee = async (req, res) => {
       mobileNo,
       hourlyRate,
       designation,
-      email
+      email, 
+      target
     };
 
     const emp= await Employee.findOne({email:email.toLowerCase().trim()});
