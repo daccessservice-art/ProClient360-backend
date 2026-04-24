@@ -27,7 +27,6 @@ const customerSchema = new mongoose.Schema({
     minlength: [2, 'Customer name must be at least 2 characters long'],
     maxlength: [300, 'Customer name cannot exceed 300 characters'],
   },
-  // ── Customer Type: Main or Branch ──
   customerType: {
     type: String,
     enum: ['main', 'branch'],
@@ -73,8 +72,6 @@ const customerSchema = new mongoose.Schema({
     required: [true, 'GST number is required'],
     maxlength: [15, 'GST number cannot exceed 15 characters'],
   },
-
-  // ── Contact Person 1 ──
   customerContactPersonName1: {
     type: String,
     required: [true, 'Customer Contact Person Name is required'],
@@ -100,8 +97,6 @@ const customerSchema = new mongoose.Schema({
     maxlength: [100, 'Designation cannot exceed 100 characters'],
     default: '',
   },
-
-  // ── Contact Person 2 ──
   customerContactPersonName2: {
     type: String,
     maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
@@ -125,8 +120,6 @@ const customerSchema = new mongoose.Schema({
     maxlength: [100, 'Designation cannot exceed 100 characters'],
     default: '',
   },
-
-  // ── Contact Person 3 ──
   customerContactPersonName3: {
     type: String,
     maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
@@ -150,8 +143,6 @@ const customerSchema = new mongoose.Schema({
     maxlength: [100, 'Designation cannot exceed 100 characters'],
     default: '',
   },
-
-  // ── Contact Person 4 ──
   customerContactPersonName4: {
     type: String,
     maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
@@ -175,8 +166,6 @@ const customerSchema = new mongoose.Schema({
     maxlength: [100, 'Designation cannot exceed 100 characters'],
     default: '',
   },
-
-  // ── Contact Person 5 ──
   customerContactPersonName5: {
     type: String,
     maxlength: [100, 'Customer Contact Person Name cannot exceed 100 characters'],
@@ -200,7 +189,6 @@ const customerSchema = new mongoose.Schema({
     maxlength: [100, 'Designation cannot exceed 100 characters'],
     default: '',
   },
-
   zone: {
     type: String,
     required: [true, 'Zone is required'],
@@ -254,11 +242,14 @@ const customerSchema = new mongoose.Schema({
     },
     default: 'P2',
   },
+  isChecked: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });
 
-// Index for branch queries
 customerSchema.index({ branchOf: 1 });
 customerSchema.index({ customerType: 1 });
 

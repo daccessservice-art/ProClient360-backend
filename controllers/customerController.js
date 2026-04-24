@@ -34,7 +34,6 @@ exports.showAll = async (req, res) => {
 
     let conditions = [{ company: companyId }];
 
-    // ── Search ──
     if (
       q !== undefined && q !== null &&
       q.trim() !== "" && q.trim().toLowerCase() !== "null" &&
@@ -54,7 +53,6 @@ exports.showAll = async (req, res) => {
       });
     }
 
-    // ── Owned By ──
     if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
       if (ownedBy.trim().toLowerCase() === "na") {
         conditions.push({
@@ -72,7 +70,6 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ── Created By ──
     if (createdBy && createdBy.trim() !== "" && createdBy.toLowerCase() !== "null") {
       try {
         const Employee = require("../models/employeeModel");
@@ -98,7 +95,6 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ── Customer Priority ──
     if (priority && priority.trim() !== "") {
       if (priority.trim().toUpperCase() === "NA") {
         conditions.push({
@@ -113,7 +109,6 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ── Industry Type ──
     if (industryType && industryType.trim() !== "") {
       if (industryType.trim().toUpperCase() === "NA") {
         conditions.push({
@@ -128,7 +123,6 @@ exports.showAll = async (req, res) => {
       }
     }
 
-    // ── Customer Type ──
     if (customerType && customerType.trim() !== "") {
       conditions.push({ customerType: customerType.trim().toLowerCase() });
     }
@@ -145,7 +139,7 @@ exports.showAll = async (req, res) => {
       .limit(limit)
       .populate("createdBy", "name email")
       .populate("branchOf", "custName email")
-      .sort({ createdAt: -1 })
+      .sort({ custName: 1 })
       .lean();
 
     res.status(200).json({
@@ -164,7 +158,6 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ── Get ALL customers for branch selection dropdown ──
 exports.getCustomersForBranch = async (req, res) => {
   try {
     const user = req.user;
@@ -293,6 +286,7 @@ exports.createCustomer = async (req, res) => {
       industryType,
       industryTypeOther: industryType === 'Other' ? industryTypeOther : undefined,
       customerPriority,
+      isChecked: false,
     });
 
     const savedCustomer = await newCust.save();
@@ -435,6 +429,7 @@ exports.updateCustomer = async (req, res) => {
       customerPriority: existingCustomer.customerPriority,
       customerType: existingCustomer.customerType,
       branchOf: existingCustomer.branchOf,
+      isChecked: existingCustomer.isChecked,
       _id: existingCustomer._id,
     };
 
@@ -471,6 +466,7 @@ exports.updateCustomer = async (req, res) => {
     trackChanges("customerPriority", existingCustomer.customerPriority, updatedData.customerPriority);
     trackChanges("customerType", existingCustomer.customerType, updatedData.customerType);
     trackChanges("branchOf", existingCustomer.branchOf, updatedData.branchOf);
+    trackChanges("isChecked", existingCustomer.isChecked, updatedData.isChecked);
 
     if (updatedData.billingAddress) {
       trackChanges("billingAddress.add", existingCustomer.billingAddress?.add, updatedData.billingAddress.add);
@@ -506,6 +502,7 @@ exports.updateCustomer = async (req, res) => {
       customerPriority: updatedCustomerDoc.customerPriority,
       customerType: updatedCustomerDoc.customerType,
       branchOf: updatedCustomerDoc.branchOf,
+      isChecked: updatedCustomerDoc.isChecked,
       _id: updatedCustomerDoc._id,
     };
 
@@ -526,17 +523,17 @@ exports.updateCustomer = async (req, res) => {
   }
 };
 
-// ── PDF Export ────────────────────────────────────────────────────────────────
+// ── PDF Export ──
 exports.exportCustomersPDF = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
       .populate("createdBy", "name")
       .populate("branchOf", "custName")
-      .sort({ createdAt: -1 });
+      .sort({ custName: 1 });
 
     const doc = new PDFDocument({
       margin: 30,
@@ -654,17 +651,17 @@ exports.exportCustomersPDF = async (req, res) => {
   }
 };
 
-// ── Excel Export ──────────────────────────────────────────────────────────────
+// ── Excel Export ──
 exports.exportCustomersExcel = async (req, res) => {
   try {
     const user = req.user;
     const query = { company: user.company || user._id };
 
     const customers = await Customer.find(query)
-      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf')
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
       .populate("createdBy", "name email")
       .populate("branchOf", "custName email")
-      .sort({ createdAt: -1 });
+      .sort({ custName: 1 });
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'ProClient360';
@@ -700,6 +697,7 @@ exports.exportCustomersExcel = async (req, res) => {
       { header: 'Created By Email', key: 'createdByEmail', width: 25 },
       { header: 'Owned By', key: 'ownedByName', width: 15 },
       { header: 'Created Date', key: 'createdAt', width: 15 },
+      { header: 'Is Checked', key: 'isChecked', width: 12 },
     ];
 
     const headerRow = worksheet.getRow(1);
@@ -747,6 +745,7 @@ exports.exportCustomersExcel = async (req, res) => {
         createdByEmail: customer.createdBy?.email || '',
         ownedByName: customer.ownedBy || '',
         createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : '',
+        isChecked: customer.isChecked ? '✓ Yes' : 'No',
       });
 
       row.height = 20;
