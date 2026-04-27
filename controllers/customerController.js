@@ -34,14 +34,14 @@ exports.showAll = async (req, res) => {
 
     let conditions = [{ company: companyId }];
 
+    // ✅ FIX: Removed `skip = 0` and `page = 1` that were causing pagination
+    //         to always reset to page 1 when search was active.
     if (
       q !== undefined && q !== null &&
       q.trim() !== "" && q.trim().toLowerCase() !== "null" &&
       q.trim().toLowerCase() !== "undefined"
     ) {
       const searchRegex = new RegExp(q, "i");
-      skip = 0;
-      page = 1;
       conditions.push({
         $or: [
           { custName: { $regex: searchRegex } },
