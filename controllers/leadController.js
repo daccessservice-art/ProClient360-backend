@@ -757,3 +757,50 @@ exports.saveMeetingLog = async (req, res) => {
     res.status(500).json({ success: false, error: "Internal Server Error: " + error.message });
   }
 };
+
+// ── Add this new export at the bottom of leadController.js ──
+
+exports.transferOwnership = async (req, res) => {
+  try {
+    const user = req.user;
+    const { fromEmployeeId, toEmployeeId, leadIds } = req.body;
+
+    if (!fromEmployeeId || !toEmployeeId) {
+      return res.status(400).json({ success: false, error: 'Both fromEmployeeId and toEmployeeId are required.' });
+    }
+    if (!Types.ObjectId.isValid(fromEmployeeId) || !Types.ObjectId.isValid(toEmployeeId)) {
+      return res.status(400).json({ success: false, error: 'Invalid employee ID format.' });
+    }
+    if (fromEmployeeId === toEmployeeId) {
+      return res.status(400).json({ success: false, error: 'From and To employee cannot be the same.' });
+    }
+    if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'Please provide at least one lead ID to transfer.' });
+    }
+
+    // Only transfer feasible leads belonging to the company
+    const query = {
+      company:    new Types.ObjectId(user.company || user._id),
+      assignedTo: new Types.ObjectId(fromEmployeeId),
+      feasibility: 'feasible',
+      _id: { $in: leadIds.map(id => new Types.ObjectId(id)) },
+    };
+
+    const result = await Lead.updateMany(query, {
+      $set: {
+        assignedTo:   new Types.ObjectId(toEmployeeId),
+        assignedBy:   new Types.ObjectId(user._id),
+        assignedTime: new Date(),
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully transferred ${result.modifiedCount} lead${result.modifiedCount !== 1 ? 's' : ''} to the new owner.`,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error('Error transferring ownership:', error);
+    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
+  }
+};

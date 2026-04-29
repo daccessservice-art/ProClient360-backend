@@ -92,6 +92,8 @@ router.put('/assign/:id', permissionMiddleware(['assignLead']), leadController.a
 // Sales to Sales reassignment
 router.put('/reassign/:id', permissionMiddleware(['updateLead']), leadController.assignLead);
 
+router.put('/transfer-ownership', permissionMiddleware(['updateLead']), leadController.transferOwnership);
+
 // Submit enquiry
 router.put('/submit-enquiry/:id', isLoggedIn, leadController.submiEnquiry);
 
