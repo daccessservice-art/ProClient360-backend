@@ -84,7 +84,11 @@ const ticketSchema = new Schema({
         'Lift Eliviter System',
         'AV6',
         'Walky Talky System',
-        'Device Management System'                     
+        'Device Management System',
+        'VisionIQ',
+        'CineMind',
+        'Extracto',
+        'Virtual Agent'                     
         ],
         required: true,
     },
