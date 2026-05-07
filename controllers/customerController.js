@@ -34,8 +34,6 @@ exports.showAll = async (req, res) => {
 
     let conditions = [{ company: companyId }];
 
-    // ✅ FIX: Removed `skip = 0` and `page = 1` that were causing pagination
-    //         to always reset to page 1 when search was active.
     if (
       q !== undefined && q !== null &&
       q.trim() !== "" && q.trim().toLowerCase() !== "null" &&
@@ -88,6 +86,8 @@ exports.showAll = async (req, res) => {
               currentPage: page, totalPages: 0, totalCustomers: 0,
               limit, hasNextPage: false, hasPrevPage: false,
             },
+            counts: { main: 0, branch: 0 },
+            allCounts: { main: 0, branch: 0 },
           });
         }
       } catch (empError) {
@@ -142,12 +142,31 @@ exports.showAll = async (req, res) => {
       .sort({ custName: 1 })
       .lean();
 
+    // ── Filtered counts: respects all active filters ──
+    const mainCount = await Customer.countDocuments({ ...query, customerType: "main" });
+    const branchCount = await Customer.countDocuments({ ...query, customerType: "branch" });
+
+    // ── ALL-TIME total counts: always unfiltered (only scoped to company) ──
+    // These are shown permanently in the header badges regardless of active filters
+    const allMainCount = await Customer.countDocuments({ company: companyId, customerType: "main" });
+    const allBranchCount = await Customer.countDocuments({ company: companyId, customerType: "branch" });
+
     res.status(200).json({
       success: true,
       customers,
       pagination: {
         currentPage: page, totalPages, totalCustomers,
         limit, hasNextPage, hasPrevPage,
+      },
+      // Filtered counts (match active query/filters)
+      counts: {
+        main: mainCount,
+        branch: branchCount,
+      },
+      // Unfiltered total counts (always full company-wide totals)
+      allCounts: {
+        main: allMainCount,
+        branch: allBranchCount,
       },
     });
   } catch (error) {
