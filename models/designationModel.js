@@ -31,6 +31,13 @@ const designationSchema = new mongoose.Schema({
             'updateTask',
             'deleteTask',
 
+            'viewSubTask',
+            'viewMySubTask',
+            'createSubTask',
+            'updateSubTask',
+            'updateMySubTask',
+            'deleteSubTask',
+
             'createProject',
             'updateProject',
             'deleteProject',
@@ -146,6 +153,11 @@ const designationSchema = new mongoose.Schema({
             'viewExhibitionVisit',
             'updateExhibitionVisit',
             'deleteExhibitionVisit',
+
+            'viewAccountMaster',
+            'createAccountMaster',
+            'updateAccountMaster',
+            'deleteAccountMaster',
         ],
     }]
 
