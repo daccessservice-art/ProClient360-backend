@@ -1,5 +1,5 @@
 const { Types } = require('mongoose');
-const Lead = require('../models/leadsModel.js');
+const Lead = require('../models/leadsModel');
 const { logLeadCreation, logLeadUpdate, logLeadDeletion, logLeadAssignment, logStatusChange, logCallAttempt } = require('../middlewares/activityLogger');
 
 // ── Build IST-correct date range for a YYYY-MM-DD string ──
@@ -211,7 +211,6 @@ exports.getNotFeasibleLeads = async (req, res) => {
   }
 };
 
-// ✅ NEW — Feasible leads with assigned employee name populated
 exports.getFeasibleLeads = async (req, res) => {
   const user  = req.user;
   const page  = parseInt(req.query.page)  || 1;
@@ -258,7 +257,7 @@ exports.getFeasibleLeads = async (req, res) => {
     const leads = await Lead.find(query)
       .populate('company',    'name')
       .populate('assignedBy', 'name')
-      .populate('assignedTo', 'name')  // ← employee name shown in Feasible Leads table
+      .populate('assignedTo', 'name')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -353,9 +352,7 @@ exports.getMyLeads = async (req, res) => {
       query.nextFollowUpDate = { $gte: startOfToday, $lt: endOfToday };
       delete query.createdAt;
     }
- 
-    // ── NEW: Today's Action filter ──
-    // Returns leads that have at least one previousAction created today
+
     if (todayAction === 'true') {
       const today = new Date();
       const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
@@ -366,7 +363,7 @@ exports.getMyLeads = async (req, res) => {
         }
       };
     }
- 
+
     const leads = await Lead.find(query)
       .populate('company', 'name')
       .populate('assignedBy', 'name')
@@ -592,10 +589,10 @@ exports.createLead = async (req, res) => {
       SENDER_NAME, SENDER_EMAIL, SENDER_MOBILE, SUBJECT, SENDER_COMPANY,
       SENDER_ADDRESS, SENDER_CITY, SENDER_STATE, SENDER_PINCODE, SENDER_COUNTRY_ISO,
       QUERY_PRODUCT_NAME, QUERY_MESSAGE, QUERY_SOURCES_NAME,
-      feasibility, assignedTo, assignedBy, assignedTime, customerType, customerId, callLeads
+      feasibility, assignedTo, assignedBy, assignedTime, customerType, customerId, callLeads,
+      projectSize, requirementType, requirementMode, surveyNeeded, surveyDetails,
+      assignedSurveyEngineer, surveyEngineerAssignedAt, surveyEngineerAssignedBy
     } = req.body;
-
-    // ✅ Duplicate mobile check REMOVED — same mobile can have multiple leads
 
     const leadData = {
       SENDER_NAME, SENDER_EMAIL, SENDER_MOBILE, SUBJECT, SENDER_COMPANY,
@@ -614,6 +611,25 @@ exports.createLead = async (req, res) => {
 
     if (customerType) leadData.customerType = customerType;
     if (customerId)   leadData.customerId   = new Types.ObjectId(customerId);
+
+    // ✅ Save project & survey fields
+    if (projectSize)       leadData.projectSize       = projectSize;
+    if (requirementType)   leadData.requirementType   = requirementType;
+    if (requirementMode)   leadData.requirementMode   = requirementMode;
+    if (surveyNeeded)      leadData.surveyNeeded      = surveyNeeded;
+    if (surveyDetails) {
+      leadData.surveyDetails = {
+        dateTime:          surveyDetails.dateTime ? new Date(surveyDetails.dateTime) : null,
+        communicatePerson: surveyDetails.communicatePerson || '',
+        communicateEmail:  surveyDetails.communicateEmail  || '',
+        communicateContact:surveyDetails.communicateContact|| '',
+      };
+    }
+    if (assignedSurveyEngineer) {
+      leadData.assignedSurveyEngineer    = new Types.ObjectId(assignedSurveyEngineer);
+      leadData.surveyEngineerAssignedAt  = surveyEngineerAssignedAt || new Date();
+      leadData.surveyEngineerAssignedBy  = surveyEngineerAssignedBy ? new Types.ObjectId(surveyEngineerAssignedBy) : null;
+    }
 
     const lead = new Lead(leadData);
     await lead.save();
@@ -733,7 +749,6 @@ exports.saveMeetingLog = async (req, res) => {
       return res.status(404).json({ success: false, error: "Lead not found." });
     }
 
-    // Only append — never touch status, step, or any other lead field
     lead.previousActions.push({
       status:          lead.STATUS          || "Pending",
       step:            lead.step            || "1. Call Not Connect/ Callback",
@@ -758,8 +773,6 @@ exports.saveMeetingLog = async (req, res) => {
   }
 };
 
-// ── Add this new export at the bottom of leadController.js ──
-
 exports.transferOwnership = async (req, res) => {
   try {
     const user = req.user;
@@ -778,7 +791,6 @@ exports.transferOwnership = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Please provide at least one lead ID to transfer.' });
     }
 
-    // Only transfer feasible leads belonging to the company
     const query = {
       company:    new Types.ObjectId(user.company || user._id),
       assignedTo: new Types.ObjectId(fromEmployeeId),
@@ -801,6 +813,111 @@ exports.transferOwnership = async (req, res) => {
     });
   } catch (error) {
     console.error('Error transferring ownership:', error);
+    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
+  }
+};
+
+
+
+
+exports.submitSurveyReport = async (req, res) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+    const { status, surveyDate, cancelReason } = req.body;
+
+    const lead = await Lead.findOne({ _id: id, company: user.company || user._id });
+    if (!lead) {
+      return res.status(404).json({ success: false, error: 'Lead not found.' });
+    }
+
+    // Check if this lead is assigned to this survey engineer
+    if (lead.assignedSurveyEngineer && lead.assignedSurveyEngineer.toString() !== user._id.toString()) {
+      if (user.user !== 'admin' && user.user !== 'company') {
+        return res.status(403).json({ success: false, error: 'This lead is not assigned to you.' });
+      }
+    }
+
+    let reportFileUrl  = lead.surveyReport?.reportFile  || '';
+    let drawingFileUrl = lead.surveyReport?.drawingFile || '';
+    let boqFileUrl     = lead.surveyReport?.boqFile     || '';
+
+    // Handle file uploads from multer — req.files is populated by multer.fields()
+    if (req.files) {
+      if (req.files.reportFile && req.files.reportFile[0]) {
+        reportFileUrl = '/uploads/survey-reports/' + req.files.reportFile[0].filename;
+      }
+      if (req.files.drawingFile && req.files.drawingFile[0]) {
+        drawingFileUrl = '/uploads/survey-reports/' + req.files.drawingFile[0].filename;
+      }
+      if (req.files.boqFile && req.files.boqFile[0]) {
+        boqFileUrl = '/uploads/survey-reports/' + req.files.boqFile[0].filename;
+      }
+    }
+
+    lead.surveyReport = {
+      status: status || 'pending',
+      surveyDate: surveyDate || new Date(),
+      reportFile: reportFileUrl,
+      drawingFile: drawingFileUrl,
+      boqFile: boqFileUrl,
+      cancelReason: cancelReason || '',
+      submittedAt: new Date(),
+      submittedBy: user._id
+    };
+
+    // Add to previous actions
+    const actionRemark = status === 'success'
+      ? 'Survey completed successfully. Report, Drawing and BOQ uploaded.'
+      : `Survey cancelled. Reason: ${cancelReason}`;
+
+    if (!lead.previousActions) lead.previousActions = [];
+    lead.previousActions.push({
+      _id: new Types.ObjectId(),
+      status: lead.STATUS,
+      step: '3. Site Visit',
+      nextFollowUpDate: lead.nextFollowUpDate,
+      rem: actionRemark,
+      completion: status === 'success' ? 50 : lead.complated,
+      quotation: lead.quotation,
+      callLeads: lead.callLeads,
+      actionBy: { name: user.name || 'Pre Sales Executive', userId: user._id },
+      createdAt: new Date()
+    });
+
+    await lead.save();
+
+    // ── Populate lead for mail (need assignedTo.email & assignedTo.name) ──────
+    const populatedLead = await Lead.findById(lead._id)
+      .populate('assignedTo', 'name email')
+      .populate('assignedBy', 'name email')
+      .populate('assignedSurveyEngineer', 'name email')
+      .lean();
+
+    // ── Send notification email ───────────────────────────────────────────────
+    try {
+      const { surveyEngineerReportMail } = require('../mailsService/surveyEngineerReportMail');
+      await surveyEngineerReportMail({
+        lead: populatedLead,
+        surveyEngineer: { name: user.name, email: user.email },
+        status,
+        cancelReason: cancelReason || '',
+        surveyDate: surveyDate ? new Date(surveyDate) : new Date(),
+      });
+    } catch (mailErr) {
+      // Mail failure must NEVER break the API response
+      console.error('⚠️ Survey report mail failed (non-blocking):', mailErr.message);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    res.status(200).json({
+      success: true,
+      message: status === 'success' ? 'Survey report submitted successfully!' : 'Survey cancellation recorded.',
+      data: lead.surveyReport
+    });
+
+  } catch (error) {
+    console.error('Error submitting survey report:', error);
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };

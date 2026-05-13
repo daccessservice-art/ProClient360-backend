@@ -4,9 +4,55 @@ const leadController = require('../controllers/leadController');
 const salesManagerController = require('../controllers/salesManagerController');
 const { permissionMiddleware, isLoggedIn } = require('../middlewares/auth');
 const { Types } = require('mongoose');
-const Lead = require('../models/leadsModel.js');
+const Lead = require('../models/leadsModel');
 const { autoMarkStaleLeads } = require('../scripts/autoMarkStaleLeads');
-const { saveMeetingLog } = require("../controllers/leadController");
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// ✅ Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '../uploads/survey-reports');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    // Clean filename - remove special characters
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9.\-]/g, '_');
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(cleanName);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = {
+    'reportFile':  /\.(doc|docx)$/i,
+    'drawingFile': /\.(pdf)$/i,
+    'boqFile':     /\.(xls|xlsx)$/i
+  };
+
+  const fieldName = file.fieldname;
+  if (allowedTypes[fieldName] && allowedTypes[fieldName].test(file.originalname)) {
+    cb(null, true);
+  } else {
+    const allowedMsg = fieldName === 'reportFile'
+      ? 'Word files (.doc, .docx) only'
+      : fieldName === 'drawingFile'
+        ? 'PDF files only'
+        : 'Excel files (.xls, .xlsx) only';
+    cb(new Error(`Invalid file type for ${fieldName}. Allowed: ${allowedMsg}`), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
 
 console.log('📋 Registering Lead Routes...');
 
@@ -35,7 +81,7 @@ router.get('/call-unanswered', permissionMiddleware(['viewLead']), leadControlle
 // Get not feasible leads
 router.get('/not-feasible', permissionMiddleware(['viewLead']), leadController.getNotFeasibleLeads);
 
-// ✅ NEW: Get feasible leads (for marketing dashboard Feasible card)
+// Get feasible leads
 router.get('/feasible-leads', permissionMiddleware(['viewLead']), leadController.getFeasibleLeads);
 
 // Get sales employees
@@ -112,7 +158,54 @@ router.get('/', permissionMiddleware(['viewMarketingDashboard']), leadController
 // Create new lead
 router.post('/', permissionMiddleware(['createLead']), leadController.createLead);
 
-router.put("/meeting-log/:id", isLoggedIn, saveMeetingLog);
+// ========== SURVEY ENGINEER ROUTES ==========
+
+// ✅ Submit survey report with file uploads (Word, PDF, Excel) — uses multer
+router.put('/survey-report/:id', isLoggedIn, upload.fields([
+  { name: 'reportFile',  maxCount: 1 },
+  { name: 'drawingFile', maxCount: 1 },
+  { name: 'boqFile',     maxCount: 1 }
+]), leadController.submitSurveyReport);
+
+// Get survey engineers list
+router.get('/survey-engineers', isLoggedIn, async (req, res) => {
+  try {
+    const Employee = require('../models/employeeModel');
+    const surveyEngineers = await Employee.find({
+      role: { $in: ['Pre Sales Executive', 'pre sales executive', 'Pre_Sales_Executive'] },
+      company: req.user.company || req.user._id
+    }).select('name email department role');
+
+    res.status(200).json({ success: true, employees: surveyEngineers });
+  } catch (error) {
+    console.error('Error fetching survey engineers:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get leads assigned to current survey engineer - FIXED
+router.get('/my-survey-leads', isLoggedIn, async (req, res) => {
+  try {
+    const user = req.user;
+    const leads = await Lead.find({
+      assignedSurveyEngineer: new Types.ObjectId(user._id),
+      company: user.company || user._id
+    })
+    .populate('assignedTo', 'name email')
+    .populate('assignedBy', 'name email')
+    .populate('assignedSurveyEngineer', 'name email')
+    .populate('company', 'name')
+    .sort({ surveyEngineerAssignedAt: -1, createdAt: -1 });
+
+    res.status(200).json({ success: true, leads });
+  } catch (error) {
+    console.error('Error fetching survey leads:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Meeting log
+router.put("/meeting-log/:id", isLoggedIn, leadController.saveMeetingLog);
 
 console.log('✅ All lead routes registered successfully');
 

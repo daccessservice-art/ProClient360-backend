@@ -158,6 +158,18 @@ const designationSchema = new mongoose.Schema({
             'createAccountMaster',
             'updateAccountMaster',
             'deleteAccountMaster',
+
+            'surveyEngineer',
+            'viewSurveyDashboard',
+
+            'createSurveyEngineer',
+            'viewSurveyEngineer',
+            'updateSurveyEngineer',
+            'deleteSurveyEngineer',
+            'createSurveyReport',
+            'viewSurveyReport',
+            'updateSurveyReport',
+            'deleteSurveyReport',
         ],
     }]
 
@@ -167,4 +179,4 @@ const designationSchema = new mongoose.Schema({
 
 const Designation = mongoose.model('Designation', designationSchema);
 
-module.exports = Designation; 
+module.exports = Designation;

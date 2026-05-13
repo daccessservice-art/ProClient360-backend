@@ -11,7 +11,8 @@ const Service = require('../models/serviceModel');
 const { newUserMail } = require('../mailsService/newEmpCreation');
 
 // ✅ FIXED: Removed status filter - Employee model doesn't have status field
-exports.getAllEmployees = async (req, res) => {hourlyrate
+// ✅ FIXED: Removed stray "hourlyrate" word that was causing the error
+exports.getAllEmployees = async (req, res) => {
   try {
     const user = req.user;
     
@@ -19,7 +20,7 @@ exports.getAllEmployees = async (req, res) => {hourlyrate
     
     const employees = await Employee.find({
       company: user.company ? user.company : user._id,
-    }).select('_id name email');
+    }).select('_id name email role department');
     
     console.log('Found employees:', employees.length);
     
@@ -158,7 +159,7 @@ exports.search = async (req, res) => {
     const filter = {
       company: user.company ? user.company : user._id,
       $or: [
-        { empName: { $regex: query, $options: 'i' } },
+        { name: { $regex: query, $options: 'i' } },
         { email: { $regex: query, $options: 'i' } }
       ]
     };
@@ -186,7 +187,7 @@ exports.search = async (req, res) => {
 exports.dashboard = async (req, res) => {
   try {
     const user=req.user;
-    const employeeData = await Employee.findById(user._id).select('target').lean();
+    const employeeData = await Employee.findById(user._id).select('target hourlyRate').lean();
     const uniqueProjectIds = await TaskSheet.distinct("project", { company: user.company, employees:user._id});
     const assignedTasks= await TaskSheet.find({company:user.company, employees:user._id, taskStatus:'upcomming'}).populate('taskName','name');
     const inprocessTasks= await TaskSheet.find({company:user.company, employees:user._id, taskStatus:'inprocess'}).populate('taskName','name');
@@ -222,7 +223,7 @@ exports.dashboard = async (req, res) => {
 
 exports.create=async (req, res) => {
   try {
-    const {name, mobileNo, hourlyRate,designation, email, password,department, confirmPassword, gender}=req.body;
+    const {name, mobileNo, hourlyRate, designation, email, password, department, confirmPassword, gender}=req.body;
     if(password !== confirmPassword){
       return res.status(400).json({
       error:`Password doesn\'t match!!!`,
@@ -234,7 +235,7 @@ exports.create=async (req, res) => {
     const company= await Company.findOne({email});
     const admin= await Admin.findOne({email});
     if(company || admin){
-      return res.status(409).json({success: false, error:"Email allready exists!!!"});
+      return res.status(409).json({success: false, error:"Email already exists!!!"});
     }
 
     if(emp){
@@ -246,19 +247,20 @@ exports.create=async (req, res) => {
     const hashPassword=await bcrypt.hash(password,salt);
   
     const boyProfilePic = `https://avatar.iran.liara.run/public/boy?username=${email}`;
-        const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${email}`;
+    const girlProfilePic = `https://avatar.iran.liara.run/public/girl?username=${email}`;
     const otherProfilePic= `https://avatar.iran.liara.run/username?username=${name}`;
-    const newEmp=Employee({
+    
+    const newEmp = new Employee({
       name,
       mobileNo,
       hourlyRate,
       designation,
-      company:req.user.company || req.user._id,
+      company: req.user.company || req.user._id,
       department,
-      email:email.toLowerCase().trim(),           
-      password:hashPassword,
+      email: email.toLowerCase().trim(),           
+      password: hashPassword,
       gender,
-      profilePic:gender==='male'?boyProfilePic: gender==='female'? girlProfilePic:otherProfilePic
+      profilePic: gender === 'male' ? boyProfilePic : gender === 'female' ? girlProfilePic : otherProfilePic
     });
 
     if(newEmp){
@@ -271,9 +273,9 @@ exports.create=async (req, res) => {
     }
     else{
       res.status(400).json({
-      success: false,
-      error:"Invalid Employee Data!!!"
-    });
+        success: false,
+        error:"Invalid Employee Data!!!"
+      });
     }
 
 
@@ -328,7 +330,7 @@ exports.updateEmployee = async (req, res) => {
       target
     };
 
-    const emp= await Employee.findOne({email:email.toLowerCase().trim()});
+    const emp= await Employee.findOne({email: email.toLowerCase().trim()});
     if(emp && emp._id.toString() !== id) {
       return res.status(409).json({success: false, error:"Employee with this email already exists!!!"});
     } 
