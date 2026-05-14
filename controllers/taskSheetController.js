@@ -11,7 +11,6 @@ const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogH
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
-  
     const task = await TaskSheet.find({
       company: user.company ? user.company : user._id,
     })
@@ -23,15 +22,9 @@ exports.showAll = async (req, res) => {
       return res.status(404).json({ success: false, error: "No Task Found" });
     }
     
-    res.status(200).json({
-      task,
-      totalRecord: task.length,
-      success: true,
-    });
+    res.status(200).json({ task, totalRecord: task.length, success: true });
   } catch (error) {
-    res.status(500).json({
-      error: "Error while fetching the Task Sheets: " + error.message,
-    });
+    res.status(500).json({ error: "Error while fetching the Task Sheets: " + error.message });
   }
 };
 
@@ -61,10 +54,7 @@ exports.getTaskSheet = async (req, res) => {
       .populate({
         path: 'project',
         select: 'name startDate endDate completeLevel custId', 
-        populate: {
-          path: 'custId', 
-          select: 'custName' 
-        }
+        populate: { path: 'custId', select: 'custName' }
       })
       .populate('taskName', 'name')
       .populate('employees', 'name')
@@ -110,7 +100,33 @@ exports.myTask = async (req, res) => {
   }
 };
 
-// ✅ NEW: Send completion email to the person who assigned the task
+// NEW: Employee updates ONLY the subtask name
+exports.updateSubtask = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subtaskName } = req.body;
+    const user = req.user;
+
+    const task = await TaskSheet.findById(id);
+
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    // Ensure the employee is assigned to this task
+    if (!task.employees.includes(user._id)) {
+      return res.status(403).json({ success: false, error: "You are not authorized to update this task" });
+    }
+
+    task.subtaskName = subtaskName;
+    await task.save();
+
+    res.status(200).json({ success: true, message: "Subtask updated successfully", data: task });
+  } catch (error) {
+    res.status(500).json({ error: "Error updating subtask: " + error.message });
+  }
+};
+
 exports.notifyCompletion = async (req, res) => {
   try {
     const { taskId, assignedById, employeeId, taskName } = req.body;
@@ -119,7 +135,6 @@ exports.notifyCompletion = async (req, res) => {
       return res.status(400).json({ success: false, error: "taskId and assignedById are required" });
     }
 
-    // Fetch task details
     const task = await TaskSheet.findById(taskId)
       .populate('taskName', 'name')
       .populate('project', 'name')
@@ -129,21 +144,17 @@ exports.notifyCompletion = async (req, res) => {
       return res.status(404).json({ success: false, error: "Task not found" });
     }
 
-    // Only send if task is actually 100% complete
     if (task.taskLevel !== 100) {
-      return res.status(200).json({ success: false, message: "Task is not yet 100% complete, no email sent" });
+      return res.status(200).json({ success: false, message: "Task is not yet 100% complete" });
     }
 
-    // Get the assigner's details
     const assigner = await Employee.findById(assignedById).select('name email');
     if (!assigner || !assigner.email) {
       return res.status(404).json({ success: false, error: "Assigner not found or has no email" });
     }
 
-    // Get assigned employee details
     const employee = await Employee.findById(employeeId).select('name');
 
-    // Send completion mail to the assigner
     await taskCompletedMail({
       assignerEmail: assigner.email,
       assignerName: assigner.name,
@@ -163,7 +174,7 @@ exports.notifyCompletion = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    const { project, employees, taskName, startDate, endDate, remark, priority } = req.body;
+    const { project, employees, taskName, subtaskName, startDate, endDate, remark, priority } = req.body;
     const user = req.user;
 
     if (!project || !employees || !taskName || !startDate || !endDate || !priority) {
@@ -189,15 +200,13 @@ exports.create = async (req, res) => {
 
     const existingProject = await Project.findById(project);
     if (!existingProject) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Project not found" 
-      });
+      return res.status(404).json({ success: false, error: "Project not found" });
     }
 
     const task = await TaskSheet.create({
       employees,
       taskName,
+      subtaskName, // ✅ Save subtask
       project,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
@@ -247,22 +256,14 @@ exports.create = async (req, res) => {
     
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
-      return res.status(400).json({
-        success: false,
-        error: errors.join(', ')
-      });
+      return res.status(400).json({ success: false, error: errors.join(', ') });
     }
     
     if (error.code === 11000) {
-      return res.status(400).json({
-        success: false,
-        error: "Duplicate entry found"
-      });
+      return res.status(400).json({ success: false, error: "Duplicate entry found" });
     }
     
-    res.status(500).json({ 
-      error: "Error while creating taskSheet: " + error.message 
-    });
+    res.status(500).json({ error: "Error while creating taskSheet: " + error.message });
   }
 };
 
@@ -279,10 +280,7 @@ exports.update = async (req, res) => {
       .populate('assignedBy', 'name');
       
     if (!existingTask) {
-      return res.status(404).json({
-        success: false,
-        error: "TaskSheet not found"
-      });
+      return res.status(404).json({ success: false, error: "TaskSheet not found" });
     }
 
     const oldTaskData = {
@@ -305,15 +303,11 @@ exports.update = async (req, res) => {
     delete updateData.company;
     delete updateData.assignedBy;
     
-    const task = await TaskSheet.findByIdAndUpdate(
-      id, 
-      updateData, 
-      { new: true, runValidators: true }
-    )
-    .populate('taskName', 'name')
-    .populate('employees', 'name')
-    .populate('assignedBy', 'name')
-    .populate('project', 'name');
+    const task = await TaskSheet.findByIdAndUpdate(id, updateData, { new: true, runValidators: true })
+      .populate('taskName', 'name')
+      .populate('employees', 'name')
+      .populate('assignedBy', 'name')
+      .populate('project', 'name');
 
     const updatedTask = {
       taskName: task.taskName ? (task.taskName._id ? task.taskName._id.toString() : task.taskName.toString()) : null,
@@ -340,16 +334,13 @@ exports.update = async (req, res) => {
 
     if (employeesChanged) {
       const { logAssignment } = require('../helpers/activityLogHelper');
-      
       const addedEmployeeIds = newEmployeeIds.filter(id => !oldEmployeeIds.includes(id));
       const removedEmployeeIds = oldEmployeeIds.filter(id => !newEmployeeIds.includes(id));
       
       for (const employeeId of addedEmployeeIds) {
         try {
           const employee = await Employee.findById(employeeId);
-          if (employee) {
-            await logAssignment(task, employee, user, req, 'Task');
-          }
+          if (employee) await logAssignment(task, employee, user, req, 'Task');
         } catch (error) {
           console.error('Error logging employee assignment:', error);
         }
@@ -367,16 +358,9 @@ exports.update = async (req, res) => {
               actionType: 'REASSIGN',
               actionBy: user._id,
               actionByName: user.name,
-              changes: [{
-                field: 'employees',
-                oldValue: employee.name,
-                newValue: 'Removed'
-              }],
+              changes: [{ field: 'employees', oldValue: employee.name, newValue: 'Removed' }],
               description: `Task unassigned from ${employee.name}`,
-              metadata: {
-                ipAddress: req.ip || req.connection.remoteAddress,
-                userAgent: req.headers['user-agent']
-              }
+              metadata: { ipAddress: req.ip || req.connection.remoteAddress, userAgent: req.headers['user-agent'] }
             });
           }
         } catch (error) {
@@ -385,7 +369,6 @@ exports.update = async (req, res) => {
       }
     }
 
-    // ✅ If task just reached 100%, send completion email to assignedBy
     if (task.taskLevel === 100 && existingTask.taskLevel < 100 && task.assignedBy) {
       try {
         const assigner = await Employee.findById(task.assignedBy._id || task.assignedBy).select('name email');
@@ -399,32 +382,20 @@ exports.update = async (req, res) => {
             startDate: task.startDate,
             endDate: task.endDate,
           });
-          console.log(`Completion email sent to assigner: ${assigner.email}`);
         }
       } catch (mailErr) {
         console.error("Failed to send completion email:", mailErr);
       }
     }
 
-    res.status(200).json({
-      success: true,
-      message: "TaskSheet updated successfully",
-      data: task
-    });
+    res.status(200).json({ success: true, message: "TaskSheet updated successfully", data: task });
   } catch (error) {
     console.error("Error updating task sheet:", error);
-    
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
-      return res.status(400).json({
-        success: false,
-        error: errors.join(', ')
-      });
+      return res.status(400).json({ success: false, error: errors.join(', ') });
     }
-    
-    res.status(500).json({ 
-      error: "Error while updating Task Sheet: " + error.message 
-    });
+    res.status(500).json({ error: "Error while updating Task Sheet: " + error.message });
   }
 };
 
@@ -432,28 +403,19 @@ exports.delete = async (req, res) => {
   try {
     const taskSheetId = req.params.id;
     const user = req.user;
-
     const task = await TaskSheet.findById(taskSheetId);
 
     if (!task) {
-      return res.status(404).json({
-        success: false,
-        error: "TaskSheet not found"
-      });
+      return res.status(404).json({ success: false, error: "TaskSheet not found" });
     }
 
     await logDeletion(task, user, req, 'Task');
     await TaskSheet.findByIdAndDelete(taskSheetId);
     await Action.deleteMany({ task: taskSheetId });
 
-    res.status(200).json({
-      success: true,
-      message: "TaskSheet and associated actions deleted successfully"
-    });
+    res.status(200).json({ success: true, message: "TaskSheet and associated actions deleted successfully" });
   } catch (error) {
     console.error("Error deleting task sheet:", error);
-    res.status(500).json({ 
-      error: "Error while deleting TaskSheet: " + error.message 
-    });
+    res.status(500).json({ error: "Error while deleting TaskSheet: " + error.message });
   }
 };

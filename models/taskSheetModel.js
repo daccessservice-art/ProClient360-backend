@@ -20,6 +20,11 @@ const taskSheetSchema = new Schema({
     ref: 'Task',
     required: [true, 'Task name is required'], 
   },
+  subtaskName: {
+    type: String,
+    default: "",
+    trim: true
+  },
   assignedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Employee"
@@ -35,7 +40,6 @@ const taskSheetSchema = new Schema({
     enum: ['stuck', 'inprocess', 'completed', 'upcoming'],
     default: 'upcoming'
   },
-  // ✅ REMOVED: min-date validators so back dates are allowed
   startDate: {
     type: Date,
     required: [true, 'Start date is required'],
@@ -46,7 +50,6 @@ const taskSheetSchema = new Schema({
     validate: [
       {
         validator: function(value) {
-          // Ensure end date is after or equal to start date
           if (!value || !this.startDate) return true;
           return value >= this.startDate;
         },

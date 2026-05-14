@@ -10,6 +10,9 @@ router.get('/', permissionMiddleware(['viewTaskSheet']), taskSheetController.sho
 // ✅ /my/:projectId ABOVE /:id
 router.get('/my/:projectId', isEmployee, taskSheetController.myTask);
 
+// ✅ NEW: Employee updates only subtask (must be before /:id)
+router.patch('/update-subtask/:id', isEmployee, taskSheetController.updateSubtask);
+
 // ✅ isLoggedIn so project employees can access /:id on mobile
 router.get('/:id', isLoggedIn, taskSheetController.getTaskSheet);
 
