@@ -1,6 +1,18 @@
 const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel');
+const Employee = require('../models/employeeModel');
 const { logLeadCreation, logLeadUpdate, logLeadDeletion, logLeadAssignment, logStatusChange, logCallAttempt } = require('../middlewares/activityLogger');
+
+// ══════════════════════════════════════════════════════════════
+//  HELPER: Get Current Financial Year Start Date
+// ══════════════════════════════════════════════════════════════
+const getCurrentFYStartDate = () => {
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth(); // 0-11
+  const fyStartYear = currentMonth < 3 ? currentYear - 1 : currentYear;
+  return new Date(`${fyStartYear}-04-01T00:00:00.000Z`);
+};
 
 // ── Build IST-correct date range for a YYYY-MM-DD string ──
 const getISTDayRange = (dateStr) => {
@@ -240,7 +252,6 @@ exports.getFeasibleLeads = async (req, res) => {
 
     if (search) {
       const searchRegex = new RegExp(search, 'i');
-      const Employee = require('../models/employeeModel');
       const matchingEmployees = await Employee.find(
         { name: searchRegex },
         '_id'
@@ -284,6 +295,9 @@ exports.getFeasibleLeads = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════════════════════════
+// ✅ FIXED: getMyLeads - Secure $and structure prevents FY filter overwrite
+// ══════════════════════════════════════════════════════════════
 exports.getMyLeads = async (req, res) => {
   const user  = req.user;
   const page  = parseInt(req.query.page)  || 1;
@@ -300,70 +314,99 @@ exports.getMyLeads = async (req, res) => {
   ];
 
   try {
-    const baseQuery = {
+    // ── Base conditions (always applied) ──
+    const baseMatch = {
       company: new Types.ObjectId(user.company || user._id),
       feasibility: 'feasible'
     };
     if (user.company && user.user !== 'company') {
-      baseQuery.assignedTo = new Types.ObjectId(user._id);
+      baseMatch.assignedTo = new Types.ObjectId(user._id);
     }
+    if (source && validSources.includes(source)) baseMatch.SOURCE = source;
 
-    const allLeadsCount = await Lead.countDocuments({
-      ...baseQuery,
-      STATUS: { $in: ['Pending', 'Ongoing', 'Won', 'Lost'] }
-    });
+    // ✅ FY filter as a SEPARATE $and element — never overwritten
+    const currentFYStart = getCurrentFYStartDate();
+    const fyFilter = {
+      $or: [
+        { STATUS: { $in: ['Pending', 'Ongoing'] } },
+        { STATUS: { $in: ['Won', 'Lost'] }, updatedAt: { $gte: currentFYStart } }
+      ]
+    };
 
-    let query = { ...baseQuery };
+    // ── Build $and array ──
+    const andConditions = [baseMatch, fyFilter];
 
-    if (source && validSources.includes(source)) query.SOURCE = source;
-
+    // ✅ Date filter — added as separate $and element (never overwrites FY filter)
     if (date) {
-      const dc = buildDateCondition(date);
-      query.$or = dc.$or;
+      const test = new Date(`${date}T00:00:00+05:30`);
+      if (isNaN(test.getTime())) {
+        return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' });
+      }
+      andConditions.push(buildDateCondition(date));
     }
 
+    // Status filter
     if (status) {
       const validStatuses = ['Pending', 'Ongoing', 'Lost', 'Won'];
       if (validStatuses.includes(status)) {
-        query.STATUS = status;
+        andConditions.push({ STATUS: status });
       } else {
         return res.status(400).json({ error: 'Invalid status filter.' });
       }
     }
 
+    // Call leads filter
     if (callLeads) {
       const validLeads = ['Hot Leads', 'Warm Leads', 'Cold Leads', 'Invalid Leads'];
-      if (validLeads.includes(callLeads)) query.callLeads = callLeads;
+      if (validLeads.includes(callLeads)) {
+        andConditions.push({ callLeads: callLeads });
+      }
     }
 
+    // ✅ Search filter — added as separate $and element (never overwrites FY filter)
     if (search) {
       const searchRegex = new RegExp(search, 'i');
-      query.$or = [
-        { SENDER_COMPANY: searchRegex },
-        { SENDER_MOBILE: searchRegex },
-        { SENDER_NAME: searchRegex }
-      ];
+      const matchingEmployees = await Employee.find(
+        { name: searchRegex }, '_id'
+      ).lean();
+      const employeeIds = matchingEmployees.map(e => e._id);
+
+      andConditions.push({
+        $or: [
+          { SENDER_COMPANY: searchRegex },
+          { SENDER_MOBILE: searchRegex },
+          { SENDER_NAME: searchRegex },
+          ...(employeeIds.length > 0 ? [{ assignedTo: { $in: employeeIds } }] : []),
+        ]
+      });
     }
 
+    // Follow-up today filter
     if (followUpToday === 'true' || followUpToday === true) {
       const today = new Date();
       const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
       const endOfToday   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
-      query.nextFollowUpDate = { $gte: startOfToday, $lt: endOfToday };
-      delete query.createdAt;
+      andConditions.push({ nextFollowUpDate: { $gte: startOfToday, $lt: endOfToday } });
     }
 
+    // Today action filter
     if (todayAction === 'true') {
       const today = new Date();
       const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
       const endOfToday   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
-      query.previousActions = {
-        $elemMatch: {
-          createdAt: { $gte: startOfToday, $lte: endOfToday }
+      andConditions.push({
+        previousActions: {
+          $elemMatch: {
+            createdAt: { $gte: startOfToday, $lte: endOfToday }
+          }
         }
-      };
+      });
     }
 
+    // ✅ Final query uses $and — all conditions preserved
+    const query = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+
+    // ── Fetch leads ──
     const leads = await Lead.find(query)
       .populate('company', 'name')
       .populate('assignedBy', 'name')
@@ -376,36 +419,39 @@ exports.getMyLeads = async (req, res) => {
     const totalRecords = await Lead.countDocuments(query);
     const totalPages   = Math.ceil(totalRecords / limit);
 
+    // ── Card counts (always use FY-filtered base) ──
+    const cardBase = { $and: [baseMatch, fyFilter] };
+
     const [
-      ongoingCount, winCount, pendingCount, lostCount,
+      allLeadsCount, ongoingCount, winCount, pendingCount, lostCount,
       hotleadsCount, warmLeadsCount, coldLeadsCount, invalidLeadsCount
     ] = await Promise.all([
-      Lead.countDocuments({ ...baseQuery, STATUS: 'Ongoing' }),
-      Lead.countDocuments({ ...baseQuery, STATUS: 'Won' }),
-      Lead.countDocuments({ ...baseQuery, STATUS: 'Pending' }),
-      Lead.countDocuments({ ...baseQuery, STATUS: 'Lost' }),
-      Lead.countDocuments({ ...baseQuery, callLeads: 'Hot Leads' }),
-      Lead.countDocuments({ ...baseQuery, callLeads: 'Warm Leads' }),
-      Lead.countDocuments({ ...baseQuery, callLeads: 'Cold Leads' }),
-      Lead.countDocuments({ ...baseQuery, callLeads: 'Invalid Leads' }),
+      Lead.countDocuments(cardBase),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { STATUS: 'Ongoing' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { STATUS: 'Won' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { STATUS: 'Pending' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { STATUS: 'Lost' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { callLeads: 'Hot Leads' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { callLeads: 'Warm Leads' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { callLeads: 'Cold Leads' }] }),
+      Lead.countDocuments({ $and: [baseMatch, fyFilter, { callLeads: 'Invalid Leads' }] }),
     ]);
 
     const today2 = new Date();
     const startOfToday2 = new Date(today2.getFullYear(), today2.getMonth(), today2.getDate(), 0, 0, 0, 0);
     const endOfToday2   = new Date(today2.getFullYear(), today2.getMonth(), today2.getDate(), 23, 59, 59, 999);
     const todaysFollowUpCount = await Lead.countDocuments({
-      ...baseQuery,
-      nextFollowUpDate: { $gte: startOfToday2, $lt: endOfToday2 }
+      $and: [baseMatch, fyFilter, { nextFollowUpDate: { $gte: startOfToday2, $lt: endOfToday2 } }]
     });
 
     const activeQuotationLeads = await Lead.find({
-      ...baseQuery, quotation: { $gt: 0 }, STATUS: { $nin: ['Won', 'Lost'] }
+      $and: [baseMatch, fyFilter, { quotation: { $gt: 0 } }, { STATUS: { $nin: ['Won', 'Lost'] } }]
     }).lean();
     const totalActiveQuotationAmount = activeQuotationLeads.reduce((s, l) => s + (l.quotation || 0), 0);
 
-    const wonLeads  = await Lead.find({ ...baseQuery, STATUS: 'Won',  quotation: { $gt: 0 } }).lean();
-    const lostLeads = await Lead.find({ ...baseQuery, STATUS: 'Lost', quotation: { $gt: 0 } }).lean();
-    const totalWonAmount  = wonLeads.reduce((s, l)  => s + (l.quotation || 0), 0);
+    const wonLeads  = await Lead.find({ $and: [baseMatch, fyFilter, { STATUS: 'Won' }, { quotation: { $gt: 0 } }] }).lean();
+    const lostLeads = await Lead.find({ $and: [baseMatch, fyFilter, { STATUS: 'Lost' }, { quotation: { $gt: 0 } }] }).lean();
+    const totalWonAmount  = wonLeads.reduce((s, l) => s + (l.quotation || 0), 0);
     const totalLostAmount = lostLeads.reduce((s, l) => s + (l.quotation || 0), 0);
 
     res.status(200).json({
@@ -441,83 +487,52 @@ exports.getMyLeads = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════════════════════════
+// ✅ UPDATE assignLead: Reactivate Old Leads Automatically
+// ══════════════════════════════════════════════════════════════
 exports.assignLead = async (req, res) => {
   try {
-    const user = req.user;
-    const leadId = req.params.id;
-    const { feasibility, remark, assignedTo, callHistory } = req.body;
-
-    if (!Types.ObjectId.isValid(leadId)) {
-      return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
-    }
-
+    const user = req.user; const leadId = req.params.id; const { feasibility, remark, assignedTo, callHistory } = req.body;
+    if (!Types.ObjectId.isValid(leadId)) return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
     const lead = await Lead.findOne({ _id: leadId, company: user.company || user._id });
-    if (!lead) {
-      return res.status(404).json({ success: false, error: 'Lead not found.' });
-    }
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found.' });
 
     const oldAssignedTo = lead.assignedTo;
-
-    if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') {
-      lead.feasibility = feasibility;
-    } else {
-      lead.feasibility = 'feasible';
-    }
+    if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') lead.feasibility = feasibility;
+    else lead.feasibility = 'feasible';
 
     if (assignedTo) {
       lead.assignedTo = new Types.ObjectId(assignedTo);
-    } else if (!lead.assignedTo) {
-      lead.assignedTo = new Types.ObjectId(user._id);
-    }
-
-    lead.assignedBy   = new Types.ObjectId(user._id);
-    lead.assignedTime = new Date();
-    lead.remark       = remark || 'Reason not provided';
-
-    if (callHistory && Array.isArray(callHistory)) {
-      lead.callHistory = callHistory.map(call => {
-        const callEntry = { ...call };
-        if (callEntry.attemptedBy && typeof callEntry.attemptedBy === 'string') {
-          callEntry.attemptedBy = Types.ObjectId.isValid(callEntry.attemptedBy)
-            ? new Types.ObjectId(callEntry.attemptedBy)
-            : new Types.ObjectId(user._id);
-        } else if (!callEntry.attemptedBy) {
-          callEntry.attemptedBy = new Types.ObjectId(user._id);
-        }
-        return callEntry;
-      });
-
-      const uniqueDays = [...new Set(callHistory.map(call => call.day))];
-      if (callHistory.length >= 9 || uniqueDays.length >= 3) {
-        lead.feasibility = 'call-unanswered';
-        if (!remark) lead.remark = 'Automatically marked as call-unanswered after 3 days of call attempts';
+      
+      // ✅ PROPER TRANSFER LOGIC: REACTIVATE CLOSED LEADS
+      if (lead.STATUS === 'Won' || lead.STATUS === 'Lost') {
+        lead.STATUS = 'Ongoing';
+        lead.complated = 0;
+        lead.step = '1. Call Not Connect/ Callback';
+        lead.remark = remark || `Reassigned from old closed status. Restarting process.`;
       }
+    } else if (!lead.assignedTo) { lead.assignedTo = new Types.ObjectId(user._id); }
+
+    lead.assignedBy = new Types.ObjectId(user._id); lead.assignedTime = new Date(); lead.remark = remark || 'Reason not provided';
+
+    if (callHistory && typeof callHistory === 'object') {
+      const newCallEntry = {
+        callType: callHistory.callType || 'Outgoing',
+        callDuration: callHistory.callDuration || 0,
+        callPurpose: callHistory.callPurpose || '',
+        callNotes: callHistory.callNotes || '',
+        createdAt: new Date(),
+        createdBy: user._id
+      };
+      if (!lead.callHistory) lead.callHistory = [];
+      lead.callHistory.push(newCallEntry);
     }
 
     await lead.save();
-
-    if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) {
-      const assignedEmployee = await require('../models/employeeModel').findById(assignedTo);
-      await logLeadAssignment(lead, assignedEmployee, user, req);
-    }
-
-    const savedLead = await Lead.findById(lead._id)
-      .populate('assignedTo', 'name')
-      .populate('assignedBy', 'name');
-
-    res.status(200).json({
-      success: true,
-      message: 'Lead assigned successfully.',
-      data: {
-        feasibility: savedLead.feasibility,
-        assignedTo:  savedLead.assignedTo,
-        callHistory: savedLead.callHistory
-      }
-    });
-  } catch (error) {
-    console.error('Error assigning lead:', error);
-    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
-  }
+    if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) { const assignedEmployee = await Employee.findById(assignedTo); await logLeadAssignment(lead, assignedEmployee, user, req); }
+    const savedLead = await Lead.findById(lead._id).populate('assignedTo', 'name').populate('assignedBy', 'name');
+    res.status(200).json({ success: true, message: 'Lead assigned successfully.', data: { feasibility: savedLead.feasibility, assignedTo: savedLead.assignedTo, callHistory: savedLead.callHistory, STATUS: savedLead.STATUS } });
+  } catch (error) { res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message }); }
 };
 
 exports.submiEnquiry = async (req, res) => {
@@ -734,6 +749,9 @@ exports.deleteLead = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════════════════════════
+// ✅ FIXED: saveMeetingLog - Block updates on closed leads
+// ══════════════════════════════════════════════════════════════
 exports.saveMeetingLog = async (req, res) => {
   try {
     const user   = req.user;
@@ -747,6 +765,14 @@ exports.saveMeetingLog = async (req, res) => {
     const lead = await Lead.findOne({ _id: id, company: user.company || user._id });
     if (!lead) {
       return res.status(404).json({ success: false, error: "Lead not found." });
+    }
+
+    // ✅ ADD THIS CHECK — Prevent updating closed leads
+    if (lead.STATUS === 'Won' || lead.STATUS === 'Lost') {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot add meeting log to a lead with status "${lead.STATUS}". This lead is already finalized.`
+      });
     }
 
     lead.previousActions.push({
@@ -816,9 +842,6 @@ exports.transferOwnership = async (req, res) => {
     res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
   }
 };
-
-
-
 
 exports.submitSurveyReport = async (req, res) => {
   try {

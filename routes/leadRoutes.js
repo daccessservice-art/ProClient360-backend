@@ -72,6 +72,9 @@ router.post('/process-stale-leads', permissionMiddleware(['admin']), async (req,
   }
 });
 
+// ✅ NEW: Old Sales History Route (Must be before /:id routes)
+router.get('/old-sales-history', permissionMiddleware(['viewLead']), salesManagerController.getOldSalesHistory);
+
 // Get my leads
 router.get('/my-leads', permissionMiddleware(['viewLead']), leadController.getMyLeads);
 
