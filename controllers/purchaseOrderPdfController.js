@@ -2,36 +2,224 @@ const PDFDocument = require('pdfkit');
 const PurchaseOrder = require('../models/purchaseOrderModel');
 const https = require('https');
 const http  = require('http');
+const fs    = require('fs');
+const path  = require('path');
 
-// ── Logo URL — fetched once at startup and cached ────────────────────────────
-const LOGO_URL = 'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png';
-let LOGO_BUFFER = null;
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROBUST LOGO LOADER — tries multiple paths + URL fallback
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const fetchLogoBuffer = (url) =>
-  new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    lib.get(url, (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchLogoBuffer(res.headers.location).then(resolve).catch(reject);
+// Search these directories for logo files (first match wins)
+const ASSET_SEARCH_PATHS = [
+  path.join(__dirname, '..', 'assets'),          // backend/assets/
+  path.join(__dirname, '..', '..', 'assets'),    // monorepo root/assets/
+  path.join(process.cwd(), 'assets'),            // cwd/assets/
+  path.join(__dirname, '..', 'public', 'assets'),// backend/public/assets/
+];
+
+/**
+ * Find a file by searching multiple directories
+ */
+function findFile(filename) {
+  for (const dir of ASSET_SEARCH_PATHS) {
+    const fp = path.join(dir, filename);
+    try {
+      if (fs.existsSync(fp)) {
+        const stat = fs.statSync(fp);
+        if (stat.size > 100) {
+          console.log(`[PDF-LOGO] ✅ Found ${filename} at: ${fp} (${stat.size} bytes)`);
+          return fp;
+        }
+        console.warn(`[PDF-LOGO] ⚠️  ${fp} exists but only ${stat.size} bytes — likely corrupt, skipping`);
+      }
+    } catch (_) { /* ignore stat errors */ }
+  }
+  console.warn(`[PDF-LOGO] ❌ ${filename} NOT found. Searched:`, ASSET_SEARCH_PATHS.map(p => path.join(p, filename)));
+  return null;
+}
+
+/**
+ * Validate image buffer by checking magic bytes
+ */
+function isValidImage(buf) {
+  if (!buf || buf.length < 8) return false;
+  // PNG magic: 89 50 4E 47 0D 0A 1A 0A
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png';
+  // JPEG magic: FF D8 FF
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpeg';
+  return false;
+}
+
+/**
+ * Read image file and validate format
+ */
+function readImageFile(filepath) {
+  try {
+    const buf = fs.readFileSync(filepath);
+    const fmt = isValidImage(buf);
+    if (!fmt) {
+      console.warn(`[PDF-LOGO] ⚠️  ${filepath} is NOT a valid PNG/JPEG (magic bytes: ${buf.slice(0, 4).toString('hex')})`);
+      console.warn('[PDF-LOGO] 💡 TIP: Convert your image to non-interlaced PNG or JPEG, then try again.');
+      return null;
+    }
+    console.log(`[PDF-LOGO] ✅ Loaded ${path.basename(filepath)} as ${fmt.toUpperCase()} (${buf.length} bytes)`);
+    return buf;
+  } catch (err) {
+    console.warn(`[PDF-LOGO] ❌ Error reading ${filepath}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * Download image from URL with redirect support
+ */
+function downloadBuffer(url, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    const mod = url.startsWith('https') ? https : http;
+    const req = mod.get(url, { timeout }, (res) => {
+      // Handle HTTP redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return downloadBuffer(res.headers.location, timeout).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
       }
       const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end',  () => resolve(Buffer.concat(chunks)));
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        const fmt = isValidImage(buf);
+        if (!fmt) {
+          return reject(new Error(`Downloaded data is not a valid image (magic: ${buf.slice(0, 4).toString('hex')})`));
+        }
+        console.log(`[PDF-LOGO] ✅ Downloaded from URL as ${fmt.toUpperCase()} (${buf.length} bytes)`);
+        resolve(buf);
+      });
       res.on('error', reject);
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
   });
+}
 
-// Pre-fetch logo at startup
-fetchLogoBuffer(LOGO_URL)
-  .then((buf) => {
-    LOGO_BUFFER = buf;
-    console.log('✅ [PDF] Entero logo loaded from URL, size:', buf.length, 'bytes');
-  })
-  .catch((err) => {
-    console.warn('⚠️  [PDF] Could not fetch logo from URL:', err.message);
-  });
+// ── Logo cache ──────────────────────────────────────────────────────────────
+const logoCache = { entero: null, daccess: null };
+let logoInitPromise = null;
 
-// ── Number to Words ──────────────────────────────────────────────────────────
+/**
+ * Ensure logos are loaded (runs once, cached afterwards).
+ * Tries: local file → URL fallback
+ */
+async function ensureLogos() {
+  // Fast path: already loaded
+  if (logoCache.entero && logoCache.daccess) return;
+
+  // Prevent concurrent initialization
+  if (logoInitPromise) return logoInitPromise;
+
+  logoInitPromise = (async () => {
+    console.log('[PDF-LOGO] ── Initializing logos ──');
+
+    // ── ENTERO logo ──────────────────────────────────────────────
+    const enteroPath = findFile('ENTERO.png');
+    if (enteroPath) {
+      logoCache.entero = readImageFile(enteroPath);
+    }
+    // Also try JPEG
+    if (!logoCache.entero) {
+      const enteroJpg = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
+      if (enteroJpg) logoCache.entero = readImageFile(enteroJpg);
+    }
+    // URL fallback
+    if (!logoCache.entero) {
+      try {
+        console.log('[PDF-LOGO] ⬇️  Trying Entero logo URL download...');
+        logoCache.entero = await downloadBuffer(
+          'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png'
+        );
+        console.log('[PDF-LOGO] ✅ Entero logo loaded from URL');
+      } catch (e) {
+        console.warn('[PDF-LOGO] ❌ Entero URL download failed:', e.message);
+      }
+    }
+
+    // ── DACCESS logo ─────────────────────────────────────────────
+    const daccessPath = findFile('DACCESS.png');
+    if (daccessPath) {
+      logoCache.daccess = readImageFile(daccessPath);
+    }
+    if (!logoCache.daccess) {
+      const daccessJpg = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
+      if (daccessJpg) logoCache.daccess = readImageFile(daccessJpg);
+    }
+    // URL fallback — add your DAccess logo URL here if available
+    if (!logoCache.daccess) {
+      const daccessUrl = process.env.DACCESS_LOGO_URL;
+      if (daccessUrl) {
+        try {
+          console.log('[PDF-LOGO] ⬇️  Trying DAccess logo URL download...');
+          logoCache.daccess = await downloadBuffer(daccessUrl);
+          console.log('[PDF-LOGO] ✅ DAccess logo loaded from URL');
+        } catch (e) {
+          console.warn('[PDF-LOGO] ❌ DAccess URL download failed:', e.message);
+        }
+      } else {
+        console.warn('[PDF-LOGO] ❌ DAccess logo: no local file found. Set DACCESS_LOGO_URL env var for URL fallback.');
+      }
+    }
+
+    console.log('[PDF-LOGO] ── Result ──');
+    console.log('[PDF-LOGO]   Entero:', logoCache.entero ? `✅ ${logoCache.entero.length} bytes` : '❌ MISSING');
+    console.log('[PDF-LOGO]   DAccess:', logoCache.daccess ? `✅ ${logoCache.daccess.length} bytes` : '❌ MISSING');
+  })();
+
+  return logoInitPromise;
+}
+
+// Try synchronous load on startup (fast path — skips URL fallback)
+(function initSync() {
+  console.log('[PDF-LOGO] Synchronous pre-load attempt...');
+  const ep = findFile('ENTERO.png');
+  if (ep) logoCache.entero = readImageFile(ep);
+  if (!logoCache.entero) {
+    const epJ = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
+    if (epJ) logoCache.entero = readImageFile(epJ);
+  }
+  const dp = findFile('DACCESS.png');
+  if (dp) logoCache.daccess = readImageFile(dp);
+  if (!logoCache.daccess) {
+    const dpJ = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
+    if (dpJ) logoCache.daccess = readImageFile(dpJ);
+  }
+  console.log('[PDF-LOGO] Sync result — Entero:', logoCache.entero ? '✅' : '❌', '| DAccess:', logoCache.daccess ? '✅' : '❌');
+  if (logoCache.entero && logoCache.daccess) {
+    logoInitPromise = Promise.resolve(); // mark as done
+  }
+})();
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPANY CONFIGS
+// ═══════════════════════════════════════════════════════════════════════════════
+const COMPANY_CONFIGS = {
+  entero: {
+    name:         'ENTERO SYSTEMS INDIA PVT. LTD.',
+    address:      'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India',
+    gstin:        '27AAJCE1335Q1Z8',
+    getLogoBuffer: () => logoCache.entero,
+  },
+  daccess: {
+    name:         'DACCESS SECURITY SYSTEMS PVT. LTD.',
+    address:      'Office No.05, 3rd Floor, Revati Arcade-II, Opposite to Kapil Malhar Society, Baner, Pune - 411045, Maharashtra, India',
+    gstin:        '27AACCD7325G1ZR',
+    getLogoBuffer: () => logoCache.daccess,
+  },
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NUMBER TO WORDS
+// ═══════════════════════════════════════════════════════════════════════════════
 const numberToWords = (num) => {
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven',
     'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen',
@@ -55,11 +243,10 @@ const numberToWords = (num) => {
   return result;
 };
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const COMPANY_NAME    = 'ENTERO SYSTEMS INDIA PVT. LTD.';
-const COMPANY_ADDRESS = 'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India';
-const COMPANY_GSTIN   = '27AAJCE1335Q1Z8';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONSTANTS & HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
 const COLOR_RED        = '#DC3232';
 const COLOR_TABLE_HDR  = '#B4B49A';
 const COLOR_LIGHT_GREY = '#F5F5F5';
@@ -68,13 +255,13 @@ const COLOR_BLACK      = '#000000';
 const COLOR_DARK_GREY  = '#444444';
 const COLOR_BORDER     = '#BBBBBB';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 const fillRect = (doc, x, y, w, h, color) => {
   doc.save().rect(x, y, w, h).fill(color).restore();
 };
 const strokeRect = (doc, x, y, w, h, color = COLOR_BORDER, lineWidth = 0.5) => {
   doc.save().rect(x, y, w, h).lineWidth(lineWidth).stroke(color).restore();
 };
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN CONTROLLER
@@ -83,15 +270,16 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // ── If logo not cached yet, try fetching again per-request ──
-    if (!LOGO_BUFFER) {
-      try {
-        LOGO_BUFFER = await fetchLogoBuffer(LOGO_URL);
-        console.log('✅ [PDF] Logo fetched on-demand');
-      } catch (e) {
-        console.warn('⚠️  [PDF] Logo fetch failed on-demand:', e.message);
-      }
-    }
+    // ── Ensure logos are loaded (async — handles URL fallback) ──────────
+    await ensureLogos();
+
+    // ── Determine company ───────────────────────────────────────────────
+    const printAs       = (req.query.printAs || 'daccess').toLowerCase();
+    const companyKey    = printAs === 'entero' ? 'entero' : 'daccess';
+    const companyConfig = COMPANY_CONFIGS[companyKey];
+    const LOGO_BUFFER   = companyConfig.getLogoBuffer();
+
+    console.log(`[PDF] Generating PO for company: ${companyKey}, logo available: ${!!LOGO_BUFFER}${LOGO_BUFFER ? ` (${LOGO_BUFFER.length} bytes)` : ''}`);
 
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor gstin phoneNumber1 email')
@@ -133,30 +321,38 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     doc.pipe(res);
 
     const PW = doc.page.width;
-    const PH = doc.page.height;
     const M  = 20;
     const CW = PW - M * 2;
-
     let y = M;
 
     // ════════════════════════════════════════════════════════════
-    // 1. HEADER
+    // 1. HEADER — with robust logo rendering
     // ════════════════════════════════════════════════════════════
 
-    const HEADER_H  = 50;
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
+    const HEADER_H  = 50;
+    const logoDrawn = false;
 
     if (LOGO_BUFFER) {
       try {
-        doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
+        // ★ KEY FIX: Explicitly tell PDFKit the format & use proper options
+        doc.image(LOGO_BUFFER, M, y + 4, {
+          fit: [LOGO_MAXW, LOGO_H],
+          // Don't specify format — let PDFKit auto-detect from buffer magic bytes
+        });
+        console.log(`[PDF] ✅ Logo image rendered successfully (${companyKey})`);
       } catch (e) {
-        doc.font('Helvetica-Bold').fontSize(20).fillColor(COLOR_RED)
-           .text('entero', M, y + 12, { lineBreak: false });
+        console.error(`[PDF] ❌ doc.image() FAILED for ${companyKey}:`, e.message);
+        console.error('[PDF] 💡 This usually means the PNG is interlaced or 16-bit. Convert to JPEG or non-interlaced PNG.');
+        // Fallback to text
+        doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
+           .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
       }
     } else {
-      doc.font('Helvetica-Bold').fontSize(20).fillColor(COLOR_RED)
-         .text('entero', M, y + 12, { lineBreak: false });
+      console.warn(`[PDF] ⚠️  No logo buffer for ${companyKey} — using text fallback`);
+      doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
+         .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
     }
 
     doc.font('Helvetica-Bold').fontSize(18).fillColor(COLOR_RED)
@@ -165,14 +361,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += HEADER_H;
 
     doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_BLACK)
-       .text(COMPANY_NAME, M, y);
+       .text(companyConfig.name, M, y);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
-       .text(`GSTIN/UIN: ${COMPANY_GSTIN}`, M, y, { width: CW, align: 'right' });
+       .text(`GSTIN/UIN: ${companyConfig.gstin}`, M, y, { width: CW, align: 'right' });
 
     y += 14;
 
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-       .text(COMPANY_ADDRESS, M, y, { width: CW * 0.70 });
+       .text(companyConfig.address, M, y, { width: CW * 0.70 });
 
     y += 20;
 
@@ -245,7 +441,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += boxH + 6;
 
     // ════════════════════════════════════════════════════════════
-    // 3. ITEMS TABLE — includes WARRANTY column
+    // 3. ITEMS TABLE
     // ════════════════════════════════════════════════════════════
 
     const itemCols = [
@@ -361,7 +557,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     const hsnW = CW * 0.58;
     const sumW = CW - hsnW - 4;
     const sumX = M + hsnW + 4;
-
     const hsnSectionStartY = y;
 
     const hsnCols = [
@@ -437,12 +632,12 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     let sy = hsnSectionStartY;
     const summaryRows = [
-      { label: 'Total Amount',       value: totalAmt.toFixed(2),    bold: false },
-      { label: 'Total Gross Amount', value: totalAmt.toFixed(2),    bold: false },
-      { label: 'CGST',               value: cgst.toFixed(2),        bold: false },
-      { label: 'SGST',               value: sgst.toFixed(2),        bold: false },
-      { label: 'Total Net Amount',   value: grandTotal.toFixed(2),  bold: true  },
-      { label: 'Round-Off',          value: '0.00',                 bold: false },
+      { label: 'Total Amount',       value: totalAmt.toFixed(2),   bold: false },
+      { label: 'Total Gross Amount', value: totalAmt.toFixed(2),   bold: false },
+      { label: 'CGST',               value: cgst.toFixed(2),       bold: false },
+      { label: 'SGST',               value: sgst.toFixed(2),       bold: false },
+      { label: 'Total Net Amount',   value: grandTotal.toFixed(2), bold: true  },
+      { label: 'Round-Off',          value: '0.00',                bold: false },
     ];
     summaryRows.forEach(row => {
       const bg = row.bold ? '#EBEBEB' : '#FFFFFF';
@@ -501,7 +696,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     const sigX = M + CW * 0.62;
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-       .text(`For, ${COMPANY_NAME}`, sigX, y + 8, { width: CW * 0.36 });
+       .text(`For, ${companyConfig.name}`, sigX, y + 8, { width: CW * 0.36 });
 
     strokeRect(doc, sigX + 10, y + 18, 80, 26, COLOR_BORDER);
     doc.font('Helvetica').fontSize(7).fillColor('#AAAAAA')
