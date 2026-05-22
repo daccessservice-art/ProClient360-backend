@@ -170,6 +170,11 @@ const designationSchema = new mongoose.Schema({
             'viewSurveyReport',
             'updateSurveyReport',
             'deleteSurveyReport',
+
+            'createProjectPurchase',
+            'viewProjectPurchase',
+            'updateProjectPurchase',
+            'deleteProjectPurchase',
         ],
     }]
 

@@ -7,6 +7,45 @@ const { bucket } = require('../utils/firebase');
 const { logCreation, logUpdate } = require('../helpers/activityLogHelper');
 const mongoose = require('mongoose');
 
+// ─── Helper: Safely extract Company ID ─────────────────────────────────
+const getCompanyId = (user) => {
+    if (user.company) {
+        return typeof user.company === 'object' ? user.company._id : user.company;
+    }
+    return user._id;
+};
+
+// ─── Helper: Upload Multiple PDFs ─────────────────────────────────────
+const uploadMultiplePdfs = async (pdfsArray, folderName, invoiceNumber) => {
+    const uploadedUrls = [];
+    if (!pdfsArray || !Array.isArray(pdfsArray)) return uploadedUrls;
+
+    for (let i = 0; i < pdfsArray.length; i++) {
+        const pdfData = pdfsArray[i];
+        if (pdfData && typeof pdfData === 'string' && pdfData.startsWith('data:')) {
+            try {
+                let base64String = pdfData.trim();
+                if (base64String.includes(',')) {
+                    base64String = base64String.split(',')[1];
+                }
+                if (!base64String || base64String.length < 100) continue;
+
+                const buffer = Buffer.from(base64String, 'base64');
+                if (buffer.length > 5 * 1024 * 1024) continue; // Skip files > 5MB
+
+                const fileName = `${folderName}/${invoiceNumber || 'inv'}_${Date.now()}_${i}.pdf`;
+                const file = bucket.file(fileName);
+                await file.save(buffer, { metadata: { contentType: 'application/pdf' } });
+                await file.makePublic();
+                uploadedUrls.push(`https://storage.googleapis.com/${bucket.name}/${fileName}`);
+            } catch (error) {
+                console.error(`Error uploading PDF ${i}:`, error);
+            }
+        }
+    }
+    return uploadedUrls;
+};
+
 // Get all accounts with filters
 exports.getAllAccounts = async (req, res) => {
     try {
@@ -17,16 +56,13 @@ exports.getAllAccounts = async (req, res) => {
 
         const { invoiceStatus, search, followUpDue } = req.query;
 
-        const isCompany = user.company ? false : true;
-        const companyId = new mongoose.Types.ObjectId(isCompany ? user._id : user.company);
+        const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
         let query = { company: companyId };
 
-        // Filter by invoice status
         if (invoiceStatus && ['Pending', 'Partial', 'Paid', 'Overdue'].includes(invoiceStatus)) {
             query['accountActions.invoiceStatus'] = invoiceStatus;
         }
 
-        // Filter by follow-up due today or overdue
         if (followUpDue === 'today') {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -40,12 +76,11 @@ exports.getAllAccounts = async (req, res) => {
             query['accountActions.invoiceStatus'] = { $ne: 'Paid' };
         }
 
-        // Search by customer name, project name, or PO number
         if (search && search.trim() !== '') {
             query.$or = [
                 { customerName: { $regex: search.trim(), $options: 'i' } },
-                { projectName: { $regex: search.trim(), $options: 'i' } },
-                { poNumber: { $regex: search.trim(), $options: 'i' } }
+                { projectName:  { $regex: search.trim(), $options: 'i' } },
+                { poNumber:     { $regex: search.trim(), $options: 'i' } }
             ];
         }
 
@@ -54,7 +89,7 @@ exports.getAllAccounts = async (req, res) => {
             .limit(limit)
             .populate('projectId', 'name projectStatus completeLevel')
             .populate('createdBy', 'name')
-            .sort({ 'accountActions.nextFollowUpDate': 1, createdAt: -1 })
+            .sort({ updatedAt: -1, createdAt: -1 }) // ✅ FIXED: newest/recently-updated first
             .lean();
 
         const totalRecords = await AccountMaster.countDocuments(query);
@@ -84,8 +119,7 @@ exports.getAccountByProject = async (req, res) => {
         const { projectId } = req.params;
         const user = req.user;
 
-        const isCompany = user.company ? false : true;
-        const companyId = new mongoose.Types.ObjectId(isCompany ? user._id : user.company);
+        const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
         const query = { projectId, company: companyId };
 
         let account = await AccountMaster.findOne(query)
@@ -132,11 +166,11 @@ exports.createAccountFromProject = async (projectId, user) => {
                 project.completeLevel > 0 ? 'In Progress' : 'Not Started'
         };
 
-        const isCompany = user.company ? false : true;
+        const companyId = getCompanyId(user);
 
         const accountData = {
             projectId: project._id,
-            company: isCompany ? user._id : user.company,
+            company: companyId,
             customerName: project.custId?.custName || 'N/A',
             projectName: project.name,
             poNumber: project.purchaseOrderNo,
@@ -192,7 +226,6 @@ exports.updateAccountActions = async (req, res) => {
             updateData.totalInvoiceAmount = totalInvoiceAmount;
             updateData.pendingAmount = Math.max(0, pendingAmount);
 
-            // Auto-update invoice status
             if (pendingAmount <= 0) {
                 updateData.invoiceStatus = 'Paid';
             } else if (receivedAmount > 0) {
@@ -200,26 +233,17 @@ exports.updateAccountActions = async (req, res) => {
             }
         }
 
-        // Handle invoice PDF upload
-        if (updateData.invoicePdf && typeof updateData.invoicePdf === 'string') {
-            try {
-                let base64String = updateData.invoicePdf.trim();
-                if (base64String.includes(',')) {
-                    base64String = base64String.split(',')[1];
-                }
-                const buffer = Buffer.from(base64String, 'base64');
-                if (buffer.length > 5 * 1024 * 1024) {
-                    return res.status(400).json({ success: false, error: 'Invoice PDF must be less than 5MB' });
-                }
-                const fileName = `Invoices/Invoice_${id}_${Date.now()}.pdf`;
-                const file = bucket.file(fileName);
-                await file.save(buffer, { metadata: { contentType: 'application/pdf' } });
-                await file.makePublic();
-                updateData.invoicePdf = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-            } catch (error) {
-                console.error('Error uploading invoice PDF:', error);
-                return res.status(400).json({ success: false, error: 'Failed to upload invoice PDF' });
+        // Handle multiple invoice PDF uploads
+        if (updateData.invoicePdfs && Array.isArray(updateData.invoicePdfs) && updateData.invoicePdfs.length > 0) {
+            const newUrls = await uploadMultiplePdfs(updateData.invoicePdfs, 'Invoices', account.poNumber || 'account');
+            if (newUrls.length > 0) {
+                // Merge with existing PDFs
+                updateData.invoicePdfs = [...(account.accountActions.invoicePdfs || []), ...newUrls];
+            } else {
+                delete updateData.invoicePdfs; // Don't update if nothing was uploaded
             }
+        } else {
+            delete updateData.invoicePdfs; // Remove empty array from update
         }
 
         const updatedAccount = await AccountMaster.findByIdAndUpdate(
@@ -245,52 +269,55 @@ exports.updateAccountActions = async (req, res) => {
     }
 };
 
-// Convert to Invoice
+// ─── Convert to Invoice (Multiple PDFs Support) ──────────────────
 exports.convertToInvoice = async (req, res) => {
     try {
         const { id } = req.params;
         const user = req.user;
-        const { invoiceNumber, invoiceDate, taxAmount, invoicePdf } = req.body;
+        const { invoiceNumber, invoiceDate, taxAmount, invoicePdfs, invoiceAmount } = req.body;
 
         const account = await AccountMaster.findById(id);
         if (!account) {
             return res.status(404).json({ success: false, error: 'Account not found' });
         }
 
-        const totalInvoiceAmount = account.basicAmount + Number(taxAmount);
-        const pendingAmount = totalInvoiceAmount - account.accountActions.receivedAmount;
-        const invoiceStatus = pendingAmount <= 0 ? 'Paid' : 'Pending';
-
-        // Handle invoice PDF upload
-        let invoicePdfUrl = null;
-        if (invoicePdf) {
-            try {
-                let base64String = invoicePdf.trim();
-                if (base64String.includes(',')) {
-                    base64String = base64String.split(',')[1];
-                }
-                const buffer = Buffer.from(base64String, 'base64');
-                if (buffer.length > 5 * 1024 * 1024) {
-                    return res.status(400).json({ success: false, error: 'Invoice PDF must be less than 5MB' });
-                }
-                const fileName = `Invoices/Invoice_${invoiceNumber}_${Date.now()}.pdf`;
-                const file = bucket.file(fileName);
-                await file.save(buffer, { metadata: { contentType: 'application/pdf' } });
-                await file.makePublic();
-                invoicePdfUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-            } catch (error) {
-                console.error('Error uploading invoice PDF:', error);
-                return res.status(400).json({ success: false, error: 'Failed to upload invoice PDF' });
-            }
+        if (!invoiceNumber || !invoiceNumber.trim()) {
+            return res.status(400).json({ success: false, error: 'Invoice number is required' });
         }
 
+        // Check for duplicate invoice number
+        const duplicateInvoice = account.invoiceHistory.find(
+            inv => inv.invoiceNumber === invoiceNumber.trim()
+        );
+        if (duplicateInvoice) {
+            return res.status(400).json({ success: false, error: 'Invoice number already exists for this project' });
+        }
+
+        const invAmount = Number(invoiceAmount) || account.basicAmount;
+        const invTax = Number(taxAmount) || 0;
+        const totalAmount = invAmount + invTax;
+
+        const previousInvoicedTotal = account.invoiceHistory.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        const totalInvoiceAmount = previousInvoicedTotal + totalAmount;
+        const pendingAmount = Math.max(0, totalInvoiceAmount - account.accountActions.receivedAmount);
+
+        let invoiceStatus = 'Pending';
+        if (pendingAmount <= 0) {
+            invoiceStatus = 'Paid';
+        } else if (account.accountActions.receivedAmount > 0) {
+            invoiceStatus = 'Partial';
+        }
+
+        // Upload multiple PDFs
+        const invoicePdfUrls = await uploadMultiplePdfs(invoicePdfs, 'Invoices', invoiceNumber);
+
         const invoiceEntry = {
-            invoiceNumber,
-            invoiceDate: new Date(invoiceDate),
-            invoiceAmount: account.basicAmount,
-            taxAmount: Number(taxAmount),
-            totalAmount: totalInvoiceAmount,
-            invoicePdf: invoicePdfUrl,
+            invoiceNumber: invoiceNumber.trim(),
+            invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
+            invoiceAmount: invAmount,
+            taxAmount: invTax,
+            totalAmount: totalAmount,
+            invoicePdfs: invoicePdfUrls,
             status: invoiceStatus,
             createdAt: new Date()
         };
@@ -299,13 +326,13 @@ exports.convertToInvoice = async (req, res) => {
             id,
             {
                 $set: {
-                    'accountActions.invoiceNumber': invoiceNumber,
-                    'accountActions.invoiceDate': new Date(invoiceDate),
-                    'accountActions.taxAmount': Number(taxAmount),
+                    'accountActions.invoiceNumber': invoiceNumber.trim(),
+                    'accountActions.invoiceDate': invoiceDate ? new Date(invoiceDate) : new Date(),
+                    'accountActions.taxAmount': invTax,
                     'accountActions.totalInvoiceAmount': totalInvoiceAmount,
-                    'accountActions.pendingAmount': Math.max(0, pendingAmount),
-                    'accountActions.invoicePdf': invoicePdfUrl,
-                    'accountActions.invoiceStatus': invoiceStatus
+                    'accountActions.pendingAmount': pendingAmount,
+                    'accountActions.invoiceStatus': invoiceStatus,
+                    ...(invoicePdfUrls.length > 0 && { 'accountActions.invoicePdfs': invoicePdfUrls })
                 },
                 $push: { invoiceHistory: invoiceEntry }
             },
@@ -320,7 +347,7 @@ exports.convertToInvoice = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: 'Invoice created successfully',
+            message: `Invoice #${invoiceNumber} created with ${invoicePdfUrls.length} PDF(s). Total invoices: ${updatedAccount.invoiceHistory.length}`,
             account: updatedAccount
         });
     } catch (error) {
@@ -371,12 +398,11 @@ exports.addFollowUp = async (req, res) => {
     }
 };
 
-// Get follow-up alerts (due today or overdue)
+// Get follow-up alerts
 exports.getFollowUpAlerts = async (req, res) => {
     try {
         const user = req.user;
-        const isCompany = user.company ? false : true;
-        const companyId = new mongoose.Types.ObjectId(isCompany ? user._id : user.company);
+        const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
 
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -414,7 +440,7 @@ exports.getFollowUpAlerts = async (req, res) => {
     }
 };
 
-// Sync account data with project
+// Sync account with project
 exports.syncWithProject = async (req, res) => {
     try {
         const { projectId } = req.params;
@@ -473,8 +499,7 @@ exports.syncWithProject = async (req, res) => {
 exports.getAccountStats = async (req, res) => {
     try {
         const user = req.user;
-        const isCompany = user.company ? false : true;
-        const companyId = new mongoose.Types.ObjectId(isCompany ? user._id : user.company);
+        const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
 
         const stats = await AccountMaster.aggregate([
             { $match: { company: companyId } },
@@ -518,8 +543,7 @@ exports.getAccountStats = async (req, res) => {
 exports.bulkSyncAllProjects = async (req, res) => {
     try {
         const user = req.user;
-        const isCompany = user.company ? false : true;
-        const companyId = isCompany ? user._id : user.company;
+        const companyId = getCompanyId(user);
 
         const projects = await Project.find({ company: companyId })
             .populate('custId', 'custName')

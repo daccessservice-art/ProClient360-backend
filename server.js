@@ -59,6 +59,9 @@ const exhibitionRoutes = require('./routes/exhibitionRoutes');
 
 const accountMasterRoutes = require('./routes/accountMasterRoutes');
 
+const projectPurchaseRoutes = require('./routes/projectPurchaseRoutes');
+
+
 
 
 const app = express();
@@ -220,6 +223,7 @@ app.use('/api/mrf', mrfRoutes);
 app.use('/api/exhibition', exhibitionRoutes);
 app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api/projectPurchase', projectPurchaseRoutes);
 
 
 app.use((err, req, res, next) => {

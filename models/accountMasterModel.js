@@ -70,7 +70,7 @@ const accountMasterSchema = new mongoose.Schema({
         },
         invoiceNumber: { type: String },
         invoiceDate: { type: Date },
-        invoicePdf: { type: String },
+        invoicePdfs: [{ type: String }], // Changed to array for multiple PDFs
         nextFollowUpDate: { type: Date },
         customerPaymentRemark: { type: String, maxlength: 1000 },
         lastFollowUpDate: { type: Date }
@@ -83,7 +83,7 @@ const accountMasterSchema = new mongoose.Schema({
         invoiceAmount: Number,
         taxAmount: Number,
         totalAmount: Number,
-        invoicePdf: String,
+        invoicePdfs: [String], // Changed to array for multiple PDFs
         status: String,
         createdAt: { type: Date, default: Date.now }
     }],
