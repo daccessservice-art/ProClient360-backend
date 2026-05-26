@@ -150,6 +150,7 @@ exports.showAll = async (req, res) => {
     // These are shown permanently in the header badges regardless of active filters
     const allMainCount = await Customer.countDocuments({ company: companyId, customerType: "main" });
     const allBranchCount = await Customer.countDocuments({ company: companyId, customerType: "branch" });
+    const allTotalCount = await Customer.countDocuments({ company: companyId });
 
     res.status(200).json({
       success: true,
@@ -167,6 +168,7 @@ exports.showAll = async (req, res) => {
       allCounts: {
         main: allMainCount,
         branch: allBranchCount,
+        total: allTotalCount,
       },
     });
   } catch (error) {
