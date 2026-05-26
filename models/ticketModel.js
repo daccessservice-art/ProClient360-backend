@@ -53,6 +53,7 @@ const ticketSchema = new Schema({
     product:{
         type:String,
         enum: [
+        'Surveillance System',
         'CCTV System',
         'TA System',
         'Hajeri',
@@ -88,7 +89,8 @@ const ticketSchema = new Schema({
         'VisionIQ',
         'CineMind',
         'Extracto',
-        'Virtual Agent'                     
+        'Virtual Agent',
+        'LAN Cabling Activity'                     
         ],
         required: true,
     },

@@ -38,6 +38,7 @@ const projectSchema = new mongoose.Schema({
   category: {
     type:String,
     enum: [
+      'Surveillance System',
       'CCTV System',
       'TA System',
       'Hajeri',
@@ -73,7 +74,8 @@ const projectSchema = new mongoose.Schema({
       'VisionIQ',
       'CineMind',
       'Extracto',
-      'Virtual Agent' 
+      'Virtual Agent',
+      'LAN Cabling Activity'                     
     ],
     required: [true, 'Category is required'],
   },
