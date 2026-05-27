@@ -7,7 +7,7 @@ const { bucket } = require('../utils/firebase');
 const { logCreation, logUpdate } = require('../helpers/activityLogHelper');
 const mongoose = require('mongoose');
 
-// ─── Helper: Safely extract Company ID ─────────────────────────────────
+// ─── Helper: Safely extract Company ID ─────────────────────────────
 const getCompanyId = (user) => {
     if (user.company) {
         return typeof user.company === 'object' ? user.company._id : user.company;
@@ -15,7 +15,7 @@ const getCompanyId = (user) => {
     return user._id;
 };
 
-// ─── Helper: Upload Multiple PDFs ─────────────────────────────────────
+// ─── Helper: Upload Multiple PDFs ──────────────────────────────────
 const uploadMultiplePdfs = async (pdfsArray, folderName, invoiceNumber) => {
     const uploadedUrls = [];
     if (!pdfsArray || !Array.isArray(pdfsArray)) return uploadedUrls;
@@ -31,7 +31,7 @@ const uploadMultiplePdfs = async (pdfsArray, folderName, invoiceNumber) => {
                 if (!base64String || base64String.length < 100) continue;
 
                 const buffer = Buffer.from(base64String, 'base64');
-                if (buffer.length > 5 * 1024 * 1024) continue; // Skip files > 5MB
+                if (buffer.length > 5 * 1024 * 1024) continue;
 
                 const fileName = `${folderName}/${invoiceNumber || 'inv'}_${Date.now()}_${i}.pdf`;
                 const file = bucket.file(fileName);
@@ -46,16 +46,43 @@ const uploadMultiplePdfs = async (pdfsArray, folderName, invoiceNumber) => {
     return uploadedUrls;
 };
 
-// Get all accounts with filters
+// ─── Helper: Compute invoice status ────────────────────────────────
+// Single source of truth — used by both updateAccountActions & convertToInvoice
+const computeInvoiceStatus = (totalInvoiceAmount, receivedAmount) => {
+    if (totalInvoiceAmount <= 0) return 'Pending';
+    const pending = totalInvoiceAmount - receivedAmount;
+    if (pending <= 0)         return 'Paid';
+    if (receivedAmount > 0)   return 'Partial';
+    return 'Pending';
+};
+
+// ─── Helper: Compute effective total invoice amount ─────────────────
+// If real invoices exist → use their sum.
+// Otherwise fall back to PO value + tax (pre-invoice stage).
+const computeTotalInvoiceAmount = (account, taxAmountOverride) => {
+    const invoicedTotal = (account.invoiceHistory || []).reduce(
+        (sum, inv) => sum + (inv.totalAmount || 0), 0
+    );
+    if (invoicedTotal > 0) return invoicedTotal;
+
+    // No real invoices yet — use PO + tax
+    const tax = taxAmountOverride !== undefined
+        ? Number(taxAmountOverride)
+        : (account.accountActions?.taxAmount || 0);
+    return (account.basicAmount || 0) + tax;
+};
+
+// ───────────────────────────────────────────────────────────────────
+// GET ALL ACCOUNTS
+// ───────────────────────────────────────────────────────────────────
 exports.getAllAccounts = async (req, res) => {
     try {
         const user = req.user;
-        const page = parseInt(req.query.page) || 1;
+        const page  = parseInt(req.query.page)  || 1;
         const limit = parseInt(req.query.limit) || 20;
-        const skip = (page - 1) * limit;
+        const skip  = (page - 1) * limit;
 
         const { invoiceStatus, search, followUpDue } = req.query;
-
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
         let query = { company: companyId };
 
@@ -64,16 +91,13 @@ exports.getAllAccounts = async (req, res) => {
         }
 
         if (followUpDue === 'today') {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const tomorrow = new Date(today);
-            tomorrow.setDate(tomorrow.getDate() + 1);
+            const today    = new Date(); today.setHours(0, 0, 0, 0);
+            const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
             query['accountActions.nextFollowUpDate'] = { $gte: today, $lt: tomorrow };
         } else if (followUpDue === 'overdue') {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const today = new Date(); today.setHours(0, 0, 0, 0);
             query['accountActions.nextFollowUpDate'] = { $lt: today };
-            query['accountActions.invoiceStatus'] = { $ne: 'Paid' };
+            query['accountActions.invoiceStatus']    = { $ne: 'Paid' };
         }
 
         if (search && search.trim() !== '') {
@@ -89,11 +113,11 @@ exports.getAllAccounts = async (req, res) => {
             .limit(limit)
             .populate('projectId', 'name projectStatus completeLevel')
             .populate('createdBy', 'name')
-            .sort({ updatedAt: -1, createdAt: -1 }) // ✅ FIXED: newest/recently-updated first
+            .sort({ updatedAt: -1, createdAt: -1 })
             .lean();
 
         const totalRecords = await AccountMaster.countDocuments(query);
-        const totalPages = Math.ceil(totalRecords / limit);
+        const totalPages   = Math.ceil(totalRecords / limit);
 
         res.status(200).json({
             success: true,
@@ -113,16 +137,16 @@ exports.getAllAccounts = async (req, res) => {
     }
 };
 
-// Get single account by project ID
+// ───────────────────────────────────────────────────────────────────
+// GET ACCOUNT BY PROJECT ID
+// ───────────────────────────────────────────────────────────────────
 exports.getAccountByProject = async (req, res) => {
     try {
         const { projectId } = req.params;
         const user = req.user;
-
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
-        const query = { projectId, company: companyId };
 
-        let account = await AccountMaster.findOne(query)
+        let account = await AccountMaster.findOne({ projectId, company: companyId })
             .populate('projectId', 'name projectStatus completeLevel')
             .populate('createdBy', 'name')
             .lean();
@@ -141,7 +165,9 @@ exports.getAccountByProject = async (req, res) => {
     }
 };
 
-// Auto-create account from project
+// ───────────────────────────────────────────────────────────────────
+// AUTO-CREATE ACCOUNT FROM PROJECT
+// ───────────────────────────────────────────────────────────────────
 exports.createAccountFromProject = async (projectId, user) => {
     try {
         const project = await Project.findById(projectId)
@@ -150,46 +176,40 @@ exports.createAccountFromProject = async (projectId, user) => {
 
         if (!project) return null;
 
-        const existingAccount = await AccountMaster.findOne({ projectId });
-        if (existingAccount) return existingAccount;
-
-        const deliveryStatus = {
-            materialDeliveredPercentage: 0,
-            pendingMaterial: 'N/A',
-            deliveryCompletedDate: null
-        };
-
-        const installationStatus = {
-            workCompletedPercentage: project.completeLevel || 0,
-            pendingWork: project.completeLevel >= 100 ? 'None' : 'In Progress',
-            installationStatus: project.completeLevel >= 100 ? 'Completed' :
-                project.completeLevel > 0 ? 'In Progress' : 'Not Started'
-        };
+        const existing = await AccountMaster.findOne({ projectId });
+        if (existing) return existing;
 
         const companyId = getCompanyId(user);
 
-        const accountData = {
-            projectId: project._id,
-            company: companyId,
+        const account = await AccountMaster.create({
+            projectId:   project._id,
+            company:     companyId,
             customerName: project.custId?.custName || 'N/A',
-            projectName: project.name,
-            poNumber: project.purchaseOrderNo,
-            product: project.category,
+            projectName:  project.name,
+            poNumber:     project.purchaseOrderNo,
+            product:      project.category,
             paymentTerms: {
-                advancePay: project.advancePay || 0,
-                payAgainstDelivery: project.payAgainstDelivery || 0,
-                payAfterCompletion: project.payAfterCompletion || 0,
-                retention: project.retention || 0
+                advancePay:          project.advancePay          || 0,
+                payAgainstDelivery:  project.payAgainstDelivery  || 0,
+                payAfterCompletion:  project.payAfterCompletion  || 0,
+                retention:           project.retention           || 0
             },
             basicAmount: project.purchaseOrderValue,
-            deliveryStatus,
-            installationStatus,
+            deliveryStatus: {
+                materialDeliveredPercentage: 0,
+                pendingMaterial: 'N/A',
+                deliveryCompletedDate: null
+            },
+            installationStatus: {
+                workCompletedPercentage: project.completeLevel || 0,
+                pendingWork:        project.completeLevel >= 100 ? 'None' : 'In Progress',
+                installationStatus: project.completeLevel >= 100 ? 'Completed'
+                    : project.completeLevel > 0 ? 'In Progress' : 'Not Started'
+            },
             createdBy: user._id
-        };
+        });
 
-        const account = await AccountMaster.create(accountData);
         await logCreation(account, user, { params: { projectId } }, 'AccountMaster');
-
         return account;
     } catch (error) {
         console.error('Error in createAccountFromProject:', error);
@@ -197,12 +217,14 @@ exports.createAccountFromProject = async (projectId, user) => {
     }
 };
 
-// Update account actions
+// ───────────────────────────────────────────────────────────────────
+// UPDATE ACCOUNT ACTIONS  ← main fix is here
+// ───────────────────────────────────────────────────────────────────
 exports.updateAccountActions = async (req, res) => {
     try {
-        const { id } = req.params;
-        const user = req.user;
-        const updateData = req.body;
+        const { id }   = req.params;
+        const user     = req.user;
+        const body     = req.body;
 
         const account = await AccountMaster.findById(id);
         if (!account) {
@@ -211,44 +233,46 @@ exports.updateAccountActions = async (req, res) => {
 
         const oldData = { ...account.accountActions.toObject() };
 
-        // Calculate total and pending amounts
-        if (updateData.taxAmount !== undefined || updateData.receivedAmount !== undefined) {
-            const taxAmount = updateData.taxAmount !== undefined
-                ? Number(updateData.taxAmount)
-                : account.accountActions.taxAmount;
-            const receivedAmount = updateData.receivedAmount !== undefined
-                ? Number(updateData.receivedAmount)
-                : account.accountActions.receivedAmount;
+        // Build the update payload — start with a clean copy
+        const updatePayload = { ...account.accountActions.toObject() };
 
-            const totalInvoiceAmount = account.basicAmount + taxAmount;
-            const pendingAmount = totalInvoiceAmount - receivedAmount;
-
-            updateData.totalInvoiceAmount = totalInvoiceAmount;
-            updateData.pendingAmount = Math.max(0, pendingAmount);
-
-            if (pendingAmount <= 0) {
-                updateData.invoiceStatus = 'Paid';
-            } else if (receivedAmount > 0) {
-                updateData.invoiceStatus = 'Partial';
+        // ── Apply incoming scalar fields ──
+        const scalarFields = [
+            'advancePaymentReceived',
+            'receivedAmount',
+            'taxAmount',
+            'customerPaymentRemark',
+            'nextFollowUpDate',
+        ];
+        scalarFields.forEach(field => {
+            if (body[field] !== undefined) {
+                updatePayload[field] = body[field];
             }
+        });
+
+        // ── Re-compute totals whenever money fields touched ──
+        const moneyTouched = ['taxAmount', 'receivedAmount'].some(f => body[f] !== undefined);
+        if (moneyTouched) {
+            const taxAmount      = Number(updatePayload.taxAmount)      || 0;
+            const receivedAmount = Number(updatePayload.receivedAmount) || 0;
+
+            // KEY FIX: if real invoices exist, their sum is the authoritative total.
+            // Only fall back to PO+tax when no invoices have been raised yet.
+            const totalInvoiceAmount = computeTotalInvoiceAmount(account, taxAmount);
+            const pendingAmount      = Math.max(0, totalInvoiceAmount - receivedAmount);
+
+            updatePayload.totalInvoiceAmount = totalInvoiceAmount;
+            updatePayload.pendingAmount      = pendingAmount;
+            updatePayload.invoiceStatus      = computeInvoiceStatus(totalInvoiceAmount, receivedAmount);
         }
 
-        // Handle multiple invoice PDF uploads
-        if (updateData.invoicePdfs && Array.isArray(updateData.invoicePdfs) && updateData.invoicePdfs.length > 0) {
-            const newUrls = await uploadMultiplePdfs(updateData.invoicePdfs, 'Invoices', account.poNumber || 'account');
-            if (newUrls.length > 0) {
-                // Merge with existing PDFs
-                updateData.invoicePdfs = [...(account.accountActions.invoicePdfs || []), ...newUrls];
-            } else {
-                delete updateData.invoicePdfs; // Don't update if nothing was uploaded
-            }
-        } else {
-            delete updateData.invoicePdfs; // Remove empty array from update
-        }
+        // ── Never overwrite invoicePdfs through this endpoint ──
+        // (PDF uploads go through convertToInvoice only)
+        delete updatePayload.invoicePdfs;
 
         const updatedAccount = await AccountMaster.findByIdAndUpdate(
             id,
-            { $set: { accountActions: { ...account.accountActions.toObject(), ...updateData } } },
+            { $set: { accountActions: updatePayload } },
             { new: true, runValidators: true }
         );
 
@@ -269,11 +293,13 @@ exports.updateAccountActions = async (req, res) => {
     }
 };
 
-// ─── Convert to Invoice (Multiple PDFs Support) ──────────────────
+// ───────────────────────────────────────────────────────────────────
+// CONVERT TO INVOICE (Multiple PDFs)
+// ───────────────────────────────────────────────────────────────────
 exports.convertToInvoice = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = req.user;
+        const user   = req.user;
         const { invoiceNumber, invoiceDate, taxAmount, invoicePdfs, invoiceAmount } = req.body;
 
         const account = await AccountMaster.findById(id);
@@ -285,54 +311,57 @@ exports.convertToInvoice = async (req, res) => {
             return res.status(400).json({ success: false, error: 'Invoice number is required' });
         }
 
-        // Check for duplicate invoice number
-        const duplicateInvoice = account.invoiceHistory.find(
+        // Duplicate invoice-number guard
+        const duplicate = account.invoiceHistory.find(
             inv => inv.invoiceNumber === invoiceNumber.trim()
         );
-        if (duplicateInvoice) {
-            return res.status(400).json({ success: false, error: 'Invoice number already exists for this project' });
+        if (duplicate) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invoice number already exists for this project'
+            });
         }
 
-        const invAmount = Number(invoiceAmount) || account.basicAmount;
-        const invTax = Number(taxAmount) || 0;
+        const invAmount  = Number(invoiceAmount) || account.basicAmount;
+        const invTax     = Number(taxAmount)     || 0;
         const totalAmount = invAmount + invTax;
 
-        const previousInvoicedTotal = account.invoiceHistory.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+        // Totals including new invoice
+        const previousInvoicedTotal = (account.invoiceHistory || []).reduce(
+            (sum, inv) => sum + (inv.totalAmount || 0), 0
+        );
         const totalInvoiceAmount = previousInvoicedTotal + totalAmount;
-        const pendingAmount = Math.max(0, totalInvoiceAmount - account.accountActions.receivedAmount);
+        const receivedAmount     = account.accountActions.receivedAmount || 0;
+        const pendingAmount      = Math.max(0, totalInvoiceAmount - receivedAmount);
+        const invoiceStatus      = computeInvoiceStatus(totalInvoiceAmount, receivedAmount);
 
-        let invoiceStatus = 'Pending';
-        if (pendingAmount <= 0) {
-            invoiceStatus = 'Paid';
-        } else if (account.accountActions.receivedAmount > 0) {
-            invoiceStatus = 'Partial';
-        }
-
-        // Upload multiple PDFs
+        // Upload PDFs
         const invoicePdfUrls = await uploadMultiplePdfs(invoicePdfs, 'Invoices', invoiceNumber);
 
         const invoiceEntry = {
             invoiceNumber: invoiceNumber.trim(),
-            invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
+            invoiceDate:   invoiceDate ? new Date(invoiceDate) : new Date(),
             invoiceAmount: invAmount,
-            taxAmount: invTax,
-            totalAmount: totalAmount,
-            invoicePdfs: invoicePdfUrls,
-            status: invoiceStatus,
-            createdAt: new Date()
+            taxAmount:     invTax,
+            totalAmount,
+            invoicePdfs:   invoicePdfUrls,
+            status:        invoiceStatus,
+            createdAt:     new Date()
         };
 
         const updatedAccount = await AccountMaster.findByIdAndUpdate(
             id,
             {
                 $set: {
-                    'accountActions.invoiceNumber': invoiceNumber.trim(),
-                    'accountActions.invoiceDate': invoiceDate ? new Date(invoiceDate) : new Date(),
-                    'accountActions.taxAmount': invTax,
+                    'accountActions.invoiceNumber':      invoiceNumber.trim(),
+                    'accountActions.invoiceDate':        invoiceDate ? new Date(invoiceDate) : new Date(),
+                    'accountActions.taxAmount':          invTax,
                     'accountActions.totalInvoiceAmount': totalInvoiceAmount,
-                    'accountActions.pendingAmount': pendingAmount,
-                    'accountActions.invoiceStatus': invoiceStatus,
-                    ...(invoicePdfUrls.length > 0 && { 'accountActions.invoicePdfs': invoicePdfUrls })
+                    'accountActions.pendingAmount':      pendingAmount,
+                    'accountActions.invoiceStatus':      invoiceStatus,
+                    ...(invoicePdfUrls.length > 0 && {
+                        'accountActions.invoicePdfs': invoicePdfUrls
+                    })
                 },
                 $push: { invoiceHistory: invoiceEntry }
             },
@@ -356,22 +385,36 @@ exports.convertToInvoice = async (req, res) => {
     }
 };
 
-// Add follow-up
+// ───────────────────────────────────────────────────────────────────
+// ADD FOLLOW-UP
+// ───────────────────────────────────────────────────────────────────
 exports.addFollowUp = async (req, res) => {
     try {
         const { id } = req.params;
-        const { followUpDate, nextFollowUpDate, remark, contactPerson } = req.body;
+        const { followUpDate, nextFollowUpDate, remark, contactPerson, contacts } = req.body;
 
         const account = await AccountMaster.findById(id);
         if (!account) {
             return res.status(404).json({ success: false, error: 'Account not found' });
         }
 
+        let sanitizedContacts = [];
+        if (contacts && Array.isArray(contacts)) {
+            sanitizedContacts = contacts.map(c => ({
+                contactPerson: c.contactPerson || '',
+                contactEmail:  c.contactEmail  || '',
+                contactPhone:  c.contactPhone  || ''
+            }));
+        }
+
         const followUpEntry = {
-            followUpDate: new Date(followUpDate),
+            followUpDate:     new Date(followUpDate),
             nextFollowUpDate: new Date(nextFollowUpDate),
             remark,
-            contactPerson,
+            contactPerson: sanitizedContacts.length > 0
+                ? sanitizedContacts[0].contactPerson
+                : (contactPerson || ''),
+            contacts:  sanitizedContacts,
             createdAt: new Date()
         };
 
@@ -379,7 +422,7 @@ exports.addFollowUp = async (req, res) => {
             id,
             {
                 $push: { followUpHistory: followUpEntry },
-                $set: {
+                $set:  {
                     'accountActions.nextFollowUpDate': new Date(nextFollowUpDate),
                     'accountActions.lastFollowUpDate': new Date(followUpDate)
                 }
@@ -398,31 +441,30 @@ exports.addFollowUp = async (req, res) => {
     }
 };
 
-// Get follow-up alerts
+// ───────────────────────────────────────────────────────────────────
+// GET FOLLOW-UP ALERTS
+// ───────────────────────────────────────────────────────────────────
 exports.getFollowUpAlerts = async (req, res) => {
     try {
-        const user = req.user;
+        const user      = req.user;
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        const today    = new Date(); today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
 
         const alerts = await AccountMaster.find({
             company: companyId,
             'accountActions.nextFollowUpDate': { $lt: tomorrow },
-            'accountActions.invoiceStatus': { $ne: 'Paid' }
+            'accountActions.invoiceStatus':    { $ne: 'Paid' }
         })
             .populate('projectId', 'name')
             .sort({ 'accountActions.nextFollowUpDate': 1 })
             .lean();
 
-        const todayAlerts = alerts.filter(a => {
+        const todayAlerts   = alerts.filter(a => {
             const d = new Date(a.accountActions.nextFollowUpDate);
             return d >= today && d < tomorrow;
         });
-
         const overdueAlerts = alerts.filter(a => {
             const d = new Date(a.accountActions.nextFollowUpDate);
             return d < today;
@@ -440,7 +482,9 @@ exports.getFollowUpAlerts = async (req, res) => {
     }
 };
 
-// Sync account with project
+// ───────────────────────────────────────────────────────────────────
+// SYNC ACCOUNT WITH PROJECT
+// ───────────────────────────────────────────────────────────────────
 exports.syncWithProject = async (req, res) => {
     try {
         const { projectId } = req.params;
@@ -460,21 +504,21 @@ exports.syncWithProject = async (req, res) => {
 
         const updateData = {
             customerName: project.custId?.custName || account.customerName,
-            projectName: project.name,
-            poNumber: project.purchaseOrderNo,
-            product: project.category,
+            projectName:  project.name,
+            poNumber:     project.purchaseOrderNo,
+            product:      project.category,
             paymentTerms: {
-                advancePay: project.advancePay || 0,
+                advancePay:         project.advancePay         || 0,
                 payAgainstDelivery: project.payAgainstDelivery || 0,
                 payAfterCompletion: project.payAfterCompletion || 0,
-                retention: project.retention || 0
+                retention:          project.retention          || 0
             },
             basicAmount: project.purchaseOrderValue,
             installationStatus: {
                 ...account.installationStatus,
                 workCompletedPercentage: project.completeLevel || 0,
-                installationStatus: project.completeLevel >= 100 ? 'Completed' :
-                    project.completeLevel > 0 ? 'In Progress' : 'Not Started'
+                installationStatus: project.completeLevel >= 100 ? 'Completed'
+                    : project.completeLevel > 0 ? 'In Progress' : 'Not Started'
             }
         };
 
@@ -495,10 +539,12 @@ exports.syncWithProject = async (req, res) => {
     }
 };
 
-// Get account statistics
+// ───────────────────────────────────────────────────────────────────
+// GET ACCOUNT STATISTICS
+// ───────────────────────────────────────────────────────────────────
 exports.getAccountStats = async (req, res) => {
     try {
-        const user = req.user;
+        const user      = req.user;
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
 
         const stats = await AccountMaster.aggregate([
@@ -506,12 +552,12 @@ exports.getAccountStats = async (req, res) => {
             {
                 $group: {
                     _id: null,
-                    totalAccounts: { $sum: 1 },
-                    totalBasicAmount: { $sum: '$basicAmount' },
+                    totalAccounts:       { $sum: 1 },
+                    totalBasicAmount:    { $sum: '$basicAmount' },
                     totalReceivedAmount: { $sum: '$accountActions.receivedAmount' },
-                    totalPendingAmount: { $sum: '$accountActions.pendingAmount' },
-                    totalTaxAmount: { $sum: '$accountActions.taxAmount' },
-                    paidCount: { $sum: { $cond: [{ $eq: ['$accountActions.invoiceStatus', 'Paid'] }, 1, 0] } },
+                    totalPendingAmount:  { $sum: '$accountActions.pendingAmount' },
+                    totalTaxAmount:      { $sum: '$accountActions.taxAmount' },
+                    paidCount:    { $sum: { $cond: [{ $eq: ['$accountActions.invoiceStatus', 'Paid'] },    1, 0] } },
                     pendingCount: { $sum: { $cond: [{ $eq: ['$accountActions.invoiceStatus', 'Pending'] }, 1, 0] } },
                     partialCount: { $sum: { $cond: [{ $eq: ['$accountActions.invoiceStatus', 'Partial'] }, 1, 0] } },
                     overdueCount: { $sum: { $cond: [{ $eq: ['$accountActions.invoiceStatus', 'Overdue'] }, 1, 0] } }
@@ -522,15 +568,9 @@ exports.getAccountStats = async (req, res) => {
         res.status(200).json({
             success: true,
             stats: stats[0] || {
-                totalAccounts: 0,
-                totalBasicAmount: 0,
-                totalReceivedAmount: 0,
-                totalPendingAmount: 0,
-                totalTaxAmount: 0,
-                paidCount: 0,
-                pendingCount: 0,
-                partialCount: 0,
-                overdueCount: 0
+                totalAccounts: 0, totalBasicAmount: 0, totalReceivedAmount: 0,
+                totalPendingAmount: 0, totalTaxAmount: 0,
+                paidCount: 0, pendingCount: 0, partialCount: 0, overdueCount: 0
             }
         });
     } catch (error) {
@@ -539,18 +579,19 @@ exports.getAccountStats = async (req, res) => {
     }
 };
 
-// Bulk sync all projects into Account Master
+// ───────────────────────────────────────────────────────────────────
+// BULK SYNC ALL PROJECTS
+// ───────────────────────────────────────────────────────────────────
 exports.bulkSyncAllProjects = async (req, res) => {
     try {
-        const user = req.user;
+        const user      = req.user;
         const companyId = getCompanyId(user);
 
         const projects = await Project.find({ company: companyId })
             .populate('custId', 'custName')
             .lean();
 
-        let created = 0;
-        let skipped = 0;
+        let created = 0, skipped = 0;
         const errors = [];
 
         for (const project of projects) {
@@ -559,22 +600,21 @@ exports.bulkSyncAllProjects = async (req, res) => {
                 if (exists) { skipped++; continue; }
 
                 if (!project.purchaseOrderValue || project.purchaseOrderValue <= 0) {
-                    skipped++;
-                    continue;
+                    skipped++; continue;
                 }
 
                 await AccountMaster.create({
-                    projectId: project._id,
-                    company: companyId,
+                    projectId:    project._id,
+                    company:      companyId,
                     customerName: project.custId?.custName || 'N/A',
-                    projectName: project.name || 'N/A',
-                    poNumber: project.purchaseOrderNo || 'N/A',
-                    product: project.category || 'N/A',
+                    projectName:  project.name             || 'N/A',
+                    poNumber:     project.purchaseOrderNo  || 'N/A',
+                    product:      project.category         || 'N/A',
                     paymentTerms: {
-                        advancePay: project.advancePay || 0,
+                        advancePay:         project.advancePay         || 0,
                         payAgainstDelivery: project.payAgainstDelivery || 0,
                         payAfterCompletion: project.payAfterCompletion || 0,
-                        retention: project.retention || 0
+                        retention:          project.retention          || 0
                     },
                     basicAmount: project.purchaseOrderValue,
                     deliveryStatus: {
@@ -583,9 +623,9 @@ exports.bulkSyncAllProjects = async (req, res) => {
                     },
                     installationStatus: {
                         workCompletedPercentage: project.completeLevel || 0,
-                        pendingWork: project.completeLevel >= 100 ? 'None' : 'Pending',
-                        installationStatus: project.completeLevel >= 100 ? 'Completed' :
-                            project.completeLevel > 0 ? 'In Progress' : 'Not Started'
+                        pendingWork:        project.completeLevel >= 100 ? 'None' : 'Pending',
+                        installationStatus: project.completeLevel >= 100 ? 'Completed'
+                            : project.completeLevel > 0 ? 'In Progress' : 'Not Started'
                     },
                     createdBy: user._id
                 });

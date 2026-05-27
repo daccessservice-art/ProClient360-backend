@@ -88,12 +88,17 @@ const accountMasterSchema = new mongoose.Schema({
         createdAt: { type: Date, default: Date.now }
     }],
     
-    // Follow-up History
+        // Follow-up History
     followUpHistory: [{
         followUpDate: Date,
         nextFollowUpDate: Date,
         remark: String,
-        contactPerson: String,
+        contactPerson: String, // Kept for backward compatibility with old data
+        contacts: [{            // New field for multiple contacts
+            contactPerson: String,
+            contactEmail: String,
+            contactPhone: String
+        }],
         createdAt: { type: Date, default: Date.now }
     }],
     
