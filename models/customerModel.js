@@ -219,7 +219,7 @@ const customerSchema = new mongoose.Schema({
         'Automotive',
         'Dealer',
         'Hotel',
-        'Gym & Clubs',
+        'Gym & Club',
         'Facility Services',
         'Labour Contractor',
         'Security Systems Dealer',
