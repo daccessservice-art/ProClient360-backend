@@ -187,7 +187,8 @@ exports.create = async (req, res) => {
       remark,
       POCopy,
       Address,
-      retention
+      retention,
+      retentionDays
     } = req.body;
 
     const user = req.user;
@@ -201,6 +202,12 @@ exports.create = async (req, res) => {
     if (!Address) {
       return res.status(400).json({ success: false, error: "Address Required..." });
     }
+
+    // ─── NEW: Retention Validation (Max 10%) ───
+    if (Number(retention) > 10) {
+        return res.status(400).json({ success: false, error: "Retention cannot be more than 10%." });
+    }
+    // ───────────────────────────────────────────
 
     // ── POCopy Upload ──────────────────────────────────────────────────────────
     let POCopyUrl = null;
@@ -263,6 +270,7 @@ exports.create = async (req, res) => {
       Address,
       createdBy: user._id,
       retention,
+      retentionDays: retentionDays || 0, // ─── ADD NEW FIELD
       projectStatus:
         new Date(startDate) > new Date()
           ? "Upcoming"
@@ -409,7 +417,8 @@ exports.updateProject = async (req, res) => {
     name, custId, Address, completeLevel, purchaseOrderNo, projectStatus,
     purchaseOrderDate, purchaseOrderValue, category, startDate, endDate,
     advancePay, payAgainstDelivery, payAfterCompletion, remark, POCopy,
-    retention, completionCertificate, warrantyCertificate, warrantyStartDate, warrantyMonths
+    retention, retentionDays, // ─── NEW FIELD
+    completionCertificate, warrantyCertificate, warrantyStartDate, warrantyMonths
   } = req.body;
 
   try {
@@ -446,6 +455,7 @@ exports.updateProject = async (req, res) => {
       payAfterCompletion: originalData.payAfterCompletion,
       remark: originalData.remark,
       retention: originalData.retention,
+      retentionDays: originalData.retentionDays, // ─── ADD TO OLD DATA
       POCopy: originalData.POCopy,
       completionCertificate: originalData.completionCertificate,
       warrantyCertificate: originalData.warrantyCertificate,
@@ -468,6 +478,13 @@ exports.updateProject = async (req, res) => {
     if (payAfterCompletion !== undefined) updateData.payAfterCompletion = payAfterCompletion;
     if (remark !== undefined) updateData.remark = remark;
     if (retention !== undefined) updateData.retention = retention;
+    if (retentionDays !== undefined) updateData.retentionDays = retentionDays; // ─── ADD NEW FIELD
+
+    // ─── NEW: Retention Validation (Max 10%) ───
+    if (updateData.retention !== undefined && Number(updateData.retention) > 10) {
+        return res.status(400).json({ success: false, error: "Retention cannot be more than 10%." });
+    }
+    // ───────────────────────────────────────────
 
     if (purchaseOrderDate) {
       const poDate = new Date(purchaseOrderDate);
@@ -560,6 +577,7 @@ exports.updateProject = async (req, res) => {
       payAfterCompletion: updatedProjectDoc.payAfterCompletion,
       remark: updatedProjectDoc.remark,
       retention: updatedProjectDoc.retention,
+      retentionDays: updatedProjectDoc.retentionDays,
       POCopy: updatedProjectDoc.POCopy,
       completionCertificate: updatedProjectDoc.completionCertificate,
       warrantyCertificate: updatedProjectDoc.warrantyCertificate,

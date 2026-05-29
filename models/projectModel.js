@@ -106,6 +106,13 @@ const projectSchema = new mongoose.Schema({
     min: [0, 'Retention Percentage cannot be less than 0'],
     max: [100, 'Retention Percentage cannot exceed 100'],
   },
+  // ─── NEW FIELD: Retention Days ───
+  retentionDays: {
+    type: Number,
+    default: 0,
+    min: [0, 'Retention Days cannot be negative']
+  },
+  // ────────────────────────────────
   startDate: {
     type: Date,
     required: [true, 'Start date is required'],

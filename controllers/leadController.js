@@ -261,7 +261,7 @@ exports.getFeasibleLeads = async (req, res) => {
         { SENDER_COMPANY: searchRegex },
         { SENDER_MOBILE:  searchRegex },
         { SENDER_NAME:    searchRegex },
-         ...(employeeIds.length > 0 ? [{ assignedTo: { $in: employeeIds } }] : []),
+        ...(employeeIds.length > 0 ? [{ assignedTo: { $in: employeeIds } }] : []),
       ];
     }
 
@@ -336,7 +336,6 @@ exports.getMyLeads = async (req, res) => {
     // ── Build $and array ──
     const andConditions = [baseMatch, fyFilter];
 
-    // ✅ Date filter — added as separate $and element (never overwrites FY filter)
     if (date) {
       const test = new Date(`${date}T00:00:00+05:30`);
       if (isNaN(test.getTime())) {
@@ -345,7 +344,6 @@ exports.getMyLeads = async (req, res) => {
       andConditions.push(buildDateCondition(date));
     }
 
-    // Status filter
     if (status) {
       const validStatuses = ['Pending', 'Ongoing', 'Lost', 'Won'];
       if (validStatuses.includes(status)) {
@@ -355,7 +353,6 @@ exports.getMyLeads = async (req, res) => {
       }
     }
 
-    // Call leads filter
     if (callLeads) {
       const validLeads = ['Hot Leads', 'Warm Leads', 'Cold Leads', 'Invalid Leads'];
       if (validLeads.includes(callLeads)) {
@@ -363,7 +360,6 @@ exports.getMyLeads = async (req, res) => {
       }
     }
 
-    // ✅ Search filter — added as separate $and element (never overwrites FY filter)
     if (search) {
       const searchRegex = new RegExp(search, 'i');
       const matchingEmployees = await Employee.find(
@@ -381,7 +377,6 @@ exports.getMyLeads = async (req, res) => {
       });
     }
 
-    // Follow-up today filter
     if (followUpToday === 'true' || followUpToday === true) {
       const today = new Date();
       const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
@@ -389,7 +384,6 @@ exports.getMyLeads = async (req, res) => {
       andConditions.push({ nextFollowUpDate: { $gte: startOfToday, $lt: endOfToday } });
     }
 
-    // Today action filter
     if (todayAction === 'true') {
       const today = new Date();
       const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
@@ -403,10 +397,8 @@ exports.getMyLeads = async (req, res) => {
       });
     }
 
-    // ✅ Final query uses $and — all conditions preserved
     const query = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
 
-    // ── Fetch leads ──
     const leads = await Lead.find(query)
       .populate('company', 'name')
       .populate('assignedBy', 'name')
@@ -419,7 +411,6 @@ exports.getMyLeads = async (req, res) => {
     const totalRecords = await Lead.countDocuments(query);
     const totalPages   = Math.ceil(totalRecords / limit);
 
-    // ── Card counts (always use FY-filtered base) ──
     const cardBase = { $and: [baseMatch, fyFilter] };
 
     const [
@@ -488,51 +479,104 @@ exports.getMyLeads = async (req, res) => {
 };
 
 // ══════════════════════════════════════════════════════════════
-// ✅ UPDATE assignLead: Reactivate Old Leads Automatically
+// ✅ FIXED: assignLead — removed stray 'assignmas' typo,
+//    removed callHistory array push to fix validation error
 // ══════════════════════════════════════════════════════════════
 exports.assignLead = async (req, res) => {
   try {
-    const user = req.user; const leadId = req.params.id; const { feasibility, remark, assignedTo, callHistory } = req.body;
-    if (!Types.ObjectId.isValid(leadId)) return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
+    const user = req.user;
+    const leadId = req.params.id;
+    const { feasibility, remark, assignedTo, callHistory } = req.body;
+
+    if (!Types.ObjectId.isValid(leadId))
+      return res.status(400).json({ success: false, error: 'Invalid lead ID format.' });
+
     const lead = await Lead.findOne({ _id: leadId, company: user.company || user._id });
-    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found.' });
+    if (!lead)
+      return res.status(404).json({ success: false, error: 'Lead not found.' });
 
     const oldAssignedTo = lead.assignedTo;
-    if (feasibility === 'feasible' || feasibility === 'not-feasible' || feasibility === 'call-unanswered') lead.feasibility = feasibility;
-    else lead.feasibility = 'feasible';
+
+    if (
+      feasibility === 'feasible' ||
+      feasibility === 'not-feasible' ||
+      feasibility === 'call-unanswered'
+    ) {
+      lead.feasibility = feasibility;
+    } else {
+      lead.feasibility = 'feasible';
+    }
 
     if (assignedTo) {
       lead.assignedTo = new Types.ObjectId(assignedTo);
-      
-      // ✅ PROPER TRANSFER LOGIC: REACTIVATE CLOSED LEADS
+
       if (lead.STATUS === 'Won' || lead.STATUS === 'Lost') {
         lead.STATUS = 'Ongoing';
         lead.complated = 0;
         lead.step = '1. Call Not Connect/ Callback';
         lead.remark = remark || `Reassigned from old closed status. Restarting process.`;
       }
-    } else if (!lead.assignedTo) { lead.assignedTo = new Types.ObjectId(user._id); }
-
-    lead.assignedBy = new Types.ObjectId(user._id); lead.assignedTime = new Date(); lead.remark = remark || 'Reason not provided';
-
-    if (callHistory && typeof callHistory === 'object') {
-      const newCallEntry = {
-        callType: callHistory.callType || 'Outgoing',
-        callDuration: callHistory.callDuration || 0,
-        callPurpose: callHistory.callPurpose || '',
-        callNotes: callHistory.callNotes || '',
-        createdAt: new Date(),
-        createdBy: user._id
-      };
-      if (!lead.callHistory) lead.callHistory = [];
-      lead.callHistory.push(newCallEntry);
+    } else if (!lead.assignedTo) {
+      lead.assignedTo = new Types.ObjectId(user._id);
     }
 
+    lead.assignedBy = new Types.ObjectId(user._id);
+    lead.assignedTime = new Date();
+    lead.remark = remark || 'Reason not provided';
+
+    // ✅ FIXED: callHistory from call-unanswered submit is a full array.
+    // Each call was already individually saved via /call-attempt/:id route.
+    // Do NOT push the array as a single entry — causes validation error.
+    if (callHistory && Array.isArray(callHistory)) {
+      // Calls already saved — only sync firstCallDate if missing
+      if (!lead.firstCallDate && callHistory.length > 0) {
+        lead.firstCallDate = new Date(callHistory[0].date) || new Date();
+      }
+      // Do NOT push/replace callHistory here
+    } else if (
+      callHistory &&
+      typeof callHistory === 'object' &&
+      !Array.isArray(callHistory) &&
+      callHistory.day &&
+      callHistory.attempt
+    ) {
+      // Legacy: single call entry with valid day + attempt fields only
+      if (!lead.callHistory) lead.callHistory = [];
+      lead.callHistory.push({
+        day: callHistory.day,
+        attempt: callHistory.attempt,
+        date: callHistory.date || new Date(),
+        status: callHistory.status || 'attempted',
+        remarks: callHistory.remarks || '',
+        attemptedBy: callHistory.attemptedBy || user._id,
+      });
+    }
+    // If callHistory is undefined/null — do nothing (feasible / not-feasible flows)
+
     await lead.save();
-    if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) { const assignedEmployee = await Employee.findById(assignedTo); await logLeadAssignment(lead, assignedEmployee, user, req); }
-    const savedLead = await Lead.findById(lead._id).populate('assignedTo', 'name').populate('assignedBy', 'name');
-    res.status(200).json({ success: true, message: 'Lead assigned successfully.', data: { feasibility: savedLead.feasibility, assignedTo: savedLead.assignedTo, callHistory: savedLead.callHistory, STATUS: savedLead.STATUS } });
-  } catch (error) { res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message }); }
+
+    if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) {
+      const assignedEmployee = await Employee.findById(assignedTo);
+      await logLeadAssignment(lead, assignedEmployee, user, req);
+    }
+
+    const savedLead = await Lead.findById(lead._id)
+      .populate('assignedTo', 'name')
+      .populate('assignedBy', 'name');
+
+    res.status(200).json({
+      success: true,
+      message: 'Lead assigned successfully.',
+      data: {
+        feasibility: savedLead.feasibility,
+        assignedTo: savedLead.assignedTo,
+        callHistory: savedLead.callHistory,
+        STATUS: savedLead.STATUS,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Internal Server Error: ' + error.message });
+  }
 };
 
 exports.submiEnquiry = async (req, res) => {
@@ -555,11 +599,11 @@ exports.submiEnquiry = async (req, res) => {
 
     if (step === '7. Quotation Submission' && quotation) lead.quotation = quotation;
 
-    lead.STATUS          = status;
-    lead.complated       = complated || 0;
-    lead.step            = step;
+    lead.STATUS           = status;
+    lead.complated        = complated || 0;
+    lead.step             = step;
     lead.nextFollowUpDate = nextFollowUpDate || null;
-    lead.rem             = req.body.rem || lead.rem;
+    lead.rem              = req.body.rem || lead.rem;
     if (callLeads) lead.callLeads = callLeads;
 
     if (previousActions && Array.isArray(previousActions)) {
@@ -573,13 +617,13 @@ exports.submiEnquiry = async (req, res) => {
       if (!lead.previousActions) lead.previousActions = [];
       lead.previousActions.push({
         _id: new Types.ObjectId(),
-        status:          status || lead.STATUS,
-        step:            step   || lead.step || '1. Call Not Connect/ Callback',
+        status:           status || lead.STATUS,
+        step:             step   || lead.step || '1. Call Not Connect/ Callback',
         nextFollowUpDate: nextFollowUpDate || lead.nextFollowUpDate,
-        rem:             req.body.rem || lead.rem || '',
-        completion:      complated     || lead.complated || 0,
-        quotation:       quotation     || lead.quotation || 0,
-        callLeads:       callLeads     || lead.callLeads || 'Warm Leads',
+        rem:              req.body.rem || lead.rem || '',
+        completion:       complated     || lead.complated || 0,
+        quotation:        quotation     || lead.quotation || 0,
+        callLeads:        callLeads     || lead.callLeads || 'Warm Leads',
         actionBy: { name: user.name || 'System', userId: user._id }
       });
     }
@@ -627,23 +671,22 @@ exports.createLead = async (req, res) => {
     if (customerType) leadData.customerType = customerType;
     if (customerId)   leadData.customerId   = new Types.ObjectId(customerId);
 
-    // ✅ Save project & survey fields
     if (projectSize)       leadData.projectSize       = projectSize;
     if (requirementType)   leadData.requirementType   = requirementType;
     if (requirementMode)   leadData.requirementMode   = requirementMode;
     if (surveyNeeded)      leadData.surveyNeeded      = surveyNeeded;
     if (surveyDetails) {
       leadData.surveyDetails = {
-        dateTime:          surveyDetails.dateTime ? new Date(surveyDetails.dateTime) : null,
-        communicatePerson: surveyDetails.communicatePerson || '',
-        communicateEmail:  surveyDetails.communicateEmail  || '',
-        communicateContact:surveyDetails.communicateContact|| '',
+        dateTime:           surveyDetails.dateTime ? new Date(surveyDetails.dateTime) : null,
+        communicatePerson:  surveyDetails.communicatePerson || '',
+        communicateEmail:   surveyDetails.communicateEmail  || '',
+        communicateContact: surveyDetails.communicateContact|| '',
       };
     }
     if (assignedSurveyEngineer) {
-      leadData.assignedSurveyEngineer    = new Types.ObjectId(assignedSurveyEngineer);
-      leadData.surveyEngineerAssignedAt  = surveyEngineerAssignedAt || new Date();
-      leadData.surveyEngineerAssignedBy  = surveyEngineerAssignedBy ? new Types.ObjectId(surveyEngineerAssignedBy) : null;
+      leadData.assignedSurveyEngineer   = new Types.ObjectId(assignedSurveyEngineer);
+      leadData.surveyEngineerAssignedAt = surveyEngineerAssignedAt || new Date();
+      leadData.surveyEngineerAssignedBy = surveyEngineerAssignedBy ? new Types.ObjectId(surveyEngineerAssignedBy) : null;
     }
 
     const lead = new Lead(leadData);
@@ -767,7 +810,6 @@ exports.saveMeetingLog = async (req, res) => {
       return res.status(404).json({ success: false, error: "Lead not found." });
     }
 
-    // ✅ ADD THIS CHECK — Prevent updating closed leads
     if (lead.STATUS === 'Won' || lead.STATUS === 'Lost') {
       return res.status(400).json({
         success: false,
@@ -776,12 +818,12 @@ exports.saveMeetingLog = async (req, res) => {
     }
 
     lead.previousActions.push({
-      status:          lead.STATUS          || "Pending",
-      step:            lead.step            || "1. Call Not Connect/ Callback",
-      nextFollowUpDate:lead.nextFollowUpDate || null,
-      completion:      lead.complated       || 0,
-      quotation:       lead.quotation       || 0,
-      callLeads:       lead.callLeads       || "Warm Leads",
+      status:           lead.STATUS           || "Pending",
+      step:             lead.step             || "1. Call Not Connect/ Callback",
+      nextFollowUpDate: lead.nextFollowUpDate  || null,
+      completion:       lead.complated         || 0,
+      quotation:        lead.quotation         || 0,
+      callLeads:        lead.callLeads         || "Warm Leads",
       rem: `[MeetingLog|${platformKey}] ${label}`,
       actionBy: {
         name:   user.name  || "System",
@@ -818,8 +860,8 @@ exports.transferOwnership = async (req, res) => {
     }
 
     const query = {
-      company:    new Types.ObjectId(user.company || user._id),
-      assignedTo: new Types.ObjectId(fromEmployeeId),
+      company:     new Types.ObjectId(user.company || user._id),
+      assignedTo:  new Types.ObjectId(fromEmployeeId),
       feasibility: 'feasible',
       _id: { $in: leadIds.map(id => new Types.ObjectId(id)) },
     };
@@ -854,7 +896,6 @@ exports.submitSurveyReport = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Lead not found.' });
     }
 
-    // Check if this lead is assigned to this survey engineer
     if (lead.assignedSurveyEngineer && lead.assignedSurveyEngineer.toString() !== user._id.toString()) {
       if (user.user !== 'admin' && user.user !== 'company') {
         return res.status(403).json({ success: false, error: 'This lead is not assigned to you.' });
@@ -865,7 +906,6 @@ exports.submitSurveyReport = async (req, res) => {
     let drawingFileUrl = lead.surveyReport?.drawingFile || '';
     let boqFileUrl     = lead.surveyReport?.boqFile     || '';
 
-    // Handle file uploads from multer — req.files is populated by multer.fields()
     if (req.files) {
       if (req.files.reportFile && req.files.reportFile[0]) {
         reportFileUrl = '/uploads/survey-reports/' + req.files.reportFile[0].filename;
@@ -879,45 +919,42 @@ exports.submitSurveyReport = async (req, res) => {
     }
 
     lead.surveyReport = {
-      status: status || 'pending',
-      surveyDate: surveyDate || new Date(),
-      reportFile: reportFileUrl,
-      drawingFile: drawingFileUrl,
-      boqFile: boqFileUrl,
+      status:       status || 'pending',
+      surveyDate:   surveyDate || new Date(),
+      reportFile:   reportFileUrl,
+      drawingFile:  drawingFileUrl,
+      boqFile:      boqFileUrl,
       cancelReason: cancelReason || '',
-      submittedAt: new Date(),
-      submittedBy: user._id
+      submittedAt:  new Date(),
+      submittedBy:  user._id
     };
 
-    // Add to previous actions
     const actionRemark = status === 'success'
       ? 'Survey completed successfully. Report, Drawing and BOQ uploaded.'
       : `Survey cancelled. Reason: ${cancelReason}`;
 
     if (!lead.previousActions) lead.previousActions = [];
     lead.previousActions.push({
-      _id: new Types.ObjectId(),
-      status: lead.STATUS,
-      step: '3. Site Visit',
+      _id:              new Types.ObjectId(),
+      status:           lead.STATUS,
+      step:             '3. Site Visit',
       nextFollowUpDate: lead.nextFollowUpDate,
-      rem: actionRemark,
-      completion: status === 'success' ? 50 : lead.complated,
-      quotation: lead.quotation,
-      callLeads: lead.callLeads,
+      rem:              actionRemark,
+      completion:       status === 'success' ? 50 : lead.complated,
+      quotation:        lead.quotation,
+      callLeads:        lead.callLeads,
       actionBy: { name: user.name || 'Pre Sales Executive', userId: user._id },
       createdAt: new Date()
     });
 
     await lead.save();
 
-    // ── Populate lead for mail (need assignedTo.email & assignedTo.name) ──────
     const populatedLead = await Lead.findById(lead._id)
       .populate('assignedTo', 'name email')
       .populate('assignedBy', 'name email')
       .populate('assignedSurveyEngineer', 'name email')
       .lean();
 
-    // ── Send notification email ───────────────────────────────────────────────
     try {
       const { surveyEngineerReportMail } = require('../mailsService/surveyEngineerReportMail');
       await surveyEngineerReportMail({
@@ -928,10 +965,8 @@ exports.submitSurveyReport = async (req, res) => {
         surveyDate: surveyDate ? new Date(surveyDate) : new Date(),
       });
     } catch (mailErr) {
-      // Mail failure must NEVER break the API response
       console.error('⚠️ Survey report mail failed (non-blocking):', mailErr.message);
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     res.status(200).json({
       success: true,
