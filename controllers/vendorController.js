@@ -20,10 +20,16 @@ exports.getVendorByName = async (req, res) => {
     const { name } = req.params;
     const user = req.user;
     
-    const vendor = await Vendor.findOne({
-      vendorName: { $regex: new RegExp(name, 'i') }, // Case-insensitive search
-      company: user.company ? user.company : user._id
-    });
+    let query = {
+      vendorName: { $regex: new RegExp(name, 'i') }
+    };
+
+    // If user is logged in (internal use), scope to their company
+    if (req.user) {
+      query.company = req.user.company ? req.user.company : req.user._id;
+    }
+    
+    const vendor = await Vendor.findOne(query);
     
     if (!vendor) {
       return res.status(404).json({ 
@@ -140,7 +146,6 @@ exports.createVendor = async (req, res) => {
       manualAddress
     } = req.body;
 
-    // Check if vendor with same email exists - KEEP THIS VALIDATION FOR NORMAL VENDOR CREATION
     const vendor = await Vendor.find({
       company: user.company ? user.company : user._id,
       email: email,
@@ -152,7 +157,6 @@ exports.createVendor = async (req, res) => {
       });
     }
 
-    // For Import and Other vendors, set default address
     let addressData = billingAddress;
     if (typeOfVendor === 'Import' || typeOfVendor === 'Other') {
       addressData = {
@@ -214,7 +218,6 @@ exports.deleteVendor = async (req, res) => {
   try {
     const vendorId = req.params.id;
     
-    // Check if vendor is registered from link
     const vendor = await Vendor.findById(vendorId);
     if (!vendor) {
       return res.status(404).json({ 
@@ -223,13 +226,13 @@ exports.deleteVendor = async (req, res) => {
       });
     }
     
-    // Prevent deletion of vendors registered via link
-    if (vendor.registeredFromLink) {
-      return res.status(403).json({ 
-        success: false, 
-        error: "Cannot delete vendors registered through link" 
-      });
-    }
+    // REMOVED CHECK TO ALLOW DELETION OF LINK VENDORS
+    // if (vendor.registeredFromLink) {
+    //   return res.status(403).json({ 
+    //     success: false, 
+    //     error: "Cannot delete vendors registered through link" 
+    //   });
+    // }
     
     await Vendor.findByIdAndDelete(vendorId);
 
@@ -259,13 +262,13 @@ exports.updateVendor = async (req, res) => {
       });
     }
     
-    // Prevent update of vendors registered via link
-    if (existingVendor.registeredFromLink) {
-      return res.status(403).json({ 
-        success: false, 
-        error: "Cannot update vendors registered through link" 
-      });
-    }
+    // REMOVED CHECK TO ALLOW UPDATES OF LINK VENDORS
+    // if (existingVendor.registeredFromLink) {
+    //   return res.status(403).json({ 
+    //     success: false, 
+    //     error: "Cannot update vendors registered through link" 
+    //   });
+    // }
 
     let changes = [];
 
@@ -281,7 +284,6 @@ exports.updateVendor = async (req, res) => {
       }
     };
 
-    // Track changes for all fields
     trackChanges("vendorName", existingVendor.vendorName, updatedData.vendorName);
     trackChanges("typeOfVendor", existingVendor.typeOfVendor, updatedData.typeOfVendor);
     trackChanges("materialCategory", existingVendor.materialCategory, updatedData.materialCategory);
@@ -325,7 +327,6 @@ exports.updateVendor = async (req, res) => {
       updatedData.manualAddress
     );
 
-    // Handle address changes conditionally
     if (updatedData.typeOfVendor !== 'Import' && updatedData.typeOfVendor !== 'Other' && updatedData.billingAddress) {
       trackChanges(
         "billingAddress.add",
@@ -354,7 +355,6 @@ exports.updateVendor = async (req, res) => {
       );
     }
 
-    // For Import and Other vendors, set default address
     if (updatedData.typeOfVendor === 'Import' || updatedData.typeOfVendor === 'Other') {
       updatedData.billingAddress = {
         add: "Not applicable for this vendor type",
@@ -393,12 +393,8 @@ exports.generateVendorLink = async (req, res) => {
     const { linkId, linkUrl } = req.body;
     const user = req.user;
     
-    console.log("Generating vendor link with ID:", linkId);
-    
-    // Check if linkId already exists
     const existingLink = await VendorLink.findOne({ linkId });
     if (existingLink) {
-      console.log("Link ID already exists:", linkId);
       return res.status(400).json({
         success: false,
         error: "Link ID already exists"
@@ -415,15 +411,12 @@ exports.generateVendorLink = async (req, res) => {
     
     await newVendorLink.save();
     
-    console.log("Vendor link generated successfully:", newVendorLink);
-    
     res.status(201).json({
       success: true,
       message: "Vendor link generated successfully",
       linkId
     });
   } catch (error) {
-    console.error("Error in generateVendorLink:", error);
     res.status(500).json({
       success: false,
       error: "Error generating vendor link: " + error.message
@@ -435,24 +428,16 @@ exports.getVendorLink = async (req, res) => {
   try {
     const { linkId } = req.params;
     
-    console.log("Looking for link with ID:", linkId);
-    
-    // First try to find the link
     const vendorLink = await VendorLink.findOne({ linkId });
     
-    console.log("Found vendor link:", vendorLink);
-    
     if (!vendorLink) {
-      console.log("No link found with this ID");
       return res.status(404).json({
         success: false,
         error: "Invalid link ID"
       });
     }
     
-    // Check if the link is active
     if (!vendorLink.isActive) {
-      console.log("Link is not active");
       return res.status(404).json({
         success: false,
         error: "Link has already been used"
@@ -464,7 +449,6 @@ exports.getVendorLink = async (req, res) => {
       linkId
     });
   } catch (error) {
-    console.error("Error in getVendorLink:", error);
     res.status(500).json({
       success: false,
       error: "Error fetching vendor link: " + error.message
@@ -474,19 +458,10 @@ exports.getVendorLink = async (req, res) => {
 
 exports.registerVendorFromLink = async (req, res) => {
   try {
-    // Log the request body type and content
-    console.log("Request received for vendor registration");
-    console.log("Request body type:", typeof req.body);
-    
-    // Check if it's FormData
     if (req.body instanceof Object && !(req.body instanceof Array)) {
-      console.log("Processing FormData request");
-      
-      // Extract linkId from the request
       let linkId = null;
-      let vendorId = null; // For updating existing vendors
+      let vendorId = null;
       
-      // Try to get linkId from different possible locations
       if (req.body.linkId) {
         linkId = req.body.linkId;
       }
@@ -496,20 +471,16 @@ exports.registerVendorFromLink = async (req, res) => {
       }
       
       if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
-        // For FormData, we need to parse it differently
-        // This is a simplified approach - in a real app, you might use multer or similar
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
         req.on('end', () => {
           const data = Buffer.concat(chunks).toString();
-          // Parse the FormData manually (this is a simplified approach)
           const formData = {};
           data.split('\r\n').forEach(line => {
             if (line.includes('Content-Disposition') && line.includes('name=')) {
               const nameMatch = line.match(/name="([^"]+)"/);
               if (nameMatch) {
                 const fieldName = nameMatch[1];
-                // Find the next line that contains the value
                 const nextLineIndex = data.split('\r\n').indexOf(line) + 2;
                 const value = data.split('\r\n')[nextLineIndex];
                 formData[fieldName] = value;
@@ -519,27 +490,20 @@ exports.registerVendorFromLink = async (req, res) => {
           
           linkId = formData.linkId;
           vendorId = formData.vendorId;
-          console.log("Extracted linkId from FormData:", linkId);
-          console.log("Extracted vendorId from FormData:", vendorId);
-          
-          // Continue with the registration process
           processVendorRegistration(linkId, vendorId, formData, res);
         });
-        return; // Exit early since we're handling asynchronously
+        return;
       }
       
       if (!linkId) {
-        console.log("No linkId found in request");
         return res.status(400).json({
           success: false,
           error: "No linkId provided"
         });
       }
       
-      // For regular JSON requests
       processVendorRegistration(linkId, vendorId, req.body, res);
     } else {
-      console.log("Invalid request body type");
       return res.status(400).json({
         success: false,
         error: "Invalid request format"
@@ -554,28 +518,19 @@ exports.registerVendorFromLink = async (req, res) => {
   }
 };
 
-// Helper function to process vendor registration
 async function processVendorRegistration(linkId, vendorId, formData, res) {
   try {
-    console.log("Registering vendor with linkId:", linkId);
-    
-    // Validate the link
     const vendorLink = await VendorLink.findOne({ linkId, isActive: true });
     
-    console.log("Found vendor link:", vendorLink);
-    
     if (!vendorLink) {
-      console.log("No valid link found for registration");
       return res.status(400).json({
         success: false,
         error: "Invalid or expired link"
       });
     }
     
-    // Extract vendor data from the request
     const vendorData = {};
     
-    // Add all vendor fields from the request body
     const vendorFields = [
       'vendorName', 'email', 'typeOfVendor', 'GSTNo', 'brandName', 'modelName', 
       'price', 'websiteURL', 'linkedinURL', 'twitterProfile', 'vendorContactPersonName1', 
@@ -589,7 +544,6 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       }
     });
     
-    // Handle billing address
     if (formData['billingAddress.add'] || formData['billingAddress.city'] || 
         formData['billingAddress.state'] || formData['billingAddress.country'] || 
         formData['billingAddress.pincode']) {
@@ -602,7 +556,6 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       };
     }
     
-    // For Import and Other vendors, set default address
     if (vendorData.typeOfVendor === 'Import' || vendorData.typeOfVendor === 'Other') {
       vendorData.billingAddress = {
         add: "Not applicable for this vendor type",
@@ -613,7 +566,6 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       };
     }
     
-    // Set company and registration flags
     vendorData.company = vendorLink.company;
     vendorData.registeredFromLink = true;
     vendorData.linkId = linkId;
@@ -621,7 +573,6 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
     let vendor;
     
     if (vendorId) {
-      // Update existing vendor
       vendor = await Vendor.findByIdAndUpdate(vendorId, vendorData, {
         new: true,
         runValidators: true,
@@ -633,55 +584,41 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
           error: "Vendor not found for update"
         });
       }
-      
-      console.log("Vendor updated successfully:", vendor);
     } else {
-      // Create new vendor
-      // First check if a vendor with this email already exists in the same company
       const existingVendor = await Vendor.findOne({
         email: vendorData.email,
         company: vendorData.company
       });
       
       if (existingVendor) {
-        // If vendor exists with same email, update it instead of creating new one
-        console.log("Vendor with this email already exists, updating existing vendor");
         vendor = await Vendor.findByIdAndUpdate(existingVendor._id, vendorData, {
           new: true,
           runValidators: true,
         });
         
-        // Update the vendor link to mark it as used
         vendorLink.usedBy = vendor._id;
         vendorLink.usedAt = new Date();
         vendorLink.isActive = false;
         await vendorLink.save();
-        
-        console.log("Existing vendor updated successfully:", vendor);
       } else {
-        // Create new vendor
         vendor = new Vendor(vendorData);
         await vendor.save();
         
-        // Update the vendor link to mark it as used
         vendorLink.usedBy = vendor._id;
         vendorLink.usedAt = new Date();
         vendorLink.isActive = false;
         await vendorLink.save();
-        
-        console.log("New vendor registered successfully:", vendor);
       }
     }
     
     res.status(201).json({
       success: true,
       message: vendorId ? "Vendor updated successfully" : "Vendor registered successfully",
-      vendor: vendor // Return the vendor data
+      vendor: vendor
     });
   } catch (error) {
     console.error("Error in processVendorRegistration:", error);
     
-    // Handle duplicate key error specifically
     if (error.code === 11000 && error.keyPattern && error.keyPattern.email) {
       return res.status(409).json({
         success: false,
