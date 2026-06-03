@@ -87,6 +87,45 @@ exports.showAll = async (req, res) => {
   }
 };
 
+// ✅ NEW: Get ALL products for report (no pagination)
+exports.getAllProductsForReport = async (req, res) => {
+  try {
+    const user = req.user;
+    const { q } = req.query;
+
+    let query = { company: user.company || user._id };
+
+    if (q && q.trim() !== "" && q.trim().toLowerCase() !== "null" && q.trim().toLowerCase() !== "undefined") {
+      const searchRegex = new RegExp(q, "i");
+      query.$or = [
+        { productName: { $regex: searchRegex } },
+        { brandName: { $regex: searchRegex } },
+        { printName: { $regex: searchRegex } },
+        { model: { $regex: searchRegex } },
+        { hsnCode: { $regex: searchRegex } },
+        { productCategory: { $regex: searchRegex } },
+      ];
+    }
+
+    const products = await Product.find(query)
+      .populate("createdBy", "name email")
+      .populate("company", "name")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      products,
+      total: products.length,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while fetching products for report: " + error.message,
+    });
+  }
+};
+
 exports.createProduct = async (req, res) => {
   try {
     const user = req.user;
@@ -110,6 +149,7 @@ exports.createProduct = async (req, res) => {
       minQtyLevel,
       discountType,
       discountValue,
+      currentStockQty, // ✅ NEW FIELD
       taxType,
       gstRate,
       gstEffectiveDate,
@@ -137,6 +177,7 @@ exports.createProduct = async (req, res) => {
       minQtyLevel,
       discountType,
       discountValue,
+      currentStockQty: parseFloat(currentStockQty) || 0, // ✅ NEW FIELD
       taxType,
       gstRate,
       gstEffectiveDate,

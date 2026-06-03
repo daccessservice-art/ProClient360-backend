@@ -100,6 +100,12 @@ const productSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Discount value must be a positive number'],
   },
+  // ✅ NEW FIELD: Current Stock Quantity
+  currentStockQty: {
+    type: Number,
+    default: 0,
+    min: [0, 'Current stock quantity must be a non-negative number'],
+  },
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company'
