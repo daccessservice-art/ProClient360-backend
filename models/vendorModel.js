@@ -9,10 +9,8 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Email is required'],
     trim: true,
-    unique: true,
     lowercase: true,
     maxlength: [100, 'Email cannot exceed 100 characters'],
-    match: [/^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/, 'Please fill a valid email address'],
   },
   vendorName: {
     type: String,
@@ -140,7 +138,6 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Remarks cannot exceed 500 characters'],
   },
-  // New fields for tracking vendors registered from links
   registeredFromLink: {
     type: Boolean,
     default: false

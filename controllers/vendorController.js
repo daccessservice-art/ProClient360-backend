@@ -14,39 +14,27 @@ exports.getVendor = async (req, res) => {
   }
 };
 
-// New function to get vendor by name
 exports.getVendorByName = async (req, res) => {
   try {
     const { name } = req.params;
-    const user = req.user;
-    
+
     let query = {
       vendorName: { $regex: new RegExp(name, 'i') }
     };
 
-    // If user is logged in (internal use), scope to their company
     if (req.user) {
       query.company = req.user.company ? req.user.company : req.user._id;
     }
-    
+
     const vendor = await Vendor.findOne(query);
-    
+
     if (!vendor) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Vendor not found" 
-      });
+      return res.status(404).json({ success: false, error: "Vendor not found" });
     }
-    
-    res.status(200).json({ 
-      success: true, 
-      vendor 
-    });
+
+    res.status(200).json({ success: true, vendor });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Error fetching vendor: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error fetching vendor: " + error.message });
   }
 };
 
@@ -146,17 +134,6 @@ exports.createVendor = async (req, res) => {
       manualAddress
     } = req.body;
 
-    const vendor = await Vendor.find({
-      company: user.company ? user.company : user._id,
-      email: email,
-    });
-    if (vendor.length > 0) {
-      return res.status(409).json({ 
-        success: false, 
-        error: "Vendor already exist please use different email Id" 
-      });
-    }
-
     let addressData = billingAddress;
     if (typeOfVendor === 'Import' || typeOfVendor === 'Other') {
       addressData = {
@@ -190,26 +167,15 @@ exports.createVendor = async (req, res) => {
 
     if (newVendor) {
       await newVendor.save();
-      res.status(201).json({
-        success: true,
-        message: "Vendor created successfully",
-      });
+      res.status(201).json({ success: true, message: "Vendor created successfully" });
     } else {
-      res.status(400).json({ 
-        success: false,
-        error: "Invalid vendor data" 
-      });
+      res.status(400).json({ success: false, error: "Invalid vendor data" });
     }
   } catch (error) {
     if (error.name === "ValidationError") {
-      res.status(400).json({ 
-        success: false, 
-        error: error.message 
-      });
+      res.status(400).json({ success: false, error: error.message });
     } else {
-      res.status(500).json({ 
-        error: "Error creating vendor: " + error.message 
-      });
+      res.status(500).json({ error: "Error creating vendor: " + error.message });
     }
   }
 };
@@ -217,34 +183,17 @@ exports.createVendor = async (req, res) => {
 exports.deleteVendor = async (req, res) => {
   try {
     const vendorId = req.params.id;
-    
+
     const vendor = await Vendor.findById(vendorId);
     if (!vendor) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Vendor Not Found!!" 
-      });
+      return res.status(404).json({ success: false, error: "Vendor Not Found!!" });
     }
-    
-    // REMOVED CHECK TO ALLOW DELETION OF LINK VENDORS
-    // if (vendor.registeredFromLink) {
-    //   return res.status(403).json({ 
-    //     success: false, 
-    //     error: "Cannot delete vendors registered through link" 
-    //   });
-    // }
-    
+
     await Vendor.findByIdAndDelete(vendorId);
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Vendor deleted successfully" 
-    });
+    res.status(200).json({ success: true, message: "Vendor deleted successfully" });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Error while deleting vendor: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error while deleting vendor: " + error.message });
   }
 };
 
@@ -256,19 +205,8 @@ exports.updateVendor = async (req, res) => {
     const existingVendor = await Vendor.findById(id);
 
     if (!existingVendor) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Vendor not found" 
-      });
+      return res.status(404).json({ success: false, error: "Vendor not found" });
     }
-    
-    // REMOVED CHECK TO ALLOW UPDATES OF LINK VENDORS
-    // if (existingVendor.registeredFromLink) {
-    //   return res.status(403).json({ 
-    //     success: false, 
-    //     error: "Cannot update vendors registered through link" 
-    //   });
-    // }
 
     let changes = [];
 
@@ -276,9 +214,9 @@ exports.updateVendor = async (req, res) => {
       if (oldValue !== newValue) {
         changes.push({
           vendorId: id,
-          fieldName: fieldName,
-          oldValue: oldValue,
-          newValue: newValue,
+          fieldName,
+          oldValue,
+          newValue,
           changeReason: req.body.changeReason || "Updated via vendor edit",
         });
       }
@@ -291,68 +229,20 @@ exports.updateVendor = async (req, res) => {
     trackChanges("brandsWorkWith", existingVendor.brandsWorkWith, updatedData.brandsWorkWith);
     trackChanges("email", existingVendor.email, updatedData.email);
     trackChanges("GSTNo", existingVendor.GSTNo, updatedData.GSTNo);
-    trackChanges(
-      "vendorContactPersonName1",
-      existingVendor.vendorContactPersonName1,
-      updatedData.vendorContactPersonName1
-    );
-    trackChanges(
-      "phoneNumber1",
-      existingVendor.phoneNumber1,
-      updatedData.phoneNumber1
-    );
-    trackChanges(
-      "vendorContactPersonName2",
-      existingVendor.vendorContactPersonName2,
-      updatedData.vendorContactPersonName2
-    );
-    trackChanges(
-      "phoneNumber2",
-      existingVendor.phoneNumber2,
-      updatedData.phoneNumber2
-    );
-    trackChanges(
-      "customVendorType",
-      existingVendor.customVendorType,
-      updatedData.customVendorType
-    );
-    trackChanges(
-      "remarks",
-      existingVendor.remarks,
-      updatedData.remarks
-    );
-    trackChanges(
-      "manualAddress",
-      existingVendor.manualAddress,
-      updatedData.manualAddress
-    );
+    trackChanges("vendorContactPersonName1", existingVendor.vendorContactPersonName1, updatedData.vendorContactPersonName1);
+    trackChanges("phoneNumber1", existingVendor.phoneNumber1, updatedData.phoneNumber1);
+    trackChanges("vendorContactPersonName2", existingVendor.vendorContactPersonName2, updatedData.vendorContactPersonName2);
+    trackChanges("phoneNumber2", existingVendor.phoneNumber2, updatedData.phoneNumber2);
+    trackChanges("customVendorType", existingVendor.customVendorType, updatedData.customVendorType);
+    trackChanges("remarks", existingVendor.remarks, updatedData.remarks);
+    trackChanges("manualAddress", existingVendor.manualAddress, updatedData.manualAddress);
 
     if (updatedData.typeOfVendor !== 'Import' && updatedData.typeOfVendor !== 'Other' && updatedData.billingAddress) {
-      trackChanges(
-        "billingAddress.add",
-        existingVendor.billingAddress?.add,
-        updatedData.billingAddress.add
-      );
-      trackChanges(
-        "billingAddress.city",
-        existingVendor.billingAddress?.city,
-        updatedData.billingAddress.city
-      );
-      trackChanges(
-        "billingAddress.state",
-        existingVendor.billingAddress?.state,
-        updatedData.billingAddress.state
-      );
-      trackChanges(
-        "billingAddress.country",
-        existingVendor.billingAddress?.country,
-        updatedData.billingAddress.country
-      );
-      trackChanges(
-        "billingAddress.pincode",
-        existingVendor.billingAddress?.pincode,
-        updatedData.billingAddress.pincode
-      );
+      trackChanges("billingAddress.add", existingVendor.billingAddress?.add, updatedData.billingAddress.add);
+      trackChanges("billingAddress.city", existingVendor.billingAddress?.city, updatedData.billingAddress.city);
+      trackChanges("billingAddress.state", existingVendor.billingAddress?.state, updatedData.billingAddress.state);
+      trackChanges("billingAddress.country", existingVendor.billingAddress?.country, updatedData.billingAddress.country);
+      trackChanges("billingAddress.pincode", existingVendor.billingAddress?.pincode, updatedData.billingAddress.pincode);
     }
 
     if (updatedData.typeOfVendor === 'Import' || updatedData.typeOfVendor === 'Other') {
@@ -374,17 +264,10 @@ exports.updateVendor = async (req, res) => {
       await VendorHistory.insertMany(changes);
     }
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Vendor updated successfully", 
-      updatedVendor 
-    });
+    res.status(200).json({ success: true, message: "Vendor updated successfully", updatedVendor });
   } catch (error) {
     console.error(error);
-    res.status(500).json({
-      success: false, 
-      error: "Error updating vendor: " + error.message 
-    });
+    res.status(500).json({ success: false, error: "Error updating vendor: " + error.message });
   }
 };
 
@@ -392,15 +275,12 @@ exports.generateVendorLink = async (req, res) => {
   try {
     const { linkId, linkUrl } = req.body;
     const user = req.user;
-    
+
     const existingLink = await VendorLink.findOne({ linkId });
     if (existingLink) {
-      return res.status(400).json({
-        success: false,
-        error: "Link ID already exists"
-      });
+      return res.status(400).json({ success: false, error: "Link ID already exists" });
     }
-    
+
     const newVendorLink = new VendorLink({
       linkId,
       linkUrl,
@@ -408,51 +288,32 @@ exports.generateVendorLink = async (req, res) => {
       createdBy: user._id,
       isActive: true
     });
-    
+
     await newVendorLink.save();
-    
-    res.status(201).json({
-      success: true,
-      message: "Vendor link generated successfully",
-      linkId
-    });
+
+    res.status(201).json({ success: true, message: "Vendor link generated successfully", linkId });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Error generating vendor link: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error generating vendor link: " + error.message });
   }
 };
 
 exports.getVendorLink = async (req, res) => {
   try {
     const { linkId } = req.params;
-    
+
     const vendorLink = await VendorLink.findOne({ linkId });
-    
+
     if (!vendorLink) {
-      return res.status(404).json({
-        success: false,
-        error: "Invalid link ID"
-      });
+      return res.status(404).json({ success: false, error: "Invalid link ID" });
     }
-    
+
     if (!vendorLink.isActive) {
-      return res.status(404).json({
-        success: false,
-        error: "Link has already been used"
-      });
+      return res.status(404).json({ success: false, error: "Link has already been used" });
     }
-    
-    res.status(200).json({
-      success: true,
-      linkId
-    });
+
+    res.status(200).json({ success: true, linkId });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Error fetching vendor link: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error fetching vendor link: " + error.message });
   }
 };
 
@@ -461,15 +322,10 @@ exports.registerVendorFromLink = async (req, res) => {
     if (req.body instanceof Object && !(req.body instanceof Array)) {
       let linkId = null;
       let vendorId = null;
-      
-      if (req.body.linkId) {
-        linkId = req.body.linkId;
-      }
-      
-      if (req.body.vendorId) {
-        vendorId = req.body.vendorId;
-      }
-      
+
+      if (req.body.linkId) linkId = req.body.linkId;
+      if (req.body.vendorId) vendorId = req.body.vendorId;
+
       if (req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
         const chunks = [];
         req.on('data', chunk => chunks.push(chunk));
@@ -487,66 +343,51 @@ exports.registerVendorFromLink = async (req, res) => {
               }
             }
           });
-          
           linkId = formData.linkId;
           vendorId = formData.vendorId;
           processVendorRegistration(linkId, vendorId, formData, res);
         });
         return;
       }
-      
+
       if (!linkId) {
-        return res.status(400).json({
-          success: false,
-          error: "No linkId provided"
-        });
+        return res.status(400).json({ success: false, error: "No linkId provided" });
       }
-      
+
       processVendorRegistration(linkId, vendorId, req.body, res);
     } else {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid request format"
-      });
+      return res.status(400).json({ success: false, error: "Invalid request format" });
     }
   } catch (error) {
     console.error("Error in registerVendorFromLink:", error);
-    res.status(500).json({
-      success: false,
-      error: "Error registering vendor: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error registering vendor: " + error.message });
   }
 };
 
 async function processVendorRegistration(linkId, vendorId, formData, res) {
   try {
     const vendorLink = await VendorLink.findOne({ linkId, isActive: true });
-    
+
     if (!vendorLink) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid or expired link"
-      });
+      return res.status(400).json({ success: false, error: "Invalid or expired link" });
     }
-    
+
     const vendorData = {};
-    
+
     const vendorFields = [
-      'vendorName', 'email', 'typeOfVendor', 'GSTNo', 'brandName', 'modelName', 
-      'price', 'websiteURL', 'linkedinURL', 'twitterProfile', 'vendorContactPersonName1', 
-      'phoneNumber1', 'vendorContactPersonName2', 'phoneNumber2', 'materialCategory', 
+      'vendorName', 'email', 'typeOfVendor', 'GSTNo', 'brandName', 'modelName',
+      'price', 'websiteURL', 'linkedinURL', 'twitterProfile', 'vendorContactPersonName1',
+      'phoneNumber1', 'vendorContactPersonName2', 'phoneNumber2', 'materialCategory',
       'vendorRating', 'brandsWorkWith', 'customVendorType', 'remarks', 'manualAddress'
     ];
-    
+
     vendorFields.forEach(field => {
-      if (formData[field]) {
-        vendorData[field] = formData[field];
-      }
+      if (formData[field]) vendorData[field] = formData[field];
     });
-    
-    if (formData['billingAddress.add'] || formData['billingAddress.city'] || 
-        formData['billingAddress.state'] || formData['billingAddress.country'] || 
-        formData['billingAddress.pincode']) {
+
+    if (formData['billingAddress.add'] || formData['billingAddress.city'] ||
+      formData['billingAddress.state'] || formData['billingAddress.country'] ||
+      formData['billingAddress.pincode']) {
       vendorData.billingAddress = {
         add: formData['billingAddress.add'] || "",
         city: formData['billingAddress.city'] || "",
@@ -555,7 +396,7 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
         pincode: formData['billingAddress.pincode'] || 0
       };
     }
-    
+
     if (vendorData.typeOfVendor === 'Import' || vendorData.typeOfVendor === 'Other') {
       vendorData.billingAddress = {
         add: "Not applicable for this vendor type",
@@ -565,70 +406,41 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
         pincode: 0
       };
     }
-    
+
     vendorData.company = vendorLink.company;
     vendorData.registeredFromLink = true;
     vendorData.linkId = linkId;
-    
+
     let vendor;
-    
+
     if (vendorId) {
-      vendor = await Vendor.findByIdAndUpdate(vendorId, vendorData, {
-        new: true,
-        runValidators: true,
-      });
-      
+      vendor = await Vendor.findByIdAndUpdate(vendorId, vendorData, { new: true, runValidators: true });
       if (!vendor) {
-        return res.status(404).json({
-          success: false,
-          error: "Vendor not found for update"
-        });
+        return res.status(404).json({ success: false, error: "Vendor not found for update" });
       }
     } else {
-      const existingVendor = await Vendor.findOne({
-        email: vendorData.email,
-        company: vendorData.company
-      });
-      
+      const existingVendor = await Vendor.findOne({ email: vendorData.email, company: vendorData.company });
+
       if (existingVendor) {
-        vendor = await Vendor.findByIdAndUpdate(existingVendor._id, vendorData, {
-          new: true,
-          runValidators: true,
-        });
-        
-        vendorLink.usedBy = vendor._id;
-        vendorLink.usedAt = new Date();
-        vendorLink.isActive = false;
-        await vendorLink.save();
+        vendor = await Vendor.findByIdAndUpdate(existingVendor._id, vendorData, { new: true, runValidators: true });
       } else {
         vendor = new Vendor(vendorData);
         await vendor.save();
-        
-        vendorLink.usedBy = vendor._id;
-        vendorLink.usedAt = new Date();
-        vendorLink.isActive = false;
-        await vendorLink.save();
       }
+
+      vendorLink.usedBy = vendor._id;
+      vendorLink.usedAt = new Date();
+      vendorLink.isActive = false;
+      await vendorLink.save();
     }
-    
+
     res.status(201).json({
       success: true,
       message: vendorId ? "Vendor updated successfully" : "Vendor registered successfully",
-      vendor: vendor
+      vendor
     });
   } catch (error) {
     console.error("Error in processVendorRegistration:", error);
-    
-    if (error.code === 11000 && error.keyPattern && error.keyPattern.email) {
-      return res.status(409).json({
-        success: false,
-        error: "A vendor with this email already exists. Please use a different email address."
-      });
-    }
-    
-    res.status(500).json({
-      success: false,
-      error: "Error registering vendor: " + error.message
-    });
+    res.status(500).json({ success: false, error: "Error registering vendor: " + error.message });
   }
 }
