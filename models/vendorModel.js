@@ -11,6 +11,7 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     lowercase: true,
     maxlength: [100, 'Email cannot exceed 100 characters'],
+    // ❌ REMOVED: unique: true  ← this was causing the E11000 error
   },
   vendorName: {
     type: String,
@@ -45,7 +46,7 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [200, 'Brands work with cannot exceed 200 characters'],
-    required: function() {
+    required: function () {
       return this.typeOfVendor === 'B2B Material';
     },
   },
@@ -53,35 +54,35 @@ const vendorSchema = new mongoose.Schema({
     add: {
       type: String,
       maxlength: [500, 'Address cannot exceed 500 characters'],
-      required: function() {
+      required: function () {
         return this.typeOfVendor !== 'Import' && this.typeOfVendor !== 'Other';
       },
     },
     city: {
       type: String,
       maxLength: [50, 'City cannot exceed 50 characters'],
-      required: function() {
+      required: function () {
         return this.typeOfVendor !== 'Import' && this.typeOfVendor !== 'Other';
       },
     },
     state: {
       type: String,
       maxLength: [50, 'State cannot exceed 50 characters'],
-      required: function() {
+      required: function () {
         return this.typeOfVendor !== 'Import' && this.typeOfVendor !== 'Other';
       },
     },
     country: {
       type: String,
       maxLength: [50, 'Country cannot exceed 50 characters'],
-      required: function() {
+      required: function () {
         return this.typeOfVendor !== 'Import' && this.typeOfVendor !== 'Other';
       },
     },
     pincode: {
       type: Number,
       maxLength: [6, 'Pincode cannot exceed 6 digits'],
-      required: function() {
+      required: function () {
         return this.typeOfVendor !== 'Import' && this.typeOfVendor !== 'Other';
       },
     },
@@ -90,13 +91,13 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [500, 'Manual address cannot exceed 500 characters'],
-    required: function() {
+    required: function () {
       return this.typeOfVendor === 'Import';
     },
   },
   company: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Company'
+    ref: 'Company',
   },
   GSTNo: {
     type: String,
@@ -106,7 +107,7 @@ const vendorSchema = new mongoose.Schema({
   vendorContactPersonName1: {
     type: String,
     required: [true, 'Vendor Contact Person Name is required'],
-    minlength: [2, 'Vendor Contact Person Name must be at least 3 characters long'],
+    minlength: [2, 'Vendor Contact Person Name must be at least 2 characters long'],
     maxlength: [50, 'Vendor Contact Person Name cannot exceed 50 characters'],
     trim: true,
   },
@@ -129,7 +130,7 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [100, 'Custom vendor type cannot exceed 100 characters'],
-    required: function() {
+    required: function () {
       return this.typeOfVendor === 'Other';
     },
   },
@@ -140,14 +141,19 @@ const vendorSchema = new mongoose.Schema({
   },
   registeredFromLink: {
     type: Boolean,
-    default: false
+    default: false,
   },
   linkId: {
-    type: String
-  }
+    type: String,
+  },
 }, {
   timestamps: true,
 });
+
+// ✅ Compound unique index: same email is allowed across different companies,
+//    but duplicate email within the same company is blocked.
+//    This replaces the old standalone email_1 unique index.
+vendorSchema.index({ email: 1, company: 1 }, { unique: true });
 
 const Vendor = mongoose.model('Vendor', vendorSchema);
 

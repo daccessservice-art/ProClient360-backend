@@ -113,6 +113,15 @@ exports.showAll = async (req, res) => {
   }
 };
 
+// helper: if email is "na" or has no "@", make it unique
+const normalizeEmail = (email) => {
+  const e = email.toLowerCase().trim();
+  if (e === 'na' || !e.includes('@')) {
+    return `na_${Date.now()}_${Math.random().toString(36).slice(2, 7)}@vendor.local`;
+  }
+  return e;
+};
+
 exports.createVendor = async (req, res) => {
   try {
     const user = req.user;
@@ -152,7 +161,7 @@ exports.createVendor = async (req, res) => {
       vendorRating,
       brandsWorkWith: typeOfVendor === 'B2B Material' ? brandsWorkWith : "",
       company: user.company ? user.company : user._id,
-      email: email.toLowerCase().trim(),
+      email: normalizeEmail(email),
       createdBy: user._id,
       vendorContactPersonName1,
       phoneNumber1,
@@ -201,6 +210,11 @@ exports.updateVendor = async (req, res) => {
   try {
     const { id } = req.params;
     const updatedData = req.body;
+
+    // normalize email on update too
+    if (updatedData.email) {
+      updatedData.email = normalizeEmail(updatedData.email);
+    }
 
     const existingVendor = await Vendor.findById(id);
 
@@ -384,6 +398,11 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
     vendorFields.forEach(field => {
       if (formData[field]) vendorData[field] = formData[field];
     });
+
+    // normalize email in link registration too
+    if (vendorData.email) {
+      vendorData.email = normalizeEmail(vendorData.email);
+    }
 
     if (formData['billingAddress.add'] || formData['billingAddress.city'] ||
       formData['billingAddress.state'] || formData['billingAddress.country'] ||
