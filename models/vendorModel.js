@@ -157,4 +157,4 @@ vendorSchema.index({ email: 1, company: 1 }, { unique: true });
 
 const Vendor = mongoose.model('Vendor', vendorSchema);
 
-module.exports = Vendor;
+module.exports = Vendor; 

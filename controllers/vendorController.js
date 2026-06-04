@@ -111,7 +111,7 @@ exports.showAll = async (req, res) => {
       error: "Error while fetching vendors: " + error.message,
     });
   }
-};
+}; 
 
 // helper: if email is "na" or has no "@", make it unique
 const normalizeEmail = (email) => {
