@@ -11,7 +11,6 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     lowercase: true,
     maxlength: [100, 'Email cannot exceed 100 characters'],
-    // ❌ REMOVED: unique: true  ← this was causing the E11000 error
   },
   vendorName: {
     type: String,
@@ -24,8 +23,16 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Material category is required'],
     enum: {
-      values: ['Raw Material', 'Finished Goods', 'Scrap Material'],
-      message: 'Material category must be one of: Raw Material, Finished Goods, Scrap Material',
+      values: ['Raw Material', 'Finished Goods', 'Scrap Material', 'Service', 'Logistics', 'Other'],
+      message: 'Material category must be one of: Raw Material, Finished Goods, Scrap Material, Service, Logistics, Other',
+    },
+  },
+  customMaterialCategory: {
+    type: String,
+    trim: true,
+    maxlength: [100, 'Custom material category cannot exceed 100 characters'],
+    required: function () {
+      return this.materialCategory === 'Other';
     },
   },
   typeOfVendor: {
@@ -150,11 +157,10 @@ const vendorSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// ✅ Compound unique index: same email is allowed across different companies,
-//    but duplicate email within the same company is blocked.
-//    This replaces the old standalone email_1 unique index.
+// Compound unique index: same email is allowed across different companies,
+// but duplicate email within the same company is blocked.
 vendorSchema.index({ email: 1, company: 1 }, { unique: true });
 
 const Vendor = mongoose.model('Vendor', vendorSchema);
 
-module.exports = Vendor; 
+module.exports = Vendor;

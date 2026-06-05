@@ -68,6 +68,7 @@ exports.showAll = async (req, res) => {
           { phoneNumber1: { $regex: searchRegex } },
           { typeOfVendor: { $regex: searchRegex } },
           { materialCategory: { $regex: searchRegex } },
+          { customMaterialCategory: { $regex: searchRegex } },
         ],
       };
     } else {
@@ -129,6 +130,7 @@ exports.createVendor = async (req, res) => {
       vendorName,
       typeOfVendor,
       materialCategory,
+      customMaterialCategory,
       vendorRating,
       brandsWorkWith,
       billingAddress,
@@ -158,6 +160,7 @@ exports.createVendor = async (req, res) => {
       vendorName,
       typeOfVendor,
       materialCategory,
+      customMaterialCategory: materialCategory === 'Other' ? customMaterialCategory : "",
       vendorRating,
       brandsWorkWith: typeOfVendor === 'B2B Material' ? brandsWorkWith : "",
       company: user.company ? user.company : user._id,
@@ -216,6 +219,11 @@ exports.updateVendor = async (req, res) => {
       updatedData.email = normalizeEmail(updatedData.email);
     }
 
+    // Handle customMaterialCategory: clear it if materialCategory is not "Other"
+    if (updatedData.materialCategory && updatedData.materialCategory !== 'Other') {
+      updatedData.customMaterialCategory = "";
+    }
+
     const existingVendor = await Vendor.findById(id);
 
     if (!existingVendor) {
@@ -239,6 +247,7 @@ exports.updateVendor = async (req, res) => {
     trackChanges("vendorName", existingVendor.vendorName, updatedData.vendorName);
     trackChanges("typeOfVendor", existingVendor.typeOfVendor, updatedData.typeOfVendor);
     trackChanges("materialCategory", existingVendor.materialCategory, updatedData.materialCategory);
+    trackChanges("customMaterialCategory", existingVendor.customMaterialCategory, updatedData.customMaterialCategory);
     trackChanges("vendorRating", existingVendor.vendorRating, updatedData.vendorRating);
     trackChanges("brandsWorkWith", existingVendor.brandsWorkWith, updatedData.brandsWorkWith);
     trackChanges("email", existingVendor.email, updatedData.email);
@@ -392,7 +401,8 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       'vendorName', 'email', 'typeOfVendor', 'GSTNo', 'brandName', 'modelName',
       'price', 'websiteURL', 'linkedinURL', 'twitterProfile', 'vendorContactPersonName1',
       'phoneNumber1', 'vendorContactPersonName2', 'phoneNumber2', 'materialCategory',
-      'vendorRating', 'brandsWorkWith', 'customVendorType', 'remarks', 'manualAddress'
+      'customMaterialCategory', 'vendorRating', 'brandsWorkWith', 'customVendorType',
+      'remarks', 'manualAddress'
     ];
 
     vendorFields.forEach(field => {
@@ -402,6 +412,11 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
     // normalize email in link registration too
     if (vendorData.email) {
       vendorData.email = normalizeEmail(vendorData.email);
+    }
+
+    // Handle customMaterialCategory
+    if (vendorData.materialCategory && vendorData.materialCategory !== 'Other') {
+      vendorData.customMaterialCategory = "";
     }
 
     if (formData['billingAddress.add'] || formData['billingAddress.city'] ||
