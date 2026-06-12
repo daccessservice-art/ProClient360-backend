@@ -4,7 +4,7 @@ const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
 exports.getPurchaseOrder = async (req, res) => {
   try {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
-      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor gstin')
+      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
       .populate('company', 'name');
@@ -80,7 +80,7 @@ exports.showAll = async (req, res) => {
     const purchaseOrders = await PurchaseOrder.find(query)
       .skip(skip)
       .limit(limit)
-      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor gstin')
+      .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
       .populate('company', 'name')

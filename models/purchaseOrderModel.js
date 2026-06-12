@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 const POCounter = require('./counterModel');
 
 const purchaseOrderItemSchema = new mongoose.Schema({
+  productName: {
+    type: String,
+    trim: true,
+    maxlength: [200, 'Product name cannot exceed 200 characters'],
+    default: '',
+  },
   brandName: {
     type: String,
     trim: true,
@@ -11,6 +17,12 @@ const purchaseOrderItemSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: [200, 'Model number cannot exceed 200 characters'],
+  },
+  hsnSac: {
+    type: String,
+    trim: true,
+    maxlength: [20, 'HSN/SAC cannot exceed 20 characters'],
+    default: '',
   },
   description: {
     type: String,

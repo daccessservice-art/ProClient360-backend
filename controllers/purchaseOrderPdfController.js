@@ -282,7 +282,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     console.log(`[PDF] Generating PO for company: ${companyKey}, logo available: ${!!LOGO_BUFFER}${LOGO_BUFFER ? ` (${LOGO_BUFFER.length} bytes)` : ''}`);
 
     const po = await PurchaseOrder.findById(id)
-      .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor gstin phoneNumber1 email')
+      .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor GSTNo phoneNumber1 email')
       .populate('project',   'name')
       .populate('createdBy', 'name email')
       .populate('company',   'name')
@@ -419,10 +419,10 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
          .text(vendorAddress, M + 4, vy, { width: leftW - 8 });
       vy += 20;
     }
-    if (vendor.gstin) {
+    if (vendor.GSTNo) {
       doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
-         .text(`GSTIN/UIN: ${vendor.gstin}`, M + 4, vy, { width: leftW - 8 });
-    }
+     .text(`GSTIN/UIN: ${vendor.GSTNo}`, M + 4, vy, { width: leftW - 8 });
+     }
 
     strokeRect(doc, rightX, y, rightW, boxH);
     const invoiceFields = [
@@ -488,7 +488,11 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
         const netVal   = lineAmt + taxAmt;
         const gstText  = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
         const discText = disc > 0 ? `${disc}%` : '-';
-        const itemName = [item.brandName, item.description || item.modelNo].filter(Boolean).join('  ');
+
+        // ── Use productName as primary item label; fall back to brand/model/description ──
+        const itemName = item.productName
+          ? item.productName
+          : [item.brandName, item.description || item.modelNo].filter(Boolean).join('  ');
 
         const rowData = [
           { text: String(i + 1),                    align: 'center' },
