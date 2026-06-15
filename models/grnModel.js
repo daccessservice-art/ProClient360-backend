@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-// Counter schema embedded in the GRN model file
+// Counter schema
 const counterSchema = new mongoose.Schema({
   company: {
     type: mongoose.Schema.Types.ObjectId,
@@ -19,7 +19,6 @@ const counterSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index to ensure uniqueness per company per financial year
 counterSchema.index({ company: 1, financialYear: 1 }, { unique: true });
 
 const Counter = mongoose.model('Counter', counterSchema);
@@ -27,12 +26,10 @@ const Counter = mongoose.model('Counter', counterSchema);
 const grnItemSchema = new mongoose.Schema({
   brandName: {
     type: String,
-    required: [true, 'Brand name is required'],
     trim: true,
   },
   modelNo: {
     type: String,
-    required: [true, 'Model number is required'],
     trim: true,
   },
   description: {
@@ -41,22 +38,18 @@ const grnItemSchema = new mongoose.Schema({
   },
   unit: {
     type: String,
-    required: [true, 'Unit is required'],
     trim: true,
   },
   orderedQuantity: {
     type: Number,
-    required: [true, 'Ordered quantity is required'],
     min: [0, 'Ordered quantity cannot be negative'],
   },
   receivedQuantity: {
     type: Number,
-    required: [true, 'Received quantity is required'],
     min: [0, 'Received quantity cannot be negative'],
   },
   price: {
     type: Number,
-    required: [true, 'Price is required'],
     min: [0, 'Price cannot be negative'],
   },
   discountPercent: {
@@ -73,7 +66,6 @@ const grnItemSchema = new mongoose.Schema({
   },
   netValue: {
     type: Number,
-    required: [true, 'Net value is required'],
   },
 });
 
@@ -81,12 +73,10 @@ const grnSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Employee',
-    required: true,
   },
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
-    required: true,
   },
   grnNumber: {
     type: String,
@@ -95,11 +85,9 @@ const grnSchema = new mongoose.Schema({
   },
   grnDate: {
     type: Date,
-    required: [true, 'GRN date is required'],
   },
   choice: {
     type: String,
-    required: [true, 'Choice is required'],
     enum: {
       values: ['Against PO', 'Direct Material'],
       message: 'Choice must be either Against PO or Direct Material',
@@ -108,18 +96,13 @@ const grnSchema = new mongoose.Schema({
   purchaseOrder: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'PurchaseOrder',
-    required: function() {
-      return this.choice === 'Against PO';
-    },
   },
   vendor: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Vendor',
-    required: [true, 'Vendor is required'],
   },
   transactionType: {
     type: String,
-    required: [true, 'Transaction type is required'],
     enum: {
       values: ['B2B', 'SEZ', 'Import', 'Asset'],
       message: 'Transaction type must be one of: B2B, SEZ, Import, Asset',
@@ -127,7 +110,6 @@ const grnSchema = new mongoose.Schema({
   },
   purchaseType: {
     type: String,
-    required: [true, 'Purchase type is required'],
     enum: {
       values: ['Project Purchase', 'Stock'],
       message: 'Purchase type must be either Project Purchase or Stock',
@@ -136,17 +118,11 @@ const grnSchema = new mongoose.Schema({
   project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
-    required: function() {
-      return this.purchaseType === 'Project Purchase';
-    },
   },
   warehouseLocation: {
     type: String,
     trim: true,
     maxlength: [200, 'Warehouse location cannot exceed 200 characters'],
-    required: function() {
-      return this.purchaseType === 'Stock';
-    },
   },
   deliveryAddress: {
     type: String,
@@ -175,19 +151,15 @@ const grnSchema = new mongoose.Schema({
   attachments: [{
     name: {
       type: String,
-      required: true
     },
     type: {
       type: String,
-      required: true
     },
     size: {
       type: Number,
-      required: true
     },
     path: {
       type: String,
-      required: true
     },
     uploadedAt: {
       type: Date,
@@ -208,7 +180,7 @@ function getFinancialYear(date) {
   const year = date.getFullYear();
   const month = date.getMonth();
   
-  if (month >= 3) { // April onwards
+  if (month >= 3) {
     return `${year}-${(year + 1).toString().slice(-2)}`;
   } else {
     return `${year - 1}-${year.toString().slice(-2)}`;
@@ -219,7 +191,6 @@ function getFinancialYear(date) {
 grnSchema.statics.generateGRNNumber = async function(companyId, grnDate) {
   const financialYear = getFinancialYear(grnDate);
   
-  // Use findOneAndUpdate with atomic operations
   const counter = await Counter.findOneAndUpdate(
     { company: companyId, financialYear },
     { $inc: { sequence: 1 } },
@@ -234,7 +205,6 @@ grnSchema.statics.generateGRNNumber = async function(companyId, grnDate) {
   return `GRN/${financialYear}/${formattedSerial}`;
 };
 
-// Export both models
 const GRN = mongoose.model('GRN', grnSchema);
 
 module.exports = { GRN, Counter };
