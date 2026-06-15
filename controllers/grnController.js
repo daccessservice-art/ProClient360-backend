@@ -52,7 +52,7 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
 
     const currentCounter = await Counter.findOne({ company: companyId, financialYear });
     if (!currentCounter || currentCounter.sequence <= lastSequence) {
-      console.log(`Syncing counter from ${currentCounter?.sequence || 'N/A'} to ${lastSequence} (highest existing GRN: ${lastGRN.grnNumber})`);
+      console.log(`Syncing counter from ${currentCounter?.sequence || 'N/A'} to ${lastSequence}`);
       await Counter.findOneAndUpdate(
         { company: companyId, financialYear: financialYear },
         { $set: { sequence: lastSequence } },
@@ -65,10 +65,7 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
   const counter = await Counter.findOneAndUpdate(
     { company: companyId, financialYear: financialYear },
     { $inc: { sequence: 1 } },
-    {
-      new: true,
-      upsert: true,
-    }
+    { new: true, upsert: true }
   );
 
   const formattedSerial = String(counter.sequence).padStart(3, '0');
@@ -78,36 +75,95 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
   return grnNumber;
 }
 
+// ─── Helper: update PO received quantities (NO validation) ─────────────────
+async function updatePOReceivedQuantity(purchaseOrderId, items) {
+  if (!purchaseOrderId) return;
+  try {
+    const po = await PurchaseOrder.findById(purchaseOrderId);
+    if (!po) return;
+
+    for (let grnItem of items) {
+      const poItem = po.items.find(
+        i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
+      );
+      if (poItem) {
+        if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
+        poItem.receivedQuantity += (parseFloat(grnItem.receivedQuantity) || 0);
+      }
+    }
+
+    // Update PO status
+    let allReceived = true;
+    let partiallyReceived = false;
+    for (let item of po.items) {
+      const received = item.receivedQuantity || 0;
+      if (received < item.quantity) {
+        allReceived = false;
+        if (received > 0) partiallyReceived = true;
+      }
+    }
+    if (allReceived) po.status = 'Received';
+    else if (partiallyReceived) po.status = 'Partially Received';
+    else po.status = 'Pending';
+    await po.save();
+  } catch (err) {
+    console.error('Error updating PO received quantity:', err.message);
+  }
+}
+
+// ─── Helper: reverse PO received quantities ────────────────────────────────
+async function reversePOQuantities(grn) {
+  if (!grn || grn.choice !== 'Against PO' || !grn.purchaseOrder) return;
+  try {
+    const po = await PurchaseOrder.findById(grn.purchaseOrder);
+    if (!po) return;
+
+    for (const grnItem of grn.items) {
+      const poItem = po.items.find(
+        i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
+      );
+      if (poItem && poItem.receivedQuantity) {
+        poItem.receivedQuantity -= (parseFloat(grnItem.receivedQuantity) || 0);
+        if (poItem.receivedQuantity < 0) poItem.receivedQuantity = 0;
+      }
+    }
+
+    let allReceived = true;
+    let partiallyReceived = false;
+    for (let item of po.items) {
+      const received = item.receivedQuantity || 0;
+      if (received < item.quantity) {
+        allReceived = false;
+        if (received > 0) partiallyReceived = true;
+      }
+    }
+    if (allReceived) po.status = 'Received';
+    else if (partiallyReceived) po.status = 'Partially Received';
+    else po.status = 'Pending';
+    await po.save();
+  } catch (err) {
+    console.error('Error reversing PO quantities:', err.message);
+  }
+}
+
 // ─── Helper: update Product stock after GRN ───────────────────────────────────
 async function updateProductStockOnGRN(items, companyId) {
   for (const item of items) {
     if (!item.brandName || !item.modelNo || !item.receivedQuantity) continue;
-
     const received = parseFloat(item.receivedQuantity) || 0;
     if (received <= 0) continue;
 
     try {
       const updated = await Product.findOneAndUpdate(
-        {
-          company: companyId,
-          brandName: item.brandName,
-          model: item.modelNo,
-        },
+        { company: companyId, brandName: item.brandName, model: item.modelNo },
         { $inc: { currentStockQty: received } },
         { new: true }
       );
-
       if (updated) {
-        console.log(
-          `Stock updated: ${item.brandName} / ${item.modelNo} -> +${received} -> total: ${updated.currentStockQty}`
-        );
-      } else {
-        console.warn(
-          `No product found for brandName="${item.brandName}" model="${item.modelNo}" company="${companyId}"`
-        );
+        console.log(`Stock updated: ${item.brandName} / ${item.modelNo} -> +${received}`);
       }
     } catch (err) {
-      console.error(`Error updating stock for ${item.brandName} / ${item.modelNo}:`, err.message);
+      console.error(`Error updating stock:`, err.message);
     }
   }
 }
@@ -121,65 +177,16 @@ async function reverseProductStockOnGRN(oldItems, companyId) {
 
     try {
       const updated = await Product.findOneAndUpdate(
-        {
-          company: companyId,
-          brandName: item.brandName,
-          model: item.modelNo,
-        },
+        { company: companyId, brandName: item.brandName, model: item.modelNo },
         { $inc: { currentStockQty: -received } },
         { new: true }
       );
-
       if (updated) {
-        console.log(
-          `Stock reversed: ${item.brandName} / ${item.modelNo} -> -${received} -> total: ${updated.currentStockQty}`
-        );
+        console.log(`Stock reversed: ${item.brandName} / ${item.modelNo} -> -${received}`);
       }
     } catch (err) {
-      console.error(`Error reversing stock for ${item.brandName} / ${item.modelNo}:`, err.message);
+      console.error(`Error reversing stock:`, err.message);
     }
-  }
-}
-
-// ─── Helper: reverse PO received quantities on GRN delete/update ──────────
-async function reversePOQuantities(grn) {
-  if (!grn || grn.choice !== 'Against PO' || !grn.purchaseOrder) return;
-
-  try {
-    const po = await PurchaseOrder.findById(grn.purchaseOrder);
-    if (!po) {
-      console.warn(`PO ${grn.purchaseOrder} not found for reversal`);
-      return;
-    }
-
-    for (const grnItem of grn.items) {
-      const poItem = po.items.find(
-        i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
-      );
-      if (poItem && poItem.receivedQuantity) {
-        poItem.receivedQuantity -= (parseFloat(grnItem.receivedQuantity) || 0);
-        if (poItem.receivedQuantity < 0) poItem.receivedQuantity = 0;
-      }
-    }
-
-    // Recalculate PO status
-    let allReceived = true;
-    let partiallyReceived = false;
-    for (let item of po.items) {
-      const received = item.receivedQuantity || 0;
-      if (received < item.quantity) {
-        allReceived = false;
-        if (received > 0) partiallyReceived = true;
-      }
-    }
-    if (allReceived) po.status = 'Received';
-    else if (partiallyReceived) po.status = 'Partially Received';
-    else po.status = 'Pending';
-
-    await po.save();
-    console.log(`PO ${po.orderNumber} quantities reversed`);
-  } catch (err) {
-    console.error(`Error reversing PO quantities:`, err.message);
   }
 }
 
@@ -297,7 +304,7 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ─── CREATE GRN ───────────────────────────────────────────────────────────────
+// ─── CREATE GRN (NO validation block - always creates) ─────────────────────
 exports.createGRN = async (req, res) => {
   try {
     const user = req.user;
@@ -307,40 +314,6 @@ exports.createGRN = async (req, res) => {
     const grnNumber = await generateUniqueGRNNumber(companyId, new Date(grnData.grnDate));
     console.log("Generated GRN number:", grnNumber);
 
-    if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
-      const po = await PurchaseOrder.findById(grnData.purchaseOrder);
-      if (!po) return res.status(404).json({ success: false, error: "Purchase order not found" });
-
-      for (let grnItem of grnData.items) {
-        const poItem = po.items.find(
-          i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
-        );
-        if (poItem) {
-          if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
-          poItem.receivedQuantity += grnItem.receivedQuantity;
-          if (poItem.receivedQuantity > poItem.quantity) {
-            return res.status(400).json({
-              success: false,
-              error: `Received quantity for ${poItem.brandName} - ${poItem.modelNo} exceeds ordered quantity`
-            });
-          }
-        }
-      }
-
-      let allReceived = true;
-      let partiallyReceived = false;
-      for (let item of po.items) {
-        const received = item.receivedQuantity || 0;
-        if (received < item.quantity) {
-          allReceived = false;
-          if (received > 0) partiallyReceived = true;
-        }
-      }
-      if (allReceived) po.status = 'Received';
-      else if (partiallyReceived) po.status = 'Partially Received';
-      await po.save();
-    }
-
     const newGRN = new GRN({
       ...grnData,
       grnNumber,
@@ -349,6 +322,12 @@ exports.createGRN = async (req, res) => {
     });
     await newGRN.save();
 
+    // Update PO received quantities (no validation - just updates)
+    if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
+      await updatePOReceivedQuantity(grnData.purchaseOrder, grnData.items);
+    }
+
+    // Update product stock
     await updateProductStockOnGRN(grnData.items, companyId);
 
     res.status(201).json({
@@ -359,7 +338,7 @@ exports.createGRN = async (req, res) => {
   } catch (error) {
     console.error("Error in createGRN:", error);
     if (error.code === 11000) {
-      return res.status(400).json({ success: false, error: "Duplicate GRN number generated. Please try again." });
+      return res.status(400).json({ success: false, error: "Duplicate GRN number. Please try again." });
     } else if (error.name === "ValidationError") {
       return res.status(400).json({ success: false, error: error.message });
     }
@@ -367,7 +346,7 @@ exports.createGRN = async (req, res) => {
   }
 };
 
-// ─── CREATE GRN WITH DOCUMENT ─────────────────────────────────────────────────
+// ─── CREATE GRN WITH DOCUMENT (NO validation block) ────────────────────────
 exports.createGRNWithDocument = async (req, res) => {
   try {
     const dir = 'uploads/grn';
@@ -389,40 +368,6 @@ exports.createGRNWithDocument = async (req, res) => {
       }];
     }
 
-    if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
-      const po = await PurchaseOrder.findById(grnData.purchaseOrder);
-      if (!po) return res.status(404).json({ success: false, error: "Purchase order not found" });
-
-      for (let grnItem of grnData.items) {
-        const poItem = po.items.find(
-          i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
-        );
-        if (poItem) {
-          if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
-          poItem.receivedQuantity += grnItem.receivedQuantity;
-          if (poItem.receivedQuantity > poItem.quantity) {
-            return res.status(400).json({
-              success: false,
-              error: `Received quantity for ${poItem.brandName} - ${poItem.modelNo} exceeds ordered quantity`
-            });
-          }
-        }
-      }
-
-      let allReceived = true;
-      let partiallyReceived = false;
-      for (let item of po.items) {
-        const received = item.receivedQuantity || 0;
-        if (received < item.quantity) {
-          allReceived = false;
-          if (received > 0) partiallyReceived = true;
-        }
-      }
-      if (allReceived) po.status = 'Received';
-      else if (partiallyReceived) po.status = 'Partially Received';
-      await po.save();
-    }
-
     const newGRN = new GRN({
       ...grnData,
       grnNumber,
@@ -431,6 +376,12 @@ exports.createGRNWithDocument = async (req, res) => {
     });
     await newGRN.save();
 
+    // Update PO received quantities (no validation - just updates)
+    if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
+      await updatePOReceivedQuantity(grnData.purchaseOrder, grnData.items);
+    }
+
+    // Update product stock
     await updateProductStockOnGRN(grnData.items, companyId);
 
     res.status(201).json({
@@ -441,7 +392,7 @@ exports.createGRNWithDocument = async (req, res) => {
   } catch (error) {
     console.error("Error in createGRNWithDocument:", error);
     if (error.code === 11000) {
-      return res.status(400).json({ success: false, error: "Duplicate GRN number generated. Please try again." });
+      return res.status(400).json({ success: false, error: "Duplicate GRN number. Please try again." });
     } else if (error.name === "ValidationError") {
       return res.status(400).json({ success: false, error: error.message });
     }
@@ -449,7 +400,7 @@ exports.createGRNWithDocument = async (req, res) => {
   }
 };
 
-// ─── DELETE GRN (FIXED - reverses PO + stock) ────────────────────────────────
+// ─── DELETE GRN (reverses PO + stock) ─────────────────────────────────────
 exports.deleteGRN = async (req, res) => {
   try {
     const grnId = req.params.id;
@@ -459,13 +410,8 @@ exports.deleteGRN = async (req, res) => {
 
     const companyId = grn.company;
 
-    // Reverse PO received quantities
     await reversePOQuantities(grn);
-
-    // Reverse product stock
     await reverseProductStockOnGRN(grn.items, companyId);
-
-    // Now delete the GRN
     await GRN.findByIdAndDelete(grnId);
 
     res.status(200).json({ success: true, message: "GRN deleted successfully" });
@@ -475,7 +421,7 @@ exports.deleteGRN = async (req, res) => {
   }
 };
 
-// ─── UPDATE GRN (FIXED - reverses old PO + stock, applies new) ───────────────
+// ─── UPDATE GRN (reverses old, applies new - NO validation block) ──────────
 exports.updateGRN = async (req, res) => {
   try {
     const { id } = req.params;
@@ -486,55 +432,19 @@ exports.updateGRN = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // Step 1: Reverse old PO quantities
+    // Reverse old
     await reversePOQuantities(existingGRN);
-
-    // Step 2: Reverse old product stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
-    // Step 3: Update the GRN document
+    // Update
     const updatedGRN = await GRN.findByIdAndUpdate(id, updatedData, { new: true, runValidators: true });
 
-    // Step 4: Apply new PO quantities with validation
+    // Apply new PO quantities (no validation)
     if (updatedGRN.choice === 'Against PO' && updatedGRN.purchaseOrder) {
-      const po = await PurchaseOrder.findById(updatedGRN.purchaseOrder);
-      if (po) {
-        for (let grnItem of updatedGRN.items) {
-          const poItem = po.items.find(
-            i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
-          );
-          if (poItem) {
-            if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
-            poItem.receivedQuantity += grnItem.receivedQuantity;
-            if (poItem.receivedQuantity > poItem.quantity) {
-              // Rollback this item
-              poItem.receivedQuantity -= grnItem.receivedQuantity;
-              await po.save();
-              return res.status(400).json({
-                success: false,
-                error: `Received quantity for ${poItem.brandName} - ${poItem.modelNo} exceeds ordered quantity`
-              });
-            }
-          }
-        }
-
-        let allReceived = true;
-        let partiallyReceived = false;
-        for (let item of po.items) {
-          const received = item.receivedQuantity || 0;
-          if (received < item.quantity) {
-            allReceived = false;
-            if (received > 0) partiallyReceived = true;
-          }
-        }
-        if (allReceived) po.status = 'Received';
-        else if (partiallyReceived) po.status = 'Partially Received';
-        else po.status = 'Pending';
-        await po.save();
-      }
+      await updatePOReceivedQuantity(updatedGRN.purchaseOrder, updatedGRN.items);
     }
 
-    // Step 5: Apply new product stock
+    // Apply new stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
@@ -544,7 +454,7 @@ exports.updateGRN = async (req, res) => {
   }
 };
 
-// ─── UPDATE GRN WITH DOCUMENT (FIXED) ─────────────────────────────────────────
+// ─── UPDATE GRN WITH DOCUMENT (NO validation block) ────────────────────────
 exports.updateGRNWithDocument = async (req, res) => {
   try {
     const dir = 'uploads/grn';
@@ -567,54 +477,19 @@ exports.updateGRNWithDocument = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // Step 1: Reverse old PO quantities
+    // Reverse old
     await reversePOQuantities(existingGRN);
-
-    // Step 2: Reverse old product stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
-    // Step 3: Update the GRN document
+    // Update
     const updatedGRN = await GRN.findByIdAndUpdate(id, grnData, { new: true, runValidators: true });
 
-    // Step 4: Apply new PO quantities with validation
+    // Apply new PO quantities (no validation)
     if (updatedGRN.choice === 'Against PO' && updatedGRN.purchaseOrder) {
-      const po = await PurchaseOrder.findById(updatedGRN.purchaseOrder);
-      if (po) {
-        for (let grnItem of updatedGRN.items) {
-          const poItem = po.items.find(
-            i => i.brandName === grnItem.brandName && i.modelNo === grnItem.modelNo
-          );
-          if (poItem) {
-            if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
-            poItem.receivedQuantity += grnItem.receivedQuantity;
-            if (poItem.receivedQuantity > poItem.quantity) {
-              poItem.receivedQuantity -= grnItem.receivedQuantity;
-              await po.save();
-              return res.status(400).json({
-                success: false,
-                error: `Received quantity for ${poItem.brandName} - ${poItem.modelNo} exceeds ordered quantity`
-              });
-            }
-          }
-        }
-
-        let allReceived = true;
-        let partiallyReceived = false;
-        for (let item of po.items) {
-          const received = item.receivedQuantity || 0;
-          if (received < item.quantity) {
-            allReceived = false;
-            if (received > 0) partiallyReceived = true;
-          }
-        }
-        if (allReceived) po.status = 'Received';
-        else if (partiallyReceived) po.status = 'Partially Received';
-        else po.status = 'Pending';
-        await po.save();
-      }
+      await updatePOReceivedQuantity(updatedGRN.purchaseOrder, updatedGRN.items);
     }
 
-    // Step 5: Apply new product stock
+    // Apply new stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
