@@ -39,7 +39,7 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
   const financialYear = getFinancialYear(grnDate);
   console.log(`Generating GRN number for company: ${companyId}, financial year: ${financialYear}`);
 
-  // STEP 1: Sync the counter with existing GRNs in DB
+  // STEP 1: Sync counter with existing GRNs in DB
   const escapedFY = financialYear.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const lastGRN = await GRN.findOne({
     company: companyId,
@@ -141,14 +141,14 @@ async function reverseProductStockOnGRN(oldItems, companyId) {
   }
 }
 
-// ─── Helper: reverse PO received quantities on GRN delete ──────────────────
-async function reversePOQuantitiesOnGRNDelete(grn) {
-  if (grn.choice !== 'Against PO' || !grn.purchaseOrder) return;
+// ─── Helper: reverse PO received quantities on GRN delete/update ──────────
+async function reversePOQuantities(grn) {
+  if (!grn || grn.choice !== 'Against PO' || !grn.purchaseOrder) return;
 
   try {
     const po = await PurchaseOrder.findById(grn.purchaseOrder);
     if (!po) {
-      console.warn(`Purchase order ${grn.purchaseOrder} not found for GRN delete reversal`);
+      console.warn(`PO ${grn.purchaseOrder} not found for reversal`);
       return;
     }
 
@@ -177,9 +177,9 @@ async function reversePOQuantitiesOnGRNDelete(grn) {
     else po.status = 'Pending';
 
     await po.save();
-    console.log(`PO ${po.orderNumber} quantities reversed after GRN delete`);
+    console.log(`PO ${po.orderNumber} quantities reversed`);
   } catch (err) {
-    console.error(`Error reversing PO quantities on GRN delete:`, err.message);
+    console.error(`Error reversing PO quantities:`, err.message);
   }
 }
 
@@ -449,19 +449,18 @@ exports.createGRNWithDocument = async (req, res) => {
   }
 };
 
-// ─── DELETE GRN (FIXED - now reverses PO quantities + stock) ────────────────
+// ─── DELETE GRN (FIXED - reverses PO + stock) ────────────────────────────────
 exports.deleteGRN = async (req, res) => {
   try {
     const grnId = req.params.id;
 
-    // Find the GRN first (need its data for reversal)
     const grn = await GRN.findById(grnId);
     if (!grn) return res.status(404).json({ success: false, error: "GRN not found" });
 
     const companyId = grn.company;
 
     // Reverse PO received quantities
-    await reversePOQuantitiesOnGRNDelete(grn);
+    await reversePOQuantities(grn);
 
     // Reverse product stock
     await reverseProductStockOnGRN(grn.items, companyId);
@@ -476,7 +475,7 @@ exports.deleteGRN = async (req, res) => {
   }
 };
 
-// ─── UPDATE GRN ───────────────────────────────────────────────────────────────
+// ─── UPDATE GRN (FIXED - reverses old PO + stock, applies new) ───────────────
 exports.updateGRN = async (req, res) => {
   try {
     const { id } = req.params;
@@ -487,16 +486,16 @@ exports.updateGRN = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // Reverse old PO quantities
-    await reversePOQuantitiesOnGRNDelete(existingGRN);
+    // Step 1: Reverse old PO quantities
+    await reversePOQuantities(existingGRN);
 
-    // Reverse old product stock
+    // Step 2: Reverse old product stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
-    // Update the GRN
+    // Step 3: Update the GRN document
     const updatedGRN = await GRN.findByIdAndUpdate(id, updatedData, { new: true, runValidators: true });
 
-    // Apply new PO quantities
+    // Step 4: Apply new PO quantities with validation
     if (updatedGRN.choice === 'Against PO' && updatedGRN.purchaseOrder) {
       const po = await PurchaseOrder.findById(updatedGRN.purchaseOrder);
       if (po) {
@@ -508,7 +507,7 @@ exports.updateGRN = async (req, res) => {
             if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
             poItem.receivedQuantity += grnItem.receivedQuantity;
             if (poItem.receivedQuantity > poItem.quantity) {
-              // Rollback - reverse what we just did
+              // Rollback this item
               poItem.receivedQuantity -= grnItem.receivedQuantity;
               await po.save();
               return res.status(400).json({
@@ -535,7 +534,7 @@ exports.updateGRN = async (req, res) => {
       }
     }
 
-    // Apply new product stock
+    // Step 5: Apply new product stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
@@ -545,7 +544,7 @@ exports.updateGRN = async (req, res) => {
   }
 };
 
-// ─── UPDATE GRN WITH DOCUMENT ─────────────────────────────────────────────────
+// ─── UPDATE GRN WITH DOCUMENT (FIXED) ─────────────────────────────────────────
 exports.updateGRNWithDocument = async (req, res) => {
   try {
     const dir = 'uploads/grn';
@@ -568,16 +567,16 @@ exports.updateGRNWithDocument = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // Reverse old PO quantities
-    await reversePOQuantitiesOnGRNDelete(existingGRN);
+    // Step 1: Reverse old PO quantities
+    await reversePOQuantities(existingGRN);
 
-    // Reverse old product stock
+    // Step 2: Reverse old product stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
-    // Update the GRN
+    // Step 3: Update the GRN document
     const updatedGRN = await GRN.findByIdAndUpdate(id, grnData, { new: true, runValidators: true });
 
-    // Apply new PO quantities
+    // Step 4: Apply new PO quantities with validation
     if (updatedGRN.choice === 'Against PO' && updatedGRN.purchaseOrder) {
       const po = await PurchaseOrder.findById(updatedGRN.purchaseOrder);
       if (po) {
@@ -588,6 +587,14 @@ exports.updateGRNWithDocument = async (req, res) => {
           if (poItem) {
             if (!poItem.receivedQuantity) poItem.receivedQuantity = 0;
             poItem.receivedQuantity += grnItem.receivedQuantity;
+            if (poItem.receivedQuantity > poItem.quantity) {
+              poItem.receivedQuantity -= grnItem.receivedQuantity;
+              await po.save();
+              return res.status(400).json({
+                success: false,
+                error: `Received quantity for ${poItem.brandName} - ${poItem.modelNo} exceeds ordered quantity`
+              });
+            }
           }
         }
 
@@ -607,7 +614,7 @@ exports.updateGRNWithDocument = async (req, res) => {
       }
     }
 
-    // Apply new product stock
+    // Step 5: Apply new product stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
