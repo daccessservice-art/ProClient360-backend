@@ -34,42 +34,48 @@ function getFinancialYear(date) {
   }
 }
 
-// ─── Helper: generate unique GRN number ──────────────────────────────────────
+// ─── Helper: generate unique GRN number (FIXED) ──────────────────────────────
 async function generateUniqueGRNNumber(companyId, grnDate) {
   const financialYear = getFinancialYear(grnDate);
   console.log(`Generating GRN number for company: ${companyId}, financial year: ${financialYear}`);
 
-  let attempts = 0;
-  const maxAttempts = 5;
+  // STEP 1: Sync the counter with existing GRNs in DB
+  const escapedFY = financialYear.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lastGRN = await GRN.findOne({
+    company: companyId,
+    grnNumber: { $regex: `^GRN/${escapedFY}/` }
+  }).sort({ grnNumber: -1 });
 
-  while (attempts < maxAttempts) {
-    attempts++;
+  if (lastGRN) {
+    const parts = lastGRN.grnNumber.split('/');
+    const lastSequence = parseInt(parts[parts.length - 1], 10);
 
-    const counter = await Counter.findOneAndUpdate(
-      { company: companyId, financialYear: financialYear },
-      { $inc: { sequence: 1 } },
-      {
-        new: true,
-        upsert: true,
-        returnDocument: 'after'
-      }
-    );
-
-    console.log(`Counter updated: sequence = ${counter.sequence}`);
-    const formattedSerial = String(counter.sequence).padStart(3, '0');
-    const grnNumber = `GRN/${financialYear}/${formattedSerial}`;
-
-    // Check if this number already exists
-    const existingGRN = await GRN.findOne({ grnNumber });
-    if (!existingGRN) {
-      console.log(`GRN number generated: ${grnNumber}`);
-      return grnNumber;
+    const currentCounter = await Counter.findOne({ company: companyId, financialYear });
+    if (!currentCounter || currentCounter.sequence <= lastSequence) {
+      console.log(`Syncing counter from ${currentCounter?.sequence || 'N/A'} to ${lastSequence} (highest existing GRN: ${lastGRN.grnNumber})`);
+      await Counter.findOneAndUpdate(
+        { company: companyId, financialYear: financialYear },
+        { $set: { sequence: lastSequence } },
+        { upsert: true }
+      );
     }
-
-    console.log(`GRN number ${grnNumber} already exists, retrying... (attempt ${attempts})`);
   }
 
-  throw new Error(`Failed to generate unique GRN number after ${maxAttempts} attempts for ${financialYear}`);
+  // STEP 2: Atomically increment and generate
+  const counter = await Counter.findOneAndUpdate(
+    { company: companyId, financialYear: financialYear },
+    { $inc: { sequence: 1 } },
+    {
+      new: true,
+      upsert: true,
+    }
+  );
+
+  const formattedSerial = String(counter.sequence).padStart(3, '0');
+  const grnNumber = `GRN/${financialYear}/${formattedSerial}`;
+  console.log(`GRN number generated: ${grnNumber}`);
+
+  return grnNumber;
 }
 
 // ─── Helper: update Product stock after GRN ───────────────────────────────────
