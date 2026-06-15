@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { GRN, Counter } = require("../models/grnModel");
 const PurchaseOrder = require("../models/purchaseOrderModel");
-const Product = require("../models/productModel"); // ✅ NEW: import Product model
+const Product = require("../models/productModel");
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -39,14 +39,18 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
   const financialYear = getFinancialYear(grnDate);
   console.log(`Generating GRN number for company: ${companyId}, financial year: ${financialYear}`);
 
-  try {
-     const counter = await Counter.findOneAndUpdate(
-     { company: companyId, financialYear: financialYear },
-     { $inc: { sequence: 1 } },
+  let attempts = 0;
+  const maxAttempts = 5;
+
+  while (attempts < maxAttempts) {
+    attempts++;
+
+    const counter = await Counter.findOneAndUpdate(
+      { company: companyId, financialYear: financialYear },
+      { $inc: { sequence: 1 } },
       {
         new: true,
         upsert: true,
-        setDefaultsOnInsert: true,
         returnDocument: 'after'
       }
     );
@@ -55,61 +59,20 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
     const formattedSerial = String(counter.sequence).padStart(3, '0');
     const grnNumber = `GRN/${financialYear}/${formattedSerial}`;
 
-    // Double-check uniqueness
+    // Check if this number already exists
     const existingGRN = await GRN.findOne({ grnNumber });
-    if (existingGRN) {
-      console.log(`GRN number ${grnNumber} already exists, incrementing counter...`);
-      const newCounter = await Counter.findOneAndUpdate(
-        { company: companyId, financialYear: financialYear },
-        { $inc: { sequence: 1 } },
-        { new: true }
-      );
-      const newFormattedSerial = String(newCounter.sequence).padStart(3, '0');
-      const newGrnNumber = `GRN/${financialYear}/${newFormattedSerial}`;
-      const existingGRN2 = await GRN.findOne({ grnNumber: newGrnNumber });
-      if (existingGRN2) {
-        throw new Error(`Multiple GRN number conflicts detected for ${financialYear}`);
-      }
-      return newGrnNumber;
-    }
-
-    return grnNumber;
-  } catch (error) {
-    console.error("Error generating GRN number:", error);
-    // Fallback
-    try {
-      const existingGRNs = await GRN.find({
-        company: companyId,
-        grnNumber: { $regex: `^GRN/${financialYear}/` }
-      }).sort({ grnNumber: -1 }).limit(1);
-
-      let nextSequence = 1;
-      if (existingGRNs.length > 0) {
-        const lastSequence = parseInt(existingGRNs[0].grnNumber.split('/')[2]);
-        if (!isNaN(lastSequence)) nextSequence = lastSequence + 1;
-      }
-
-      await Counter.findOneAndUpdate(
-        { company: companyId, financialYear: financialYear },
-        { sequence: nextSequence },
-        { upsert: true }
-      );
-
-      const formattedSerial = String(nextSequence).padStart(3, '0');
-      const grnNumber = `GRN/${financialYear}/${formattedSerial}`;
-      const existingGRN = await GRN.findOne({ grnNumber });
-      if (existingGRN) throw new Error(`Unable to generate unique GRN number after all attempts`);
+    if (!existingGRN) {
+      console.log(`GRN number generated: ${grnNumber}`);
       return grnNumber;
-    } catch (fallbackError) {
-      console.error("Fallback also failed:", fallbackError);
-      throw new Error(`Failed to generate GRN number: ${error.message}`);
     }
+
+    console.log(`GRN number ${grnNumber} already exists, retrying... (attempt ${attempts})`);
   }
+
+  throw new Error(`Failed to generate unique GRN number after ${maxAttempts} attempts for ${financialYear}`);
 }
 
 // ─── Helper: update Product stock after GRN ───────────────────────────────────
-// ✅ NEW: For each GRN item, find matching Product by brandName+model in same company
-//         and increment currentStockQty by receivedQuantity.
 async function updateProductStockOnGRN(items, companyId) {
   for (const item of items) {
     if (!item.brandName || !item.modelNo || !item.receivedQuantity) continue;
@@ -122,7 +85,7 @@ async function updateProductStockOnGRN(items, companyId) {
         {
           company: companyId,
           brandName: item.brandName,
-          model: item.modelNo, // Product model field = GRN modelNo field
+          model: item.modelNo,
         },
         { $inc: { currentStockQty: received } },
         { new: true }
@@ -143,8 +106,7 @@ async function updateProductStockOnGRN(items, companyId) {
   }
 }
 
-// ─── Helper: reverse Product stock (used when GRN is updated with new received qty) ──
-// ✅ NEW: Reverses the old received quantities then applies new ones.
+// ─── Helper: reverse Product stock ───────────────────────────────────────────
 async function reverseProductStockOnGRN(oldItems, companyId) {
   for (const item of oldItems) {
     if (!item.brandName || !item.modelNo || !item.receivedQuantity) continue;
@@ -158,7 +120,7 @@ async function reverseProductStockOnGRN(oldItems, companyId) {
           brandName: item.brandName,
           model: item.modelNo,
         },
-        { $inc: { currentStockQty: -received } }, // subtract old qty
+        { $inc: { currentStockQty: -received } },
         { new: true }
       );
 
@@ -194,8 +156,6 @@ exports.getGRN = async (req, res) => {
 exports.getGRNByNumber = async (req, res) => {
   try {
     const { grnNumber } = req.params;
-    console.log("Looking for GRN with number:", grnNumber);
-
     const grn = await GRN.findOne({ grnNumber: decodeURIComponent(grnNumber) })
       .populate('vendor', 'vendorName email phoneNumber1')
       .populate('project', 'name')
@@ -206,7 +166,6 @@ exports.getGRNByNumber = async (req, res) => {
     if (!grn) return res.status(404).json({ success: false, error: "GRN not found" });
     res.status(200).json({ success: true, message: "GRN fetched successfully", grn });
   } catch (error) {
-    console.error("Error in getGRNByNumber:", error);
     res.status(500).json({ error: "Error in getting GRN: " + error.message });
   }
 };
@@ -220,7 +179,6 @@ exports.getGRNNumbers = async (req, res) => {
 
     res.status(200).json({ success: true, message: "GRN numbers fetched successfully", grns });
   } catch (error) {
-    console.error("Error in getGRNNumbers:", error);
     res.status(500).json({ error: "Error in getting GRN numbers: " + error.message });
   }
 };
@@ -298,11 +256,9 @@ exports.createGRN = async (req, res) => {
     const grnData = req.body;
     const companyId = user.company ? user.company : user._id;
 
-    // Generate unique GRN number
     const grnNumber = await generateUniqueGRNNumber(companyId, new Date(grnData.grnDate));
     console.log("Generated GRN number:", grnNumber);
 
-    // ── If Against PO, update PO received quantities ──
     if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
       const po = await PurchaseOrder.findById(grnData.purchaseOrder);
       if (!po) return res.status(404).json({ success: false, error: "Purchase order not found" });
@@ -323,7 +279,6 @@ exports.createGRN = async (req, res) => {
         }
       }
 
-      // Update PO status
       let allReceived = true;
       let partiallyReceived = false;
       for (let item of po.items) {
@@ -338,7 +293,6 @@ exports.createGRN = async (req, res) => {
       await po.save();
     }
 
-    // ── Save GRN ──
     const newGRN = new GRN({
       ...grnData,
       grnNumber,
@@ -347,7 +301,6 @@ exports.createGRN = async (req, res) => {
     });
     await newGRN.save();
 
-    // ✅ Update Product currentStockQty for each received item
     await updateProductStockOnGRN(grnData.items, companyId);
 
     res.status(201).json({
@@ -376,11 +329,9 @@ exports.createGRNWithDocument = async (req, res) => {
     const grnData = JSON.parse(req.body.grnData);
     const companyId = user.company ? user.company : user._id;
 
-    // Generate unique GRN number
     const grnNumber = await generateUniqueGRNNumber(companyId, new Date(grnData.grnDate));
     console.log("Generated GRN number with document:", grnNumber);
 
-    // Attach uploaded file
     if (req.file) {
       grnData.attachments = [{
         name: req.file.originalname,
@@ -390,7 +341,6 @@ exports.createGRNWithDocument = async (req, res) => {
       }];
     }
 
-    // ── If Against PO, update PO received quantities ──
     if (grnData.choice === 'Against PO' && grnData.purchaseOrder) {
       const po = await PurchaseOrder.findById(grnData.purchaseOrder);
       if (!po) return res.status(404).json({ success: false, error: "Purchase order not found" });
@@ -425,7 +375,6 @@ exports.createGRNWithDocument = async (req, res) => {
       await po.save();
     }
 
-    // ── Save GRN ──
     const newGRN = new GRN({
       ...grnData,
       grnNumber,
@@ -434,7 +383,6 @@ exports.createGRNWithDocument = async (req, res) => {
     });
     await newGRN.save();
 
-    // ✅ Update Product currentStockQty for each received item
     await updateProductStockOnGRN(grnData.items, companyId);
 
     res.status(201).json({
@@ -475,12 +423,10 @@ exports.updateGRN = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // ✅ Reverse old stock, then apply new stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
     const updatedGRN = await GRN.findByIdAndUpdate(id, updatedData, { new: true, runValidators: true });
 
-    // ✅ Apply new received quantities to Product stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
@@ -513,12 +459,10 @@ exports.updateGRNWithDocument = async (req, res) => {
 
     const companyId = existingGRN.company;
 
-    // ✅ Reverse old stock, then apply new stock
     await reverseProductStockOnGRN(existingGRN.items, companyId);
 
     const updatedGRN = await GRN.findByIdAndUpdate(id, grnData, { new: true, runValidators: true });
 
-    // ✅ Apply new received quantities to Product stock
     await updateProductStockOnGRN(updatedGRN.items, companyId);
 
     res.status(200).json({ success: true, message: "GRN updated successfully", updatedGRN });
