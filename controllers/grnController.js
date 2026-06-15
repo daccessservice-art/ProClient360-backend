@@ -40,16 +40,9 @@ async function generateUniqueGRNNumber(companyId, grnDate) {
   console.log(`Generating GRN number for company: ${companyId}, financial year: ${financialYear}`);
 
   try {
-    const counter = await Counter.findOneAndUpdate(
-      { company: companyId, financialYear: financialYear },
-      {
-        $inc: { sequence: 1 },
-        $setOnInsert: {
-          company: companyId,
-          financialYear: financialYear,
-          sequence: 1
-        }
-      },
+     const counter = await Counter.findOneAndUpdate(
+     { company: companyId, financialYear: financialYear },
+     { $inc: { sequence: 1 } },
       {
         new: true,
         upsert: true,
