@@ -332,14 +332,11 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
     const HEADER_H  = 50;
-    const logoDrawn = false;
 
     if (LOGO_BUFFER) {
       try {
-        // ★ KEY FIX: Explicitly tell PDFKit the format & use proper options
         doc.image(LOGO_BUFFER, M, y + 4, {
           fit: [LOGO_MAXW, LOGO_H],
-          // Don't specify format — let PDFKit auto-detect from buffer magic bytes
         });
         console.log(`[PDF] ✅ Logo image rendered successfully (${companyKey})`);
       } catch (e) {
@@ -442,21 +439,29 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 3. ITEMS TABLE
+    // ── FIX: "ITEM DETAILS" column now always renders Brand Name,
+    // Model No, and Description on separate lines under the product
+    // name — matching the ViewPurchaseOrderPopUp UI exactly.
+    // ── Line 1: Product name (fallback: brandName if no productName)
+    // ── Line 2: Brand + Model (labeled, whenever either exists)
+    // ── Line 3: Description (whenever it exists and differs from
+    //            productName, to avoid duplicate text)
+    // ── Column widths, other columns, colors, fonts unchanged.
     // ════════════════════════════════════════════════════════════
 
     const itemCols = [
-      { key: 'sr',       label: 'SR.',            w: 22,  align: 'center' },
-      { key: 'item',     label: 'ITEM DETAILS',   w: 110, align: 'left'   },
-      { key: 'hsn',      label: 'HSN/SAC',        w: 40,  align: 'center' },
-      { key: 'uom',      label: 'UOM',            w: 26,  align: 'center' },
-      { key: 'qty',      label: 'QTY',            w: 28,  align: 'right'  },
-      { key: 'rate',     label: 'RATE',           w: 40,  align: 'right'  },
-      { key: 'disc',     label: 'DISC.%',         w: 30,  align: 'center' },
-      { key: 'warranty', label: 'WARRANTY',       w: 44,  align: 'center' },
-      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 46,  align: 'right'  },
-      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 50,  align: 'right'  },
-      { key: 'gst',      label: 'GST%/AMT.',      w: 40,  align: 'center' },
-      { key: 'net',      label: 'NET AMT.(Rs)',   w: 79,  align: 'right'  },
+      { key: 'sr',       label: 'SR.',            w: 18,  align: 'center' },
+      { key: 'item',     label: 'ITEM DETAILS',   w: 128, align: 'left'   },
+      { key: 'hsn',      label: 'HSN/SAC',        w: 38,  align: 'center' },
+      { key: 'uom',      label: 'UOM',            w: 24,  align: 'center' },
+      { key: 'qty',      label: 'QTY',            w: 26,  align: 'right'  },
+      { key: 'rate',     label: 'RATE',           w: 38,  align: 'right'  },
+      { key: 'disc',     label: 'DISC.%',         w: 28,  align: 'center' },
+      { key: 'warranty', label: 'WARRANTY',       w: 40,  align: 'center' },
+      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 44,  align: 'right'  },
+      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 48,  align: 'right'  },
+      { key: 'gst',      label: 'GST%/AMT.',      w: 38,  align: 'center' },
+      { key: 'net',      label: 'NET AMT.(Rs)',   w: 74,  align: 'right'  },
     ];
 
     const rowH = 16;
@@ -470,7 +475,11 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     });
     y += rowH;
 
-    const dataRowH   = 20;
+    // ── FIX: data rows now need up to three lines of text
+    // (product name + brand/model + description), so each data
+    // row is taller than before. Empty padding rows stay small.
+    const dataRowH   = 34;
+    const emptyRowH  = 16;
     const rowsToShow = Math.max(items.length, 8);
 
     for (let i = 0; i < rowsToShow; i++) {
@@ -489,14 +498,30 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
         const gstText  = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
         const discText = disc > 0 ? `${disc}%` : '-';
 
-        // ── Use productName as primary item label; fall back to brand/model/description ──
-        const itemName = item.productName
-          ? item.productName
-          : [item.brandName, item.description || item.modelNo].filter(Boolean).join('  ');
+        // ── FIX: Build item detail lines to match ViewPurchaseOrderPopUp UI ──
+        // Line 1: Product name — same fallback as UI (item.productName || item.brandName || '-')
+        const itemNameLine = item.productName || item.brandName || '-';
+
+        // Line 2: Brand + Model — always shown when either exists (labeled, like UI)
+        const brandModelParts = [
+          item.brandName ? `Brand: ${item.brandName}` : null,
+          item.modelNo ? `Model: ${item.modelNo}` : null,
+        ].filter(Boolean);
+        const brandModelLine = brandModelParts.length > 0 ? brandModelParts.join('   ') : null;
+
+        // Line 3: Description — shown whenever it exists and is not identical
+        // to the productName (avoids duplicating the same text on line 1)
+        const descLine = item.description && item.description.trim() !== '' &&
+                         item.description !== item.productName ? item.description : null;
+
+        // ── Determine row height: base dataRowH, but increase if description
+        // is present so it doesn't get clipped ──
+        const hasExtraLines = brandModelLine || descLine;
+        const currentRowH   = hasExtraLines ? dataRowH : emptyRowH;
 
         const rowData = [
           { text: String(i + 1),                    align: 'center' },
-          { text: itemName,                          align: 'left'   },
+          { text: itemNameLine,                      align: 'left',  secondLine: brandModelLine, thirdLine: descLine },
           { text: item.hsnSac || '-',               align: 'center' },
           { text: item.baseUOM || item.unit || '-', align: 'center' },
           { text: qty.toFixed(2),                   align: 'right'  },
@@ -510,22 +535,52 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
         ];
 
         itemCols.forEach((col, ci) => {
-          fillRect(doc, cx, y, col.w, dataRowH, bg);
-          strokeRect(doc, cx, y, col.w, dataRowH);
-          doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_BLACK)
-             .text(String(rowData[ci].text), cx + 2, y + 6, {
-               width: col.w - 4, align: rowData[ci].align, lineBreak: false, ellipsis: true,
-             });
+          fillRect(doc, cx, y, col.w, currentRowH, bg);
+          strokeRect(doc, cx, y, col.w, currentRowH);
+
+          if (col.key === 'item') {
+            // Line 1: Product name (bold)
+            doc.font('Helvetica-Bold').fontSize(7).fillColor(COLOR_BLACK)
+               .text(String(rowData[ci].text), cx + 2, y + 3, {
+                 width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
+               });
+
+            // Line 2: Brand + Model (smaller, grey)
+            if (rowData[ci].secondLine) {
+              doc.font('Helvetica').fontSize(6).fillColor(COLOR_DARK_GREY)
+                 .text(rowData[ci].secondLine, cx + 2, y + 12, {
+                   width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
+                 });
+            }
+
+            // Line 3: Description (smaller, grey, italic-style)
+            if (rowData[ci].thirdLine) {
+              doc.font('Helvetica').fontSize(5.5).fillColor('#666666')
+                 .text(rowData[ci].thirdLine, cx + 2, y + 22, {
+                   width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
+                 });
+            }
+          } else {
+            // Other columns: vertically center text based on row height
+            const textY = hasExtraLines ? y + 12 : y + 4;
+            doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_BLACK)
+               .text(String(rowData[ci].text), cx + 2, textY, {
+                 width: col.w - 4, align: rowData[ci].align, lineBreak: false, ellipsis: true,
+               });
+          }
           cx += col.w;
         });
+
+        y += currentRowH;
       } else {
+        // Empty padding rows
         itemCols.forEach(col => {
-          fillRect(doc, cx, y, col.w, dataRowH, bg);
-          strokeRect(doc, cx, y, col.w, dataRowH);
+          fillRect(doc, cx, y, col.w, emptyRowH, bg);
+          strokeRect(doc, cx, y, col.w, emptyRowH);
           cx += col.w;
         });
+        y += emptyRowH;
       }
-      y += dataRowH;
     }
 
     // Total row
