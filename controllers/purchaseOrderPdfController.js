@@ -9,17 +9,13 @@ const path  = require('path');
 // ROBUST LOGO LOADER — tries multiple paths + URL fallback
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Search these directories for logo files (first match wins)
 const ASSET_SEARCH_PATHS = [
-  path.join(__dirname, '..', 'assets'),          // backend/assets/
-  path.join(__dirname, '..', '..', 'assets'),    // monorepo root/assets/
-  path.join(process.cwd(), 'assets'),            // cwd/assets/
-  path.join(__dirname, '..', 'public', 'assets'),// backend/public/assets/
+  path.join(__dirname, '..', 'assets'),
+  path.join(__dirname, '..', '..', 'assets'),
+  path.join(process.cwd(), 'assets'),
+  path.join(__dirname, '..', 'public', 'assets'),
 ];
 
-/**
- * Find a file by searching multiple directories
- */
 function findFile(filename) {
   for (const dir of ASSET_SEARCH_PATHS) {
     const fp = path.join(dir, filename);
@@ -32,34 +28,25 @@ function findFile(filename) {
         }
         console.warn(`[PDF-LOGO] ⚠️  ${fp} exists but only ${stat.size} bytes — likely corrupt, skipping`);
       }
-    } catch (_) { /* ignore stat errors */ }
+    } catch (_) {}
   }
   console.warn(`[PDF-LOGO] ❌ ${filename} NOT found. Searched:`, ASSET_SEARCH_PATHS.map(p => path.join(p, filename)));
   return null;
 }
 
-/**
- * Validate image buffer by checking magic bytes
- */
 function isValidImage(buf) {
   if (!buf || buf.length < 8) return false;
-  // PNG magic: 89 50 4E 47 0D 0A 1A 0A
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png';
-  // JPEG magic: FF D8 FF
   if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpeg';
   return false;
 }
 
-/**
- * Read image file and validate format
- */
 function readImageFile(filepath) {
   try {
     const buf = fs.readFileSync(filepath);
     const fmt = isValidImage(buf);
     if (!fmt) {
       console.warn(`[PDF-LOGO] ⚠️  ${filepath} is NOT a valid PNG/JPEG (magic bytes: ${buf.slice(0, 4).toString('hex')})`);
-      console.warn('[PDF-LOGO] 💡 TIP: Convert your image to non-interlaced PNG or JPEG, then try again.');
       return null;
     }
     console.log(`[PDF-LOGO] ✅ Loaded ${path.basename(filepath)} as ${fmt.toUpperCase()} (${buf.length} bytes)`);
@@ -70,14 +57,10 @@ function readImageFile(filepath) {
   }
 }
 
-/**
- * Download image from URL with redirect support
- */
 function downloadBuffer(url, timeout = 15000) {
   return new Promise((resolve, reject) => {
     const mod = url.startsWith('https') ? https : http;
     const req = mod.get(url, { timeout }, (res) => {
-      // Handle HTTP redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return downloadBuffer(res.headers.location, timeout).then(resolve, reject);
       }
@@ -102,73 +85,49 @@ function downloadBuffer(url, timeout = 15000) {
   });
 }
 
-// ── Logo cache ──────────────────────────────────────────────────────────────
 const logoCache = { entero: null, daccess: null };
 let logoInitPromise = null;
 
-/**
- * Ensure logos are loaded (runs once, cached afterwards).
- * Tries: local file → URL fallback
- */
 async function ensureLogos() {
-  // Fast path: already loaded
   if (logoCache.entero && logoCache.daccess) return;
-
-  // Prevent concurrent initialization
   if (logoInitPromise) return logoInitPromise;
 
   logoInitPromise = (async () => {
     console.log('[PDF-LOGO] ── Initializing logos ──');
 
-    // ── ENTERO logo ──────────────────────────────────────────────
     const enteroPath = findFile('ENTERO.png');
-    if (enteroPath) {
-      logoCache.entero = readImageFile(enteroPath);
-    }
-    // Also try JPEG
+    if (enteroPath) logoCache.entero = readImageFile(enteroPath);
     if (!logoCache.entero) {
       const enteroJpg = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
       if (enteroJpg) logoCache.entero = readImageFile(enteroJpg);
     }
-    // URL fallback
     if (!logoCache.entero) {
       try {
-        console.log('[PDF-LOGO] ⬇️  Trying Entero logo URL download...');
         logoCache.entero = await downloadBuffer(
           'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png'
         );
-        console.log('[PDF-LOGO] ✅ Entero logo loaded from URL');
       } catch (e) {
         console.warn('[PDF-LOGO] ❌ Entero URL download failed:', e.message);
       }
     }
 
-    // ── DACCESS logo ─────────────────────────────────────────────
     const daccessPath = findFile('DACCESS.png');
-    if (daccessPath) {
-      logoCache.daccess = readImageFile(daccessPath);
-    }
+    if (daccessPath) logoCache.daccess = readImageFile(daccessPath);
     if (!logoCache.daccess) {
       const daccessJpg = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
       if (daccessJpg) logoCache.daccess = readImageFile(daccessJpg);
     }
-    // URL fallback — add your DAccess logo URL here if available
     if (!logoCache.daccess) {
       const daccessUrl = process.env.DACCESS_LOGO_URL;
       if (daccessUrl) {
         try {
-          console.log('[PDF-LOGO] ⬇️  Trying DAccess logo URL download...');
           logoCache.daccess = await downloadBuffer(daccessUrl);
-          console.log('[PDF-LOGO] ✅ DAccess logo loaded from URL');
         } catch (e) {
           console.warn('[PDF-LOGO] ❌ DAccess URL download failed:', e.message);
         }
-      } else {
-        console.warn('[PDF-LOGO] ❌ DAccess logo: no local file found. Set DACCESS_LOGO_URL env var for URL fallback.');
       }
     }
 
-    console.log('[PDF-LOGO] ── Result ──');
     console.log('[PDF-LOGO]   Entero:', logoCache.entero ? `✅ ${logoCache.entero.length} bytes` : '❌ MISSING');
     console.log('[PDF-LOGO]   DAccess:', logoCache.daccess ? `✅ ${logoCache.daccess.length} bytes` : '❌ MISSING');
   })();
@@ -176,9 +135,7 @@ async function ensureLogos() {
   return logoInitPromise;
 }
 
-// Try synchronous load on startup (fast path — skips URL fallback)
 (function initSync() {
-  console.log('[PDF-LOGO] Synchronous pre-load attempt...');
   const ep = findFile('ENTERO.png');
   if (ep) logoCache.entero = readImageFile(ep);
   if (!logoCache.entero) {
@@ -191,10 +148,7 @@ async function ensureLogos() {
     const dpJ = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
     if (dpJ) logoCache.daccess = readImageFile(dpJ);
   }
-  console.log('[PDF-LOGO] Sync result — Entero:', logoCache.entero ? '✅' : '❌', '| DAccess:', logoCache.daccess ? '✅' : '❌');
-  if (logoCache.entero && logoCache.daccess) {
-    logoInitPromise = Promise.resolve(); // mark as done
-  }
+  if (logoCache.entero && logoCache.daccess) logoInitPromise = Promise.resolve();
 })();
 
 
@@ -203,15 +157,15 @@ async function ensureLogos() {
 // ═══════════════════════════════════════════════════════════════════════════════
 const COMPANY_CONFIGS = {
   entero: {
-    name:         'ENTERO SYSTEMS INDIA PVT. LTD.',
-    address:      'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India',
-    gstin:        '27AAJCE1335Q1Z8',
+    name:          'ENTERO SYSTEMS INDIA PVT. LTD.',
+    address:       'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India',
+    gstin:         '27AAJCE1335Q1Z8',
     getLogoBuffer: () => logoCache.entero,
   },
   daccess: {
-    name:         'DACCESS SECURITY SYSTEMS PVT. LTD.',
-    address:      'Office No.05, 3rd Floor, Revati Arcade-II, Opposite to Kapil Malhar Society, Baner, Pune - 411045, Maharashtra, India',
-    gstin:        '27AACCD7325G1ZR',
+    name:          'DACCESS SECURITY SYSTEMS PVT. LTD.',
+    address:       'Office No.05, 3rd Floor, Revati Arcade-II, Opposite to Kapil Malhar Society, Baner, Pune - 411045, Maharashtra, India',
+    gstin:         '27AACCD7325G1ZR',
     getLogoBuffer: () => logoCache.daccess,
   },
 };
@@ -262,6 +216,17 @@ const strokeRect = (doc, x, y, w, h, color = COLOR_BORDER, lineWidth = 0.5) => {
   doc.save().rect(x, y, w, h).lineWidth(lineWidth).stroke(color).restore();
 };
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPER: Measure how many lines a text string will wrap to at given width/size
+// ═══════════════════════════════════════════════════════════════════════════════
+function estimateLines(doc, text, width, fontSize, font = 'Helvetica') {
+  if (!text) return 0;
+  doc.font(font).fontSize(fontSize);
+  const lineHeight = fontSize * 1.2;
+  const h = doc.heightOfString(text, { width });
+  return Math.ceil(h / lineHeight);
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN CONTROLLER
@@ -270,16 +235,12 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // ── Ensure logos are loaded (async — handles URL fallback) ──────────
     await ensureLogos();
 
-    // ── Determine company ───────────────────────────────────────────────
     const printAs       = (req.query.printAs || 'daccess').toLowerCase();
     const companyKey    = printAs === 'entero' ? 'entero' : 'daccess';
     const companyConfig = COMPANY_CONFIGS[companyKey];
     const LOGO_BUFFER   = companyConfig.getLogoBuffer();
-
-    console.log(`[PDF] Generating PO for company: ${companyKey}, logo available: ${!!LOGO_BUFFER}${LOGO_BUFFER ? ` (${LOGO_BUFFER.length} bytes)` : ''}`);
 
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor GSTNo phoneNumber1 email')
@@ -326,28 +287,21 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     let y = M;
 
     // ════════════════════════════════════════════════════════════
-    // 1. HEADER — with robust logo rendering
+    // 1. HEADER
     // ════════════════════════════════════════════════════════════
-
     const LOGO_H    = 38;
     const LOGO_MAXW = 110;
     const HEADER_H  = 50;
 
     if (LOGO_BUFFER) {
       try {
-        doc.image(LOGO_BUFFER, M, y + 4, {
-          fit: [LOGO_MAXW, LOGO_H],
-        });
-        console.log(`[PDF] ✅ Logo image rendered successfully (${companyKey})`);
+        doc.image(LOGO_BUFFER, M, y + 4, { fit: [LOGO_MAXW, LOGO_H] });
       } catch (e) {
-        console.error(`[PDF] ❌ doc.image() FAILED for ${companyKey}:`, e.message);
-        console.error('[PDF] 💡 This usually means the PNG is interlaced or 16-bit. Convert to JPEG or non-interlaced PNG.');
-        // Fallback to text
+        console.error(`[PDF] ❌ doc.image() FAILED:`, e.message);
         doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
            .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
       }
     } else {
-      console.warn(`[PDF] ⚠️  No logo buffer for ${companyKey} — using text fallback`);
       doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
          .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
     }
@@ -374,13 +328,40 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 2. VENDOR DETAILS + INVOICE DETAILS
+    // ── FIX 1: Dynamic box height based on actual vendor address
+    // length so long addresses are never clipped. GSTIN/UIN always
+    // renders at the bottom of the vendor box.
     // ════════════════════════════════════════════════════════════
-
     const leftW  = CW * 0.52;
     const rightW = CW - leftW - 2;
     const rightX = M + leftW + 2;
-    const boxH   = 68;
 
+    const vendor = po.vendor || {};
+
+    // Build full vendor address string (same logic as UI)
+    const vendorAddress = vendor.typeOfVendor === 'Import'
+      ? (vendor.manualAddress || null)
+      : vendor.billingAddress?.add
+        ? [
+            vendor.billingAddress.add,
+            vendor.billingAddress.city,
+            vendor.billingAddress.state,
+            vendor.billingAddress.country,
+          ].filter(Boolean).join(', ')
+        : null;
+
+    // ── Measure how tall the vendor box needs to be ──
+    // Name: ~13px, address block: measured, GSTIN: ~12px, padding: 16px
+    const vendorNameH    = 13;
+    const vendorAddrH    = vendorAddress
+      ? doc.font('Helvetica').fontSize(8).heightOfString(vendorAddress, { width: leftW - 8 })
+      : 0;
+    const vendorGstH     = vendor.GSTNo ? 12 : 0;
+    const vendorPadding  = 18;
+    // Minimum 68, grows as needed
+    const boxH = Math.max(68, vendorNameH + vendorAddrH + vendorGstH + vendorPadding);
+
+    // Header rows
     fillRect(doc, M, y, leftW, 14, COLOR_TABLE_HDR);
     strokeRect(doc, M, y, leftW, 14);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
@@ -393,34 +374,30 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     y += 14;
 
+    // Vendor box — full dynamic height
     strokeRect(doc, M, y, leftW, boxH);
-    const vendor = po.vendor || {};
+
     let vy = y + 5;
+
+    // Vendor name
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
        .text(vendor.vendorName || 'N/A', M + 4, vy, { width: leftW - 8 });
-    vy += 13;
+    vy += vendorNameH;
 
-    const vendorAddress = vendor.typeOfVendor === 'Import'
-      ? (vendor.manualAddress || null)
-      : vendor.billingAddress?.add
-        ? [
-            vendor.billingAddress.add,
-            vendor.billingAddress.city,
-            vendor.billingAddress.state,
-            vendor.billingAddress.country,
-          ].filter(Boolean).join(', ')
-        : null;
-
+    // Full address — rendered with word-wrap, never clipped
     if (vendorAddress) {
       doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
          .text(vendorAddress, M + 4, vy, { width: leftW - 8 });
-      vy += 20;
+      vy += vendorAddrH + 3;
     }
+
+    // GSTIN — always shown after address
     if (vendor.GSTNo) {
       doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
-     .text(`GSTIN/UIN: ${vendor.GSTNo}`, M + 4, vy, { width: leftW - 8 });
-     }
+         .text(`GSTIN/UIN: ${vendor.GSTNo}`, M + 4, vy, { width: leftW - 8 });
+    }
 
+    // Invoice details box — same dynamic height
     strokeRect(doc, rightX, y, rightW, boxH);
     const invoiceFields = [
       ['Order No.',        po.orderNumber || 'N/A'],
@@ -439,16 +416,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 3. ITEMS TABLE
-    // ── FIX: "ITEM DETAILS" column now always renders Brand Name,
-    // Model No, and Description on separate lines under the product
-    // name — matching the ViewPurchaseOrderPopUp UI exactly.
-    // ── Line 1: Product name (fallback: brandName if no productName)
-    // ── Line 2: Brand + Model (labeled, whenever either exists)
-    // ── Line 3: Description (whenever it exists and differs from
-    //            productName, to avoid duplicate text)
-    // ── Column widths, other columns, colors, fonts unchanged.
+    // ── FIX 2: Description is now ALWAYS shown as a sub-line
+    // (same as the UI which joins brand • model • description).
+    // Previously description was skipped when it matched productName;
+    // now all three lines render independently — product name (bold),
+    // brand + model (grey, labeled), description (grey, smaller) —
+    // matching the ViewPurchaseOrderPopUp UI exactly.
+    // Row height auto-expands to fit all content lines.
     // ════════════════════════════════════════════════════════════
-
     const itemCols = [
       { key: 'sr',       label: 'SR.',            w: 18,  align: 'center' },
       { key: 'item',     label: 'ITEM DETAILS',   w: 128, align: 'left'   },
@@ -464,7 +439,12 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       { key: 'net',      label: 'NET AMT.(Rs)',   w: 74,  align: 'right'  },
     ];
 
-    const rowH = 16;
+    const rowH     = 16;
+    const emptyRowH = 16;
+    const itemColW  = 128; // ITEM DETAILS column width
+    const itemTextW = itemColW - 4;
+
+    // Column header row
     let cx = M;
     itemCols.forEach(col => {
       fillRect(doc, cx, y, col.w, rowH, COLOR_TABLE_HDR);
@@ -475,11 +455,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     });
     y += rowH;
 
-    // ── FIX: data rows now need up to three lines of text
-    // (product name + brand/model + description), so each data
-    // row is taller than before. Empty padding rows stay small.
-    const dataRowH   = 34;
-    const emptyRowH  = 16;
     const rowsToShow = Math.max(items.length, 8);
 
     for (let i = 0; i < rowsToShow; i++) {
@@ -488,40 +463,52 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       cx = M;
 
       if (item) {
-        const qty      = Number(item.quantity)        || 0;
-        const rate     = Number(item.price)           || 0;
-        const disc     = Number(item.discountPercent) || 0;
-        const taxPct   = Number(item.taxPercent)      || 0;
-        const lineAmt  = qty * rate * (1 - disc / 100);
-        const taxAmt   = lineAmt * taxPct / 100;
-        const netVal   = lineAmt + taxAmt;
+        const qty     = Number(item.quantity)        || 0;
+        const rate    = Number(item.price)           || 0;
+        const disc    = Number(item.discountPercent) || 0;
+        const taxPct  = Number(item.taxPercent)      || 0;
+        const lineAmt = qty * rate * (1 - disc / 100);
+        const taxAmt  = lineAmt * taxPct / 100;
+        const netVal  = lineAmt + taxAmt;
         const gstText  = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
         const discText = disc > 0 ? `${disc}%` : '-';
 
-        // ── FIX: Build item detail lines to match ViewPurchaseOrderPopUp UI ──
-        // Line 1: Product name — same fallback as UI (item.productName || item.brandName || '-')
+        // ── Line 1: Product name (bold) ──────────────────────────────────
         const itemNameLine = item.productName || item.brandName || '-';
 
-        // Line 2: Brand + Model — always shown when either exists (labeled, like UI)
+        // ── Line 2: Brand + Model (labeled, grey) — always shown if present
         const brandModelParts = [
           item.brandName ? `Brand: ${item.brandName}` : null,
-          item.modelNo ? `Model: ${item.modelNo}` : null,
+          item.modelNo   ? `Model: ${item.modelNo}`   : null,
         ].filter(Boolean);
         const brandModelLine = brandModelParts.length > 0 ? brandModelParts.join('   ') : null;
 
-        // Line 3: Description — shown whenever it exists and is not identical
-        // to the productName (avoids duplicating the same text on line 1)
-        const descLine = item.description && item.description.trim() !== '' &&
-                         item.description !== item.productName ? item.description : null;
+        // ── Line 3: Description — FIX: ALWAYS shown when it exists,
+        // regardless of whether it matches productName.
+        // This matches the UI which always includes description in subParts.
+        const descLine = (item.description && item.description.trim() !== '')
+          ? item.description.trim()
+          : null;
 
-        // ── Determine row height: base dataRowH, but increase if description
-        // is present so it doesn't get clipped ──
-        const hasExtraLines = brandModelLine || descLine;
-        const currentRowH   = hasExtraLines ? dataRowH : emptyRowH;
+        // ── Measure each line height to auto-size the row ────────────────
+        const nameLinesH = doc.font('Helvetica-Bold').fontSize(7)
+          .heightOfString(itemNameLine, { width: itemTextW });
+
+        const brandModelH = brandModelLine
+          ? doc.font('Helvetica').fontSize(6).heightOfString(brandModelLine, { width: itemTextW })
+          : 0;
+
+        const descH = descLine
+          ? doc.font('Helvetica').fontSize(6).heightOfString(descLine, { width: itemTextW })
+          : 0;
+
+        // Total content height + top/bottom padding (6px each)
+        const contentH    = nameLinesH + (brandModelH > 0 ? brandModelH + 2 : 0) + (descH > 0 ? descH + 2 : 0);
+        const currentRowH = Math.max(emptyRowH, contentH + 10);
 
         const rowData = [
           { text: String(i + 1),                    align: 'center' },
-          { text: itemNameLine,                      align: 'left',  secondLine: brandModelLine, thirdLine: descLine },
+          { text: itemNameLine,                      align: 'left', brandModelLine, descLine },
           { text: item.hsnSac || '-',               align: 'center' },
           { text: item.baseUOM || item.unit || '-', align: 'center' },
           { text: qty.toFixed(2),                   align: 'right'  },
@@ -539,30 +526,27 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           strokeRect(doc, cx, y, col.w, currentRowH);
 
           if (col.key === 'item') {
-            // Line 1: Product name (bold)
+            // Line 1: Product name (bold, 7pt)
+            let lineY = y + 4;
             doc.font('Helvetica-Bold').fontSize(7).fillColor(COLOR_BLACK)
-               .text(String(rowData[ci].text), cx + 2, y + 3, {
-                 width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
-               });
+               .text(itemNameLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
+            lineY += nameLinesH + 2;
 
-            // Line 2: Brand + Model (smaller, grey)
-            if (rowData[ci].secondLine) {
+            // Line 2: Brand + Model (6pt, dark grey)
+            if (brandModelLine) {
               doc.font('Helvetica').fontSize(6).fillColor(COLOR_DARK_GREY)
-                 .text(rowData[ci].secondLine, cx + 2, y + 12, {
-                   width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
-                 });
+                 .text(brandModelLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
+              lineY += brandModelH + 2;
             }
 
-            // Line 3: Description (smaller, grey, italic-style)
-            if (rowData[ci].thirdLine) {
-              doc.font('Helvetica').fontSize(5.5).fillColor('#666666')
-                 .text(rowData[ci].thirdLine, cx + 2, y + 22, {
-                   width: col.w - 4, align: 'left', lineBreak: false, ellipsis: true,
-                 });
+            // Line 3: Description (6pt, grey) — always rendered when present
+            if (descLine) {
+              doc.font('Helvetica').fontSize(6).fillColor('#666666')
+                 .text(descLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
             }
           } else {
-            // Other columns: vertically center text based on row height
-            const textY = hasExtraLines ? y + 12 : y + 4;
+            // Other columns: vertically centered
+            const textY = y + (currentRowH / 2) - 4;
             doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_BLACK)
                .text(String(rowData[ci].text), cx + 2, textY, {
                  width: col.w - 4, align: rowData[ci].align, lineBreak: false, ellipsis: true,
@@ -612,7 +596,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     // ════════════════════════════════════════════════════════════
     // 4. HSN/SAC SUMMARY + TOTALS SUMMARY
     // ════════════════════════════════════════════════════════════
-
     const hsnW = CW * 0.58;
     const sumW = CW - hsnW - 4;
     const sumX = M + hsnW + 4;
@@ -714,7 +697,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     // ════════════════════════════════════════════════════════════
     // 5. TOTAL IN WORDS + GRAND TOTAL
     // ════════════════════════════════════════════════════════════
-
     const wordsW   = CW * 0.60;
     const totalBW  = CW - wordsW - 4;
     const totalBX  = M + wordsW + 4;
@@ -744,7 +726,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     // ════════════════════════════════════════════════════════════
     // 6. PAYMENT TERMS + SIGNATURE
     // ════════════════════════════════════════════════════════════
-
     const footerH = 55;
     strokeRect(doc, M, y, CW, footerH);
 
