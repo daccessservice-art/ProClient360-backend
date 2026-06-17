@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const dcItemSchema = new mongoose.Schema({
+  // ── NEW: store product name alongside brand/model so it can be
+  // displayed in the Add/Update item table and on the printed DC ──
+  productName: {
+    type: String,
+    trim: true,
+  },
   brandName: {
     type: String,
     required: [true, 'Brand name is required'],
@@ -125,22 +131,10 @@ const deliveryChallanSchema = new mongoose.Schema({
     maxlength: [1000, 'Remark cannot exceed 1000 characters'],
   },
   attachments: [{
-    name: {
-      type: String,
-      required: true
-    },
-    type: {
-      type: String,
-      required: true
-    },
-    size: {
-      type: Number,
-      required: true
-    },
-    url: {
-      type: String,
-      required: true
-    }
+    name: { type: String, required: true },
+    type: { type: String, required: true },
+    size: { type: Number, required: true },
+    url: { type: String, required: true }
   }],
   status: {
     type: String,
@@ -157,17 +151,14 @@ deliveryChallanSchema.pre('save', async function(next) {
     const currentYear = dcDate.getFullYear();
     const nextYear = currentYear + 1;
     const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
-    
+
     const startOfYear = new Date(currentYear, 3, 1);
     const endOfYear = new Date(nextYear, 2, 31);
-    
+
     const count = await mongoose.model('DeliveryChallan').countDocuments({
-      dcDate: {
-        $gte: startOfYear,
-        $lte: endOfYear
-      }
+      dcDate: { $gte: startOfYear, $lte: endOfYear }
     });
-    
+
     const serialNumber = String(count + 1).padStart(3, '0');
     this.dcNumber = `DC/${financialYear}/${serialNumber}`;
   }
