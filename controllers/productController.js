@@ -58,18 +58,31 @@ exports.showAll = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    if (products.length === 0) {
+    // ── FIX: previously returned a 404 "No products found" whenever the
+    // CURRENT page happened to be empty (e.g. you deleted the last row on
+    // the last page, or searched a page number beyond the new total).
+    // That 404 made the frontend nuke `products` to [] AND `pagination`
+    // back to all-zeros, which is what made it look like "everything got
+    // deleted" after removing just one duplicate — the pagination object
+    // collapsing made Next/Prev/page buttons disappear too.
+    //
+    // Now: only return 404 when there are truly ZERO matching documents
+    // in the whole query (not just on this page). If the page itself is
+    // out of range, still return success with the correct totals so the
+    // frontend can clamp `currentPage` to the real last page. ──
+    const totalProducts = await Product.countDocuments(query);
+
+    if (totalProducts === 0) {
       return res.status(404).json({ success: false, error: "No products found" });
     }
 
-    const totalProducts = await Product.countDocuments(query);
     const totalPages = Math.ceil(totalProducts / limit);
     const hasNextPage = page < totalPages;
     const hasPrevPage = page > 1;
 
     res.status(200).json({
       success: true,
-      products,
+      products, // may legitimately be [] if `page` is beyond totalPages; frontend clamps this
       pagination: {
         currentPage: page,
         totalPages,
@@ -87,7 +100,7 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ✅ NEW: Get ALL products for report (no pagination)
+// ✅ Get ALL products for report (no pagination)
 exports.getAllProductsForReport = async (req, res) => {
   try {
     const user = req.user;
@@ -126,6 +139,51 @@ exports.getAllProductsForReport = async (req, res) => {
   }
 };
 
+// ── NEW: scan ALL of a company's products and return duplicate groups.
+// A duplicate group = 2+ products sharing the same productName + brandName
+// + model (trimmed, case-insensitive) within the same company. ──
+exports.getDuplicateProducts = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+
+    const duplicateGroups = await Product.aggregate([
+      { $match: { company: companyId } },
+      {
+        $project: {
+          productName: 1,
+          brandName: 1,
+          model: 1,
+          currentStockQty: 1,
+          purchasePrice: 1,
+          createdAt: 1,
+          dupKey: {
+            $concat: [
+              { $toLower: { $trim: { input: { $ifNull: ["$productName", ""] } } } }, "|",
+              { $toLower: { $trim: { input: { $ifNull: ["$brandName", ""] } } } }, "|",
+              { $toLower: { $trim: { input: { $ifNull: ["$model", ""] } } } },
+            ],
+          },
+        },
+      },
+      { $group: { _id: "$dupKey", count: { $sum: 1 }, items: { $push: "$$ROOT" } } },
+      { $match: { count: { $gt: 1 } } },
+      { $sort: { count: -1 } },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      duplicateGroupCount: duplicateGroups.length,
+      duplicateGroups,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while finding duplicate products: " + error.message,
+    });
+  }
+};
+
 exports.createProduct = async (req, res) => {
   try {
     const user = req.user;
@@ -149,13 +207,40 @@ exports.createProduct = async (req, res) => {
       minQtyLevel,
       discountType,
       discountValue,
-      currentStockQty, // ✅ NEW FIELD
+      currentStockQty,
       taxType,
       gstRate,
       gstEffectiveDate,
       cessPercentage,
-      cessAmount
+      cessAmount,
+      forceCreateDuplicate, // ── NEW: explicit override flag from the frontend ──
     } = req.body;
+
+    const companyId = user.company ? user.company : user._id;
+
+    // ── FIX: THIS is the actual root cause of all the duplicates you saw —
+    // there was previously no check at all, so clicking "Add" (or any retry/
+    // double-submit) with the same Product Name + Brand + Model just kept
+    // inserting new documents forever. Now we block it unless the caller
+    // explicitly confirms they want a duplicate (e.g. genuinely re-stocking
+    // an identical item under a new lot). ──
+    if (productName && !forceCreateDuplicate) {
+      const dupQuery = {
+        company: companyId,
+        productName: new RegExp(`^${productName.trim()}$`, "i"),
+        brandName: new RegExp(`^${(brandName || "").trim()}$`, "i"),
+        model: new RegExp(`^${(model || "").trim()}$`, "i"),
+      };
+      const existing = await Product.findOne(dupQuery).lean();
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          isDuplicate: true,
+          error: `A product with the same Name, Brand, and Model already exists (Sr ID: ${existing._id}). Set forceCreateDuplicate to true to add it anyway.`,
+          existingProductId: existing._id,
+        });
+      }
+    }
 
     const newProduct = new Product({
       productName,
@@ -177,13 +262,13 @@ exports.createProduct = async (req, res) => {
       minQtyLevel,
       discountType,
       discountValue,
-      currentStockQty: parseFloat(currentStockQty) || 0, // ✅ NEW FIELD
+      currentStockQty: parseFloat(currentStockQty) || 0,
       taxType,
       gstRate,
       gstEffectiveDate,
       cessPercentage,
       cessAmount,
-      company: user.company ? user.company : user._id,
+      company: companyId,
       createdBy: user._id,
     });
 
@@ -234,6 +319,32 @@ exports.deleteProduct = async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Error while deleting product: " + error.message
+    });
+  }
+};
+
+// ── NEW: bulk-delete endpoint so the frontend "Find Duplicates" workflow
+// can remove several duplicate _ids in one request instead of N separate
+// delete calls (which is slower and risks partial failures). ──
+exports.bulkDeleteProducts = async (req, res) => {
+  try {
+    const { ids } = req.body;
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, error: "Please provide an array of product ids to delete" });
+    }
+
+    const result = await Product.deleteMany({ _id: { $in: ids } });
+
+    res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} product(s) deleted successfully`,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while bulk deleting products: " + error.message,
     });
   }
 };

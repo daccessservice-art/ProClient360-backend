@@ -100,7 +100,7 @@ const productSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Discount value must be a positive number'],
   },
-  // ✅ NEW FIELD: Current Stock Quantity
+  // ✅ Current Stock Quantity
   currentStockQty: {
     type: Number,
     default: 0,
@@ -136,6 +136,14 @@ const productSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+// ── NEW: compound index to make the duplicate-check query in
+// createProduct (and the /duplicates aggregation) fast even with
+// thousands of products, instead of a full collection scan every time
+// someone clicks "Add". This does NOT enforce uniqueness at the DB level
+// (still allows intentional duplicates, e.g. restocking under a new lot) —
+// it's a performance index, not a `unique: true` constraint. ──
+productSchema.index({ company: 1, productName: 1, brandName: 1, model: 1 });
 
 const Product = mongoose.model('Product', productSchema);
 

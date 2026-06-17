@@ -6,13 +6,17 @@ const {
   updateProduct,
   deleteProduct,
   getProduct,
-  getAllProductsForReport, // ✅ NEW
+  getAllProductsForReport,
+  getDuplicateProducts,  // ✅ NEW
+  bulkDeleteProducts,    // ✅ NEW
 } = require('../controllers/productController');
 
 const router = express.Router();
 
 router.get('/', permissionMiddleware(['viewProduct']), showAll);
-router.get('/report/all', permissionMiddleware(['viewProduct']), getAllProductsForReport); // ✅ NEW ROUTE
+router.get('/report/all', permissionMiddleware(['viewProduct']), getAllProductsForReport);
+router.get('/duplicates', permissionMiddleware(['viewProduct']), getDuplicateProducts); // ✅ NEW ROUTE
+router.delete('/bulk', permissionMiddleware(['deleteProduct']), bulkDeleteProducts);     // ✅ NEW ROUTE
 router.get('/:id', permissionMiddleware(['viewProduct']), getProduct);
 router.post('/', permissionMiddleware(['createProduct']), createProduct);
 router.put('/:id', permissionMiddleware(['updateProduct']), updateProduct);
