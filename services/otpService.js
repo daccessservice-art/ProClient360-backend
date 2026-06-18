@@ -15,8 +15,9 @@ const generateOtp = () => {
 
 const sendOtpViaSms = async (mobile, otp) => {
   try {
-    const message = `Your OTP for complaint registration is ${otp}. Valid for 5 minutes. - DSSEPL`;
-
+    // ✅ FIXED: Now sends unique OTP (${otp}) instead of 000111
+    const message = `Dear User, Your OTP to registering into our system is ${otp}. It will be valid for 5 minutes. -Team DAccess`;
+    
     const url = `${POWERTEXT_API_URL}?authkey=${POWERTEXT_AUTH_KEY}&mobile=${mobile}&message=${encodeURIComponent(
       message
     )}&sender=${POWERTEXT_SENDER_ID}&route=${POWERTEXT_ROUTE}&templateid=${POWERTEXT_TEMPLATE_ID}&country=91`;
@@ -32,7 +33,6 @@ const sendOtpViaSms = async (mobile, otp) => {
 
 const sendOtpViaEmail = async (email, otp) => {
   try {
-    // ✅ IMPORTANT: Ensure these variables exist in your .env file
     const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || "smtp.gmail.com",
       port: process.env.SMTP_PORT || 587,
