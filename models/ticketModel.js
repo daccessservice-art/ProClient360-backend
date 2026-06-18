@@ -120,6 +120,7 @@ const ticketSchema = new Schema({
             'WhatsApp',
             'SMS',
             'Direct',
+            'Customer Portal',
         ],
         required: [true, 'Source is required'],
     },
@@ -132,6 +133,16 @@ const ticketSchema = new Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Employee',
     },
+    uniqueTicketId: {
+  type: String,
+  unique: true,
+  sparse: true, // ✅ allows null for existing manually-created tickets
+  index: true,
+},
+isCustomerRaised: {
+  type: Boolean,
+  default: false,
+},
 },
 {
     timestamps: true,
