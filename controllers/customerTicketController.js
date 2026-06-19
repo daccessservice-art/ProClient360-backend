@@ -3,8 +3,7 @@ const Otp = require("../models/otpModel");
 const Ticket = require("../models/ticketModel");
 const {
   generateOtp,
-  sendOtpViaSms,
-  // sendOtpViaEmail, // ❌ Removed import - we don't need it anymore
+  sendOtpViaEmail,
 } = require("../services/otpService");
 
 // ============================================================
@@ -14,65 +13,83 @@ exports.sendOtp = async (req, res) => {
   try {
     const { mobile } = req.body;
 
-    if (!mobile || mobile.length !== 10) {
+    if (!mobile || String(mobile).trim().length !== 10) {
       return res.status(400).json({
         success: false,
         message: "Please enter a valid 10-digit mobile number",
       });
     }
 
-    // ✅ Search across all 5 phone number fields
+    const mobileStr = String(mobile).trim();
+
+    // ✅ Search all 5 phone fields
     const customer = await Customer.findOne({
       $or: [
-        { phoneNumber1: mobile },
-        { phoneNumber2: mobile },
-        { phoneNumber3: mobile },
-        { phoneNumber4: mobile },
-        { phoneNumber5: mobile },
+        { phoneNumber1: mobileStr },
+        { phoneNumber2: mobileStr },
+        { phoneNumber3: mobileStr },
+        { phoneNumber4: mobileStr },
+        { phoneNumber5: mobileStr },
       ],
     }).populate("company", "companyName");
+
+    console.log("🔍 Customer lookup for mobile:", mobileStr);
+    console.log("🔍 Customer found:", customer ? customer.custName : "NOT FOUND");
 
     if (!customer) {
       return res.status(404).json({
         success: false,
-        message: "Mobile number not found in our records",
+        message: "Mobile number not found in our records. Please contact support.",
       });
     }
 
-    // Generate 6-digit OTP
+    if (!customer.email || customer.email.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "No email address registered for this account. Please contact support.",
+      });
+    }
+
     const otp = generateOtp();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // ✅ DEBUG: Log OTP to terminal
     console.log("============================================");
-    console.log(`🔑 DEBUG OTP FOR ${mobile}: ${otp}`);
+    console.log(`🔑 OTP FOR ${mobileStr}: ${otp}`);
+    console.log(`📧 Will send to: ${customer.email}`);
     console.log("============================================");
 
-    // Delete any old OTPs for this mobile
-    await Otp.deleteMany({ mobile });
+    // Delete any existing OTP for this mobile
+    await Otp.deleteMany({ mobile: mobileStr });
 
-    // Save new OTP
+    // Save new OTP record
     await Otp.create({
-      mobile,
+      mobile: mobileStr,
       otp,
       customerId: customer._id,
       expiresAt,
     });
 
-    // ✅ SEND SMS ONLY
-    // We do not check for email anymore.
-    const smsSent = await sendOtpViaSms(mobile, otp);
+    // Send OTP via Email
+    const emailSent = await sendOtpViaEmail(customer.email.trim(), otp);
 
-    if (!smsSent) {
-      console.warn("⚠️ SMS failed, but OTP saved to DB. Use the console OTP to login.");
+    if (emailSent) {
+      console.log(`✅ OTP email sent to ${customer.email}`);
+      return res.status(200).json({
+        success: true,
+        message: "OTP sent to your registered email address",
+      });
+    } else {
+      // Email failed — delete the OTP so user can retry
+      await Otp.deleteMany({ mobile: mobileStr });
+      console.error(`❌ Failed to send OTP email to ${customer.email}`);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP email. Please try again after some time.",
+      });
     }
 
-    return res.status(200).json({
-      success: true,
-      message: "OTP sent successfully to your registered mobile number",
-    });
   } catch (error) {
-    console.error("❌ Send OTP error:", error);
+    console.error("❌ sendOtp controller error:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -95,8 +112,11 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
+    const mobileStr = String(mobile).trim();
+    const otpStr = String(otp).trim();
+
     const otpRecord = await Otp.findOne({
-      mobile,
+      mobile: mobileStr,
       expiresAt: { $gt: new Date() },
     });
 
@@ -111,21 +131,22 @@ exports.verifyOtp = async (req, res) => {
     await otpRecord.save();
 
     if (otpRecord.attempts > 3) {
-      await Otp.deleteMany({ mobile });
+      await Otp.deleteMany({ mobile: mobileStr });
       return res.status(400).json({
         success: false,
-        message:
-          "Too many wrong attempts. Please contact with proclient360.com",
+        message: "Too many wrong attempts. Please request a new OTP.",
       });
     }
 
-    if (otpRecord.otp !== otp) {
+    if (otpRecord.otp !== otpStr) {
+      const remaining = 3 - otpRecord.attempts;
       return res.status(400).json({
         success: false,
-        message: "Incorrect OTP. Please contact with proclient360.com",
+        message: `Incorrect OTP. ${remaining} attempt(s) remaining.`,
       });
     }
 
+    // OTP is correct
     otpRecord.isVerified = true;
     await otpRecord.save();
 
@@ -141,7 +162,7 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
-    // Build full address string
+    // Build display address string
     const addressParts = [];
     if (customer.billingAddress) {
       if (customer.billingAddress.add) addressParts.push(customer.billingAddress.add);
@@ -158,7 +179,7 @@ exports.verifyOtp = async (req, res) => {
         _id: customer._id,
         custName: customer.custName,
         email: customer.email,
-        mobile: mobile,
+        mobile: mobileStr,
         address: addressParts.join(", "),
         companyName: customer.company?.companyName || "",
         contactPerson:
@@ -167,8 +188,9 @@ exports.verifyOtp = async (req, res) => {
           customer.custName,
       },
     });
+
   } catch (error) {
-    console.error("❌ Verify OTP error:", error);
+    console.error("❌ verifyOtp controller error:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -191,8 +213,11 @@ exports.raiseTicket = async (req, res) => {
       });
     }
 
+    const mobileStr = String(mobile).trim();
+
+    // Check OTP session is still valid and verified
     const otpRecord = await Otp.findOne({
-      mobile,
+      mobile: mobileStr,
       isVerified: true,
       expiresAt: { $gt: new Date() },
     });
@@ -212,37 +237,43 @@ exports.raiseTicket = async (req, res) => {
       });
     }
 
+    // ✅ Build Address object — ticketSchema requires object not string
+    const b = customer.billingAddress || {};
+    const Address = {
+      add:     (b.add     && b.add.trim()     !== "") ? b.add.trim()     : "N/A",
+      city:    (b.city    && b.city.trim()    !== "") ? b.city.trim()    : "N/A",
+      state:   (b.state   && b.state.trim()   !== "") ? b.state.trim()   : "N/A",
+      country: (b.country && b.country.trim() !== "") ? b.country.trim() : "India",
+      pincode: (b.pincode && b.pincode !== "")        ? b.pincode        : 0,
+    };
+
+    // Generate unique Ticket ID
     const year = new Date().getFullYear();
     const countThisYear = await Ticket.countDocuments({
       uniqueTicketId: { $regex: `^TKT-${year}-` },
     });
     const uniqueTicketId = `TKT-${year}-${String(countThisYear + 1).padStart(4, "0")}`;
 
+    console.log(`🎫 Creating ticket ${uniqueTicketId} for customer: ${customer.custName}`);
+
     const newTicket = await Ticket.create({
       uniqueTicketId,
-      company: customer.company,
-      client: customer._id,
-      Address: customer.billingAddress
-        ? [
-            customer.billingAddress.add,
-            customer.billingAddress.city,
-            customer.billingAddress.state,
-          ]
-            .filter(Boolean)
-            .join(", ")
-        : "",
-      details: complaint,
+      company:            customer.company,
+      client:             customer._id,
+      Address,
+      details:            complaint.trim(),
       product,
       contactPersonEmail: customer.email || "",
-      contactPerson:
-        customer.customerContactPersonName1 || customer.custName,
-      contactNumber: mobile,
-      source: "Customer Portal",
-      service: "Support",
-      isCustomerRaised: true,
+      contactPerson:      customer.customerContactPersonName1 || customer.custName,
+      contactNumber:      Number(mobileStr),
+      source:             "Customer Portal",
+      isCustomerRaised:   true,
     });
 
-    await Otp.deleteMany({ mobile });
+    console.log(`✅ Ticket created: ${uniqueTicketId}`);
+
+    // Clean up OTP
+    await Otp.deleteMany({ mobile: mobileStr });
 
     return res.status(201).json({
       success: true,
@@ -250,11 +281,14 @@ exports.raiseTicket = async (req, res) => {
       ticketId: uniqueTicketId,
       ticket: newTicket,
     });
+
   } catch (error) {
-    console.error("❌ Raise ticket error:", error);
+    console.error("❌ raiseTicket controller error:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message: error.message.includes("validation failed")
+        ? "Ticket data error: " + error.message
+        : "Internal server error",
       error: error.message,
     });
   }
