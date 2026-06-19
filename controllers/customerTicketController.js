@@ -22,7 +22,6 @@ exports.sendOtp = async (req, res) => {
 
     const mobileStr = String(mobile).trim();
 
-    // ✅ Search all 5 phone fields
     const customer = await Customer.findOne({
       $or: [
         { phoneNumber1: mobileStr },
@@ -51,17 +50,15 @@ exports.sendOtp = async (req, res) => {
     }
 
     const otp = generateOtp();
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     console.log("============================================");
     console.log(`🔑 OTP FOR ${mobileStr}: ${otp}`);
     console.log(`📧 Will send to: ${customer.email}`);
     console.log("============================================");
 
-    // Delete any existing OTP for this mobile
     await Otp.deleteMany({ mobile: mobileStr });
 
-    // Save new OTP record
     await Otp.create({
       mobile: mobileStr,
       otp,
@@ -69,7 +66,6 @@ exports.sendOtp = async (req, res) => {
       expiresAt,
     });
 
-    // Send OTP via Email
     const emailSent = await sendOtpViaEmail(customer.email.trim(), otp);
 
     if (emailSent) {
@@ -79,7 +75,6 @@ exports.sendOtp = async (req, res) => {
         message: "OTP sent to your registered email address",
       });
     } else {
-      // Email failed — delete the OTP so user can retry
       await Otp.deleteMany({ mobile: mobileStr });
       console.error(`❌ Failed to send OTP email to ${customer.email}`);
       return res.status(500).json({
@@ -146,7 +141,6 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
-    // OTP is correct
     otpRecord.isVerified = true;
     await otpRecord.save();
 
@@ -162,7 +156,6 @@ exports.verifyOtp = async (req, res) => {
       });
     }
 
-    // Build display address string
     const addressParts = [];
     if (customer.billingAddress) {
       if (customer.billingAddress.add) addressParts.push(customer.billingAddress.add);
@@ -200,6 +193,89 @@ exports.verifyOtp = async (req, res) => {
 };
 
 // ============================================================
+// ✅ NEW — SEND TICKET CONFIRMATION EMAIL TO CUSTOMER
+// ============================================================
+const sendTicketConfirmationToCustomer = async (email, custName, ticketId, product, complaint) => {
+  try {
+    const nodemailer = require("nodemailer");
+
+    const transporter = nodemailer.createTransport({
+      host: "smtp.hostinger.com",
+      port: 465,
+      secure: true,
+      tls: { rejectUnauthorized: false },
+      auth: {
+        user: process.env.EMAIL.trim(),
+        pass: process.env.EMAIL_APP_PASSWORD.trim(),
+      },
+    });
+
+    const htmlContent = `
+      <div style="font-family:Poppins,Arial,sans-serif;max-width:650px;margin:auto;background:#ffffff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);overflow:hidden;">
+        <div style="background:#1565c0;color:#fff;text-align:center;padding:18px 10px;font-size:20px;font-weight:600;">
+          Complaint Registered Successfully ✅
+        </div>
+        <div style="padding:25px 30px;color:#333;">
+          <p>Dear <b>${custName}</b>,</p>
+          <p>Thank you for reaching out to us. Your complaint has been registered successfully.</p>
+          
+          <div style="margin:20px 0;background:#f1f5ff;border-left:4px solid #1565c0;padding:15px 20px;border-radius:4px;">
+            <p style="margin:0 0 8px 0;font-size:13px;color:#666;">YOUR TICKET ID</p>
+            <p style="margin:0;font-size:28px;font-weight:700;color:#1565c0;letter-spacing:2px;">${ticketId}</p>
+          </div>
+
+          <table style="width:100%;border-collapse:collapse;margin:15px 0;">
+            <tr style="background:#f9f9f9;">
+              <td style="padding:10px 12px;font-weight:600;color:#555;width:40%;border:1px solid #eee;">Product</td>
+              <td style="padding:10px 12px;border:1px solid #eee;">${product}</td>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;font-weight:600;color:#555;border:1px solid #eee;">Complaint</td>
+              <td style="padding:10px 12px;border:1px solid #eee;">${complaint}</td>
+            </tr>
+            <tr style="background:#f9f9f9;">
+              <td style="padding:10px 12px;font-weight:600;color:#555;border:1px solid #eee;">Status</td>
+              <td style="padding:10px 12px;border:1px solid #eee;color:#e65100;font-weight:600;">Open</td>
+            </tr>
+          </table>
+
+          <p>Our support team will contact you shortly regarding your complaint.</p>
+          <p style="color:#d32f2f;font-size:13px;">⚠️ Please save your Ticket ID <b>${ticketId}</b> for future reference.</p>
+          <br/>
+          <p>Thanks &amp; Regards,</p>
+          <p><b>Team ProClient360</b></p>
+        </div>
+        <div style="text-align:center;background:#f9f9f9;padding:15px 10px;font-size:13px;color:#666;">
+          <p style="margin:0;">
+            Powered by
+            <a href="https://proclient360.com" style="color:#1565c0;text-decoration:none;">ProClient360</a>
+          </p>
+        </div>
+        <div style="padding:10px 20px 15px 20px;overflow:hidden;">
+          <div style="float:left;font-size:12px;color:#999;">www.proclient360.com</div>
+          <div style="float:right;font-size:12px;color:#999;">ProClient360 Support</div>
+        </div>
+      </div>
+    `;
+
+    await transporter.sendMail({
+      from: `"ProClient360 Support" <${process.env.EMAIL.trim()}>`,
+      to: email,
+      subject: `Complaint Registered – Ticket ID: ${ticketId} – ProClient360`,
+      html: htmlContent,
+    });
+
+    console.log(`✅ Ticket confirmation email sent to ${email} for ticket ${ticketId}`);
+    return true;
+
+  } catch (error) {
+    // Don't fail ticket creation if confirmation email fails
+    console.error("❌ Ticket confirmation email failed:", error.message);
+    return false;
+  }
+};
+
+// ============================================================
 // STEP 3 — RAISE TICKET
 // ============================================================
 exports.raiseTicket = async (req, res) => {
@@ -215,7 +291,6 @@ exports.raiseTicket = async (req, res) => {
 
     const mobileStr = String(mobile).trim();
 
-    // Check OTP session is still valid and verified
     const otpRecord = await Otp.findOne({
       mobile: mobileStr,
       isVerified: true,
@@ -237,7 +312,6 @@ exports.raiseTicket = async (req, res) => {
       });
     }
 
-    // ✅ Build Address object — ticketSchema requires object not string
     const b = customer.billingAddress || {};
     const Address = {
       add:     (b.add     && b.add.trim()     !== "") ? b.add.trim()     : "N/A",
@@ -247,7 +321,6 @@ exports.raiseTicket = async (req, res) => {
       pincode: (b.pincode && b.pincode !== "")        ? b.pincode        : 0,
     };
 
-    // Generate unique Ticket ID
     const year = new Date().getFullYear();
     const countThisYear = await Ticket.countDocuments({
       uniqueTicketId: { $regex: `^TKT-${year}-` },
@@ -271,6 +344,15 @@ exports.raiseTicket = async (req, res) => {
     });
 
     console.log(`✅ Ticket created: ${uniqueTicketId}`);
+
+    // ✅ Send confirmation email to customer (non-blocking)
+    sendTicketConfirmationToCustomer(
+      customer.email,
+      customer.custName,
+      uniqueTicketId,
+      product,
+      complaint.trim()
+    );
 
     // Clean up OTP
     await Otp.deleteMany({ mobile: mobileStr });
