@@ -146,6 +146,13 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Remarks cannot exceed 500 characters'],
   },
+  // ✅ NEW FIELD
+  vendorProducts: {
+    type: String,
+    trim: true,
+    maxlength: [1000, 'Vendor products cannot exceed 1000 characters'],
+    default: "",
+  },
   registeredFromLink: {
     type: Boolean,
     default: false,

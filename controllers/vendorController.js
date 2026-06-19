@@ -69,6 +69,8 @@ exports.showAll = async (req, res) => {
           { typeOfVendor: { $regex: searchRegex } },
           { materialCategory: { $regex: searchRegex } },
           { customMaterialCategory: { $regex: searchRegex } },
+          // ✅ NEW: also search vendorProducts
+          { vendorProducts: { $regex: searchRegex } },
         ],
       };
     } else {
@@ -112,7 +114,7 @@ exports.showAll = async (req, res) => {
       error: "Error while fetching vendors: " + error.message,
     });
   }
-}; 
+};
 
 // helper: if email is "na" or has no "@", make it unique
 const normalizeEmail = (email) => {
@@ -142,7 +144,9 @@ exports.createVendor = async (req, res) => {
       phoneNumber2,
       customVendorType,
       remarks,
-      manualAddress
+      manualAddress,
+      // ✅ NEW FIELD
+      vendorProducts,
     } = req.body;
 
     let addressData = billingAddress;
@@ -174,7 +178,9 @@ exports.createVendor = async (req, res) => {
       GSTNo,
       customVendorType: typeOfVendor === 'Other' ? customVendorType : "",
       remarks: remarks || "",
-      manualAddress: typeOfVendor === 'Import' ? manualAddress : ""
+      manualAddress: typeOfVendor === 'Import' ? manualAddress : "",
+      // ✅ NEW FIELD
+      vendorProducts: vendorProducts || "",
     });
 
     if (newVendor) {
@@ -259,6 +265,8 @@ exports.updateVendor = async (req, res) => {
     trackChanges("customVendorType", existingVendor.customVendorType, updatedData.customVendorType);
     trackChanges("remarks", existingVendor.remarks, updatedData.remarks);
     trackChanges("manualAddress", existingVendor.manualAddress, updatedData.manualAddress);
+    // ✅ NEW FIELD tracking
+    trackChanges("vendorProducts", existingVendor.vendorProducts, updatedData.vendorProducts);
 
     if (updatedData.typeOfVendor !== 'Import' && updatedData.typeOfVendor !== 'Other' && updatedData.billingAddress) {
       trackChanges("billingAddress.add", existingVendor.billingAddress?.add, updatedData.billingAddress.add);
@@ -402,7 +410,9 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       'price', 'websiteURL', 'linkedinURL', 'twitterProfile', 'vendorContactPersonName1',
       'phoneNumber1', 'vendorContactPersonName2', 'phoneNumber2', 'materialCategory',
       'customMaterialCategory', 'vendorRating', 'brandsWorkWith', 'customVendorType',
-      'remarks', 'manualAddress'
+      'remarks', 'manualAddress',
+      // ✅ NEW FIELD
+      'vendorProducts',
     ];
 
     vendorFields.forEach(field => {
