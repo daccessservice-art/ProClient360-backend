@@ -7,21 +7,11 @@ const {
 } = require("../services/otpService");
 
 // ============================================================
-// STEP 1 — SEND OTP
+// HELPER — Find customer by mobile OR email
 // ============================================================
-exports.sendOtp = async (req, res) => {
-  try {
-    const { mobile } = req.body;
-
-    if (!mobile || String(mobile).trim().length !== 10) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a valid 10-digit mobile number",
-      });
-    }
-
+const findCustomerByMobileOrEmail = async (mobile, email) => {
+  if (mobile) {
     const mobileStr = String(mobile).trim();
-
     const customer = await Customer.findOne({
       $or: [
         { phoneNumber1: mobileStr },
@@ -32,57 +22,173 @@ exports.sendOtp = async (req, res) => {
       ],
     }).populate("company", "companyName");
 
-    console.log("🔍 Customer lookup for mobile:", mobileStr);
+    if (!customer) return { customer: null, matchedEmail: null };
+    return { customer, matchedEmail: customer.email };
+  }
+
+  if (email) {
+    const emailStr = String(email).trim().toLowerCase();
+
+    const customer = await Customer.findOne({
+      $or: [
+        { email: emailStr },
+        { customerContactPersonEmail1: emailStr },
+        { customerContactPersonEmail2: emailStr },
+        { customerContactPersonEmail3: emailStr },
+        { customerContactPersonEmail4: emailStr },
+        { customerContactPersonEmail5: emailStr },
+      ],
+    }).populate("company", "companyName");
+
+    if (!customer) return { customer: null, matchedEmail: null };
+
+    // ✅ Find which exact email matched — send OTP to that email
+    let matchedEmail = null;
+    if (customer.email && customer.email.toLowerCase() === emailStr) {
+      matchedEmail = customer.email;
+    } else if (customer.customerContactPersonEmail1 &&
+      customer.customerContactPersonEmail1.toLowerCase() === emailStr) {
+      matchedEmail = customer.customerContactPersonEmail1;
+    } else if (customer.customerContactPersonEmail2 &&
+      customer.customerContactPersonEmail2.toLowerCase() === emailStr) {
+      matchedEmail = customer.customerContactPersonEmail2;
+    } else if (customer.customerContactPersonEmail3 &&
+      customer.customerContactPersonEmail3.toLowerCase() === emailStr) {
+      matchedEmail = customer.customerContactPersonEmail3;
+    } else if (customer.customerContactPersonEmail4 &&
+      customer.customerContactPersonEmail4.toLowerCase() === emailStr) {
+      matchedEmail = customer.customerContactPersonEmail4;
+    } else if (customer.customerContactPersonEmail5 &&
+      customer.customerContactPersonEmail5.toLowerCase() === emailStr) {
+      matchedEmail = customer.customerContactPersonEmail5;
+    }
+
+    if (!matchedEmail) matchedEmail = customer.email;
+    return { customer, matchedEmail };
+  }
+
+  return { customer: null, matchedEmail: null };
+};
+
+// ============================================================
+// ✅ HELPER — Generate Ticket ID
+// Format: TKT-2026-22JUN-0001
+// ============================================================
+const generateTicketId = async () => {
+  const now = new Date();
+  const year = now.getFullYear();
+
+  const day = String(now.getDate()).padStart(2, "0");
+  const monthNames = [
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+  ];
+  const month = monthNames[now.getMonth()];
+
+  const datePrefix = `TKT-${year}-${day}${month}`;
+
+  // Count tickets created today with same prefix
+  const countToday = await Ticket.countDocuments({
+    uniqueTicketId: { $regex: `^${datePrefix}-` },
+  });
+
+  const sequence = String(countToday + 1).padStart(4, "0");
+  return `${datePrefix}-${sequence}`;
+};
+
+// ============================================================
+// STEP 1 — SEND OTP
+// ============================================================
+exports.sendOtp = async (req, res) => {
+  try {
+    const { mobile, email } = req.body;
+
+    if (!mobile && !email) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a mobile number or email address",
+      });
+    }
+
+    if (mobile && String(mobile).trim().length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid 10-digit mobile number",
+      });
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid email address",
+      });
+    }
+
+    const mobileStr = mobile ? String(mobile).trim() : null;
+    const emailStr = email ? String(email).trim().toLowerCase() : null;
+
+    const { customer, matchedEmail } = await findCustomerByMobileOrEmail(
+      mobileStr,
+      emailStr
+    );
+
+    console.log(
+      "🔍 Customer lookup —",
+      mobileStr ? `mobile: ${mobileStr}` : `email: ${emailStr}`
+    );
     console.log("🔍 Customer found:", customer ? customer.custName : "NOT FOUND");
+    console.log("📧 OTP will be sent to:", matchedEmail || "NO EMAIL");
 
     if (!customer) {
       return res.status(404).json({
         success: false,
-        message: "Mobile number not found in our records. Please contact support.",
+        message: mobile
+          ? "Mobile number not found in our records. Please contact support."
+          : "Email address not found in our records. Please contact support.",
       });
     }
 
-    if (!customer.email || customer.email.trim() === "") {
+    if (!matchedEmail) {
       return res.status(400).json({
         success: false,
-        message: "No email address registered for this account. Please contact support.",
+        message: "No email address found for this account. Please contact support.",
       });
     }
 
     const otp = generateOtp();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const otpKey = mobileStr || emailStr;
 
     console.log("============================================");
-    console.log(`🔑 OTP FOR ${mobileStr}: ${otp}`);
-    console.log(`📧 Will send to: ${customer.email}`);
+    console.log(`🔑 OTP FOR [${otpKey}]: ${otp}`);
+    console.log(`📧 Sending OTP to: ${matchedEmail}`);
     console.log("============================================");
 
-    await Otp.deleteMany({ mobile: mobileStr });
+    await Otp.deleteMany({ mobile: otpKey });
 
     await Otp.create({
-      mobile: mobileStr,
+      mobile: otpKey,
       otp,
       customerId: customer._id,
       expiresAt,
     });
 
-    const emailSent = await sendOtpViaEmail(customer.email.trim(), otp);
+    const emailSent = await sendOtpViaEmail(matchedEmail, otp);
 
     if (emailSent) {
-      console.log(`✅ OTP email sent to ${customer.email}`);
+      console.log(`✅ OTP sent successfully to ${matchedEmail}`);
       return res.status(200).json({
         success: true,
         message: "OTP sent to your registered email address",
       });
     } else {
-      await Otp.deleteMany({ mobile: mobileStr });
-      console.error(`❌ Failed to send OTP email to ${customer.email}`);
+      await Otp.deleteMany({ mobile: otpKey });
+      console.error(`❌ Failed to send OTP to ${matchedEmail}`);
       return res.status(500).json({
         success: false,
-        message: "Failed to send OTP email. Please try again after some time.",
+        message: "Failed to send OTP email. Please try again.",
       });
     }
-
   } catch (error) {
     console.error("❌ sendOtp controller error:", error);
     return res.status(500).json({
@@ -98,20 +204,23 @@ exports.sendOtp = async (req, res) => {
 // ============================================================
 exports.verifyOtp = async (req, res) => {
   try {
-    const { mobile, otp } = req.body;
+    const { mobile, email, otp } = req.body;
 
-    if (!mobile || !otp) {
+    if ((!mobile && !email) || !otp) {
       return res.status(400).json({
         success: false,
-        message: "Mobile number and OTP are required",
+        message: "Mobile/email and OTP are required",
       });
     }
 
-    const mobileStr = String(mobile).trim();
+    const otpKey = mobile
+      ? String(mobile).trim()
+      : String(email).trim().toLowerCase();
+
     const otpStr = String(otp).trim();
 
     const otpRecord = await Otp.findOne({
-      mobile: mobileStr,
+      mobile: otpKey,
       expiresAt: { $gt: new Date() },
     });
 
@@ -126,7 +235,7 @@ exports.verifyOtp = async (req, res) => {
     await otpRecord.save();
 
     if (otpRecord.attempts > 3) {
-      await Otp.deleteMany({ mobile: mobileStr });
+      await Otp.deleteMany({ mobile: otpKey });
       return res.status(400).json({
         success: false,
         message: "Too many wrong attempts. Please request a new OTP.",
@@ -145,8 +254,7 @@ exports.verifyOtp = async (req, res) => {
     await otpRecord.save();
 
     const customer = await Customer.findById(otpRecord.customerId).populate(
-      "company",
-      "companyName"
+      "company", "companyName"
     );
 
     if (!customer) {
@@ -172,7 +280,7 @@ exports.verifyOtp = async (req, res) => {
         _id: customer._id,
         custName: customer.custName,
         email: customer.email,
-        mobile: mobileStr,
+        mobile: mobile || "",
         address: addressParts.join(", "),
         companyName: customer.company?.companyName || "",
         contactPerson:
@@ -181,7 +289,6 @@ exports.verifyOtp = async (req, res) => {
           customer.custName,
       },
     });
-
   } catch (error) {
     console.error("❌ verifyOtp controller error:", error);
     return res.status(500).json({
@@ -193,9 +300,15 @@ exports.verifyOtp = async (req, res) => {
 };
 
 // ============================================================
-// ✅ NEW — SEND TICKET CONFIRMATION EMAIL TO CUSTOMER
+// ✅ SEND TICKET CONFIRMATION EMAIL TO CUSTOMER
 // ============================================================
-const sendTicketConfirmationToCustomer = async (email, custName, ticketId, product, complaint) => {
+const sendTicketConfirmationToCustomer = async (
+  email,
+  custName,
+  ticketId,
+  product,
+  complaint
+) => {
   try {
     const nodemailer = require("nodemailer");
 
@@ -217,13 +330,11 @@ const sendTicketConfirmationToCustomer = async (email, custName, ticketId, produ
         </div>
         <div style="padding:25px 30px;color:#333;">
           <p>Dear <b>${custName}</b>,</p>
-          <p>Thank you for reaching out to us. Your complaint has been registered successfully.</p>
-          
+          <p>Thank you for reaching out. Your complaint has been registered successfully.</p>
           <div style="margin:20px 0;background:#f1f5ff;border-left:4px solid #1565c0;padding:15px 20px;border-radius:4px;">
             <p style="margin:0 0 8px 0;font-size:13px;color:#666;">YOUR TICKET ID</p>
-            <p style="margin:0;font-size:28px;font-weight:700;color:#1565c0;letter-spacing:2px;">${ticketId}</p>
+            <p style="margin:0;font-size:26px;font-weight:700;color:#1565c0;letter-spacing:2px;">${ticketId}</p>
           </div>
-
           <table style="width:100%;border-collapse:collapse;margin:15px 0;">
             <tr style="background:#f9f9f9;">
               <td style="padding:10px 12px;font-weight:600;color:#555;width:40%;border:1px solid #eee;">Product</td>
@@ -238,18 +349,16 @@ const sendTicketConfirmationToCustomer = async (email, custName, ticketId, produ
               <td style="padding:10px 12px;border:1px solid #eee;color:#e65100;font-weight:600;">Open</td>
             </tr>
           </table>
-
-          <p>Our support team will contact you shortly regarding your complaint.</p>
-          <p style="color:#d32f2f;font-size:13px;">⚠️ Please save your Ticket ID <b>${ticketId}</b> for future reference.</p>
+          <p>Our support team will contact you shortly.</p>
+          <p style="color:#d32f2f;font-size:13px;">
+            ⚠️ Please save your Ticket ID <b>${ticketId}</b> for future reference.
+          </p>
           <br/>
           <p>Thanks &amp; Regards,</p>
           <p><b>Team ProClient360</b></p>
         </div>
         <div style="text-align:center;background:#f9f9f9;padding:15px 10px;font-size:13px;color:#666;">
-          <p style="margin:0;">
-            Powered by
-            <a href="https://proclient360.com" style="color:#1565c0;text-decoration:none;">ProClient360</a>
-          </p>
+          <p style="margin:0;">Powered by <a href="https://proclient360.com" style="color:#1565c0;text-decoration:none;">ProClient360</a></p>
         </div>
         <div style="padding:10px 20px 15px 20px;overflow:hidden;">
           <div style="float:left;font-size:12px;color:#999;">www.proclient360.com</div>
@@ -265,11 +374,9 @@ const sendTicketConfirmationToCustomer = async (email, custName, ticketId, produ
       html: htmlContent,
     });
 
-    console.log(`✅ Ticket confirmation email sent to ${email} for ticket ${ticketId}`);
+    console.log(`✅ Confirmation email sent to ${email} — Ticket: ${ticketId}`);
     return true;
-
   } catch (error) {
-    // Don't fail ticket creation if confirmation email fails
     console.error("❌ Ticket confirmation email failed:", error.message);
     return false;
   }
@@ -280,19 +387,21 @@ const sendTicketConfirmationToCustomer = async (email, custName, ticketId, produ
 // ============================================================
 exports.raiseTicket = async (req, res) => {
   try {
-    const { mobile, product, complaint } = req.body;
+    const { mobile, email, product, complaint } = req.body;
 
-    if (!mobile || !product || !complaint) {
+    if ((!mobile && !email) || !product || !complaint) {
       return res.status(400).json({
         success: false,
-        message: "Mobile, product, and complaint are required",
+        message: "Mobile/email, product, and complaint are required",
       });
     }
 
-    const mobileStr = String(mobile).trim();
+    const otpKey = mobile
+      ? String(mobile).trim()
+      : String(email).trim().toLowerCase();
 
     const otpRecord = await Otp.findOne({
-      mobile: mobileStr,
+      mobile: otpKey,
       isVerified: true,
       expiresAt: { $gt: new Date() },
     });
@@ -312,6 +421,7 @@ exports.raiseTicket = async (req, res) => {
       });
     }
 
+    // Build Address object
     const b = customer.billingAddress || {};
     const Address = {
       add:     (b.add     && b.add.trim()     !== "") ? b.add.trim()     : "N/A",
@@ -321,13 +431,10 @@ exports.raiseTicket = async (req, res) => {
       pincode: (b.pincode && b.pincode !== "")        ? b.pincode        : 0,
     };
 
-    const year = new Date().getFullYear();
-    const countThisYear = await Ticket.countDocuments({
-      uniqueTicketId: { $regex: `^TKT-${year}-` },
-    });
-    const uniqueTicketId = `TKT-${year}-${String(countThisYear + 1).padStart(4, "0")}`;
+    // ✅ Generate new format Ticket ID: TKT-2026-22JUN-0001
+    const uniqueTicketId = await generateTicketId();
 
-    console.log(`🎫 Creating ticket ${uniqueTicketId} for customer: ${customer.custName}`);
+    console.log(`🎫 Creating ticket ${uniqueTicketId} for: ${customer.custName}`);
 
     const newTicket = await Ticket.create({
       uniqueTicketId,
@@ -338,16 +445,20 @@ exports.raiseTicket = async (req, res) => {
       product,
       contactPersonEmail: customer.email || "",
       contactPerson:      customer.customerContactPersonName1 || customer.custName,
-      contactNumber:      Number(mobileStr),
+      contactNumber:      mobile ? Number(String(mobile).trim()) : 0,
       source:             "Customer Portal",
       isCustomerRaised:   true,
     });
 
     console.log(`✅ Ticket created: ${uniqueTicketId}`);
 
-    // ✅ Send confirmation email to customer (non-blocking)
+    // ✅ Confirmation email to exact email used to login
+    const confirmationEmail = email
+      ? String(email).trim().toLowerCase()
+      : customer.email;
+
     sendTicketConfirmationToCustomer(
-      customer.email,
+      confirmationEmail,
       customer.custName,
       uniqueTicketId,
       product,
@@ -355,7 +466,7 @@ exports.raiseTicket = async (req, res) => {
     );
 
     // Clean up OTP
-    await Otp.deleteMany({ mobile: mobileStr });
+    await Otp.deleteMany({ mobile: otpKey });
 
     return res.status(201).json({
       success: true,
@@ -363,7 +474,6 @@ exports.raiseTicket = async (req, res) => {
       ticketId: uniqueTicketId,
       ticket: newTicket,
     });
-
   } catch (error) {
     console.error("❌ raiseTicket controller error:", error);
     return res.status(500).json({
