@@ -1,6 +1,7 @@
 const Customer = require("../models/customerModel");
 const Otp = require("../models/otpModel");
 const Ticket = require("../models/ticketModel");
+const CustomerRaiseTicket = require("../models/customerRaiseTicketModel");
 const {
   generateOtp,
   sendOtpViaEmail,
@@ -8,11 +9,19 @@ const {
 
 // ============================================================
 // HELPER — Find customer by mobile OR email
+// Searches:
+// 1. Customer model — all 5 phone fields + main email + all 5 contact emails
+// 2. CustomerRaiseTicket model — contacts[].contactNumber + contacts[].contactEmail
+// Returns: { customer, matchedEmail }
 // ============================================================
 const findCustomerByMobileOrEmail = async (mobile, email) => {
+
+  // ── SEARCH BY MOBILE ──
   if (mobile) {
     const mobileStr = String(mobile).trim();
-    const customer = await Customer.findOne({
+
+    // 1️⃣ Search in Customer model — all 5 phone fields
+    let customer = await Customer.findOne({
       $or: [
         { phoneNumber1: mobileStr },
         { phoneNumber2: mobileStr },
@@ -22,14 +31,45 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
       ],
     }).populate("company", "companyName");
 
-    if (!customer) return { customer: null, matchedEmail: null };
-    return { customer, matchedEmail: customer.email };
+    if (customer) {
+      console.log(`✅ Found in Customer model by mobile: ${mobileStr}`);
+      return { customer, matchedEmail: customer.email };
+    }
+
+    // 2️⃣ Search in CustomerRaiseTicket — contacts[].contactNumber
+    const raiseTicket = await CustomerRaiseTicket.findOne({
+      "contacts.contactNumber": mobileStr,
+    }).populate({
+      path: "customer",
+      populate: { path: "company", select: "companyName" },
+    });
+
+    if (raiseTicket && raiseTicket.customer) {
+      console.log(`✅ Found in CustomerRaiseTicket by mobile: ${mobileStr}`);
+
+      // Find the matched contact to get their email for OTP
+      const matchedContact = raiseTicket.contacts.find(
+        (c) => c.contactNumber === mobileStr
+      );
+
+      // Use matched contact email if available, else fallback to customer main email
+      const matchedEmail =
+        (matchedContact?.contactEmail && matchedContact.contactEmail.trim() !== "")
+          ? matchedContact.contactEmail
+          : raiseTicket.customer.email;
+
+      return { customer: raiseTicket.customer, matchedEmail };
+    }
+
+    return { customer: null, matchedEmail: null };
   }
 
+  // ── SEARCH BY EMAIL ──
   if (email) {
     const emailStr = String(email).trim().toLowerCase();
 
-    const customer = await Customer.findOne({
+    // 1️⃣ Search in Customer model — main email + all 5 contact emails
+    let customer = await Customer.findOne({
       $or: [
         { email: emailStr },
         { customerContactPersonEmail1: emailStr },
@@ -40,31 +80,45 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
       ],
     }).populate("company", "companyName");
 
-    if (!customer) return { customer: null, matchedEmail: null };
+    if (customer) {
+      console.log(`✅ Found in Customer model by email: ${emailStr}`);
 
-    // ✅ Find which exact email matched — send OTP to that email
-    let matchedEmail = null;
-    if (customer.email && customer.email.toLowerCase() === emailStr) {
-      matchedEmail = customer.email;
-    } else if (customer.customerContactPersonEmail1 &&
-      customer.customerContactPersonEmail1.toLowerCase() === emailStr) {
-      matchedEmail = customer.customerContactPersonEmail1;
-    } else if (customer.customerContactPersonEmail2 &&
-      customer.customerContactPersonEmail2.toLowerCase() === emailStr) {
-      matchedEmail = customer.customerContactPersonEmail2;
-    } else if (customer.customerContactPersonEmail3 &&
-      customer.customerContactPersonEmail3.toLowerCase() === emailStr) {
-      matchedEmail = customer.customerContactPersonEmail3;
-    } else if (customer.customerContactPersonEmail4 &&
-      customer.customerContactPersonEmail4.toLowerCase() === emailStr) {
-      matchedEmail = customer.customerContactPersonEmail4;
-    } else if (customer.customerContactPersonEmail5 &&
-      customer.customerContactPersonEmail5.toLowerCase() === emailStr) {
-      matchedEmail = customer.customerContactPersonEmail5;
+      // Find which exact email matched
+      let matchedEmail = null;
+      if (customer.email?.toLowerCase() === emailStr) {
+        matchedEmail = customer.email;
+      } else if (customer.customerContactPersonEmail1?.toLowerCase() === emailStr) {
+        matchedEmail = customer.customerContactPersonEmail1;
+      } else if (customer.customerContactPersonEmail2?.toLowerCase() === emailStr) {
+        matchedEmail = customer.customerContactPersonEmail2;
+      } else if (customer.customerContactPersonEmail3?.toLowerCase() === emailStr) {
+        matchedEmail = customer.customerContactPersonEmail3;
+      } else if (customer.customerContactPersonEmail4?.toLowerCase() === emailStr) {
+        matchedEmail = customer.customerContactPersonEmail4;
+      } else if (customer.customerContactPersonEmail5?.toLowerCase() === emailStr) {
+        matchedEmail = customer.customerContactPersonEmail5;
+      }
+
+      if (!matchedEmail) matchedEmail = customer.email;
+      return { customer, matchedEmail };
     }
 
-    if (!matchedEmail) matchedEmail = customer.email;
-    return { customer, matchedEmail };
+    // 2️⃣ Search in CustomerRaiseTicket — contacts[].contactEmail
+    const raiseTicket = await CustomerRaiseTicket.findOne({
+      "contacts.contactEmail": emailStr,
+    }).populate({
+      path: "customer",
+      populate: { path: "company", select: "companyName" },
+    });
+
+    if (raiseTicket && raiseTicket.customer) {
+      console.log(`✅ Found in CustomerRaiseTicket by email: ${emailStr}`);
+
+      // OTP goes to the exact email they entered
+      return { customer: raiseTicket.customer, matchedEmail: emailStr };
+    }
+
+    return { customer: null, matchedEmail: null };
   }
 
   return { customer: null, matchedEmail: null };
@@ -77,17 +131,14 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
 const generateTicketId = async () => {
   const now = new Date();
   const year = now.getFullYear();
-
   const day = String(now.getDate()).padStart(2, "0");
   const monthNames = [
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
   ];
   const month = monthNames[now.getMonth()];
-
   const datePrefix = `TKT-${year}-${day}${month}`;
 
-  // Count tickets created today with same prefix
   const countToday = await Ticket.countDocuments({
     uniqueTicketId: { $regex: `^${datePrefix}-` },
   });
@@ -127,17 +178,18 @@ exports.sendOtp = async (req, res) => {
     const mobileStr = mobile ? String(mobile).trim() : null;
     const emailStr = email ? String(email).trim().toLowerCase() : null;
 
+    // ✅ Search Customer model + CustomerRaiseTicket model
     const { customer, matchedEmail } = await findCustomerByMobileOrEmail(
       mobileStr,
       emailStr
     );
 
     console.log(
-      "🔍 Customer lookup —",
+      "🔍 Lookup —",
       mobileStr ? `mobile: ${mobileStr}` : `email: ${emailStr}`
     );
-    console.log("🔍 Customer found:", customer ? customer.custName : "NOT FOUND");
-    console.log("📧 OTP will be sent to:", matchedEmail || "NO EMAIL");
+    console.log("🔍 Customer:", customer ? customer.custName : "NOT FOUND");
+    console.log("📧 OTP will go to:", matchedEmail || "NO EMAIL");
 
     if (!customer) {
       return res.status(404).json({
@@ -176,21 +228,20 @@ exports.sendOtp = async (req, res) => {
     const emailSent = await sendOtpViaEmail(matchedEmail, otp);
 
     if (emailSent) {
-      console.log(`✅ OTP sent successfully to ${matchedEmail}`);
+      console.log(`✅ OTP sent to ${matchedEmail}`);
       return res.status(200).json({
         success: true,
         message: "OTP sent to your registered email address",
       });
     } else {
       await Otp.deleteMany({ mobile: otpKey });
-      console.error(`❌ Failed to send OTP to ${matchedEmail}`);
       return res.status(500).json({
         success: false,
         message: "Failed to send OTP email. Please try again.",
       });
     }
   } catch (error) {
-    console.error("❌ sendOtp controller error:", error);
+    console.error("❌ sendOtp error:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -290,7 +341,7 @@ exports.verifyOtp = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("❌ verifyOtp controller error:", error);
+    console.error("❌ verifyOtp error:", error);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -303,15 +354,10 @@ exports.verifyOtp = async (req, res) => {
 // ✅ SEND TICKET CONFIRMATION EMAIL TO CUSTOMER
 // ============================================================
 const sendTicketConfirmationToCustomer = async (
-  email,
-  custName,
-  ticketId,
-  product,
-  complaint
+  email, custName, ticketId, product, complaint
 ) => {
   try {
     const nodemailer = require("nodemailer");
-
     const transporter = nodemailer.createTransport({
       host: "smtp.hostinger.com",
       port: 465,
@@ -350,9 +396,7 @@ const sendTicketConfirmationToCustomer = async (
             </tr>
           </table>
           <p>Our support team will contact you shortly.</p>
-          <p style="color:#d32f2f;font-size:13px;">
-            ⚠️ Please save your Ticket ID <b>${ticketId}</b> for future reference.
-          </p>
+          <p style="color:#d32f2f;font-size:13px;">⚠️ Please save your Ticket ID <b>${ticketId}</b> for future reference.</p>
           <br/>
           <p>Thanks &amp; Regards,</p>
           <p><b>Team ProClient360</b></p>
@@ -377,7 +421,7 @@ const sendTicketConfirmationToCustomer = async (
     console.log(`✅ Confirmation email sent to ${email} — Ticket: ${ticketId}`);
     return true;
   } catch (error) {
-    console.error("❌ Ticket confirmation email failed:", error.message);
+    console.error("❌ Confirmation email failed:", error.message);
     return false;
   }
 };
@@ -431,7 +475,7 @@ exports.raiseTicket = async (req, res) => {
       pincode: (b.pincode && b.pincode !== "")        ? b.pincode        : 0,
     };
 
-    // ✅ Generate new format Ticket ID: TKT-2026-22JUN-0001
+    // Generate Ticket ID: TKT-2026-22JUN-0001
     const uniqueTicketId = await generateTicketId();
 
     console.log(`🎫 Creating ticket ${uniqueTicketId} for: ${customer.custName}`);
@@ -452,7 +496,7 @@ exports.raiseTicket = async (req, res) => {
 
     console.log(`✅ Ticket created: ${uniqueTicketId}`);
 
-    // ✅ Confirmation email to exact email used to login
+    // ✅ Send confirmation to exact email used to login
     const confirmationEmail = email
       ? String(email).trim().toLowerCase()
       : customer.email;
@@ -475,7 +519,7 @@ exports.raiseTicket = async (req, res) => {
       ticket: newTicket,
     });
   } catch (error) {
-    console.error("❌ raiseTicket controller error:", error);
+    console.error("❌ raiseTicket error:", error);
     return res.status(500).json({
       success: false,
       message: error.message.includes("validation failed")

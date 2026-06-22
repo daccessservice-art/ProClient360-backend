@@ -64,6 +64,7 @@ const projectPurchaseRoutes = require('./routes/projectPurchaseRoutes');
 // ✅ MISSING IMPORT ADDED HERE
 const customerTicketRoutes = require("./routes/customerTicketRoutes");
 
+const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
 
 const app = express();
 
@@ -190,6 +191,8 @@ app.use('/api/ticket', ticketRoutes);
 
 // ✅ MISSING ROUTE ADDED HERE
 app.use("/api/customer-ticket", customerTicketRoutes);
+
+app.use('/api/customer-raise-ticket', customerRaiseTicketRoutes);
 
 app.use('/api/service', serviceRoutes);
 
