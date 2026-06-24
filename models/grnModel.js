@@ -24,6 +24,10 @@ counterSchema.index({ company: 1, financialYear: 1 }, { unique: true });
 const Counter = mongoose.model('Counter', counterSchema);
 
 const grnItemSchema = new mongoose.Schema({
+  productName: {
+    type: String,
+    trim: true,
+  },
   brandName: {
     type: String,
     trim: true,
