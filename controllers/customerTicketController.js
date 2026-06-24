@@ -9,18 +9,12 @@ const {
 
 // ============================================================
 // HELPER — Find customer by mobile OR email
-// Searches:
-// 1. Customer model — all 5 phone fields + main email + all 5 contact emails
-// 2. CustomerRaiseTicket model — contacts[].contactNumber + contacts[].contactEmail
-// Returns: { customer, matchedEmail }
 // ============================================================
 const findCustomerByMobileOrEmail = async (mobile, email) => {
 
-  // ── SEARCH BY MOBILE ──
   if (mobile) {
     const mobileStr = String(mobile).trim();
 
-    // 1️⃣ Search in Customer model — all 5 phone fields
     let customer = await Customer.findOne({
       $or: [
         { phoneNumber1: mobileStr },
@@ -36,7 +30,6 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
       return { customer, matchedEmail: customer.email };
     }
 
-    // 2️⃣ Search in CustomerRaiseTicket — contacts[].contactNumber
     const raiseTicket = await CustomerRaiseTicket.findOne({
       "contacts.contactNumber": mobileStr,
     }).populate({
@@ -46,29 +39,22 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
 
     if (raiseTicket && raiseTicket.customer) {
       console.log(`✅ Found in CustomerRaiseTicket by mobile: ${mobileStr}`);
-
-      // Find the matched contact to get their email for OTP
       const matchedContact = raiseTicket.contacts.find(
         (c) => c.contactNumber === mobileStr
       );
-
-      // Use matched contact email if available, else fallback to customer main email
       const matchedEmail =
         (matchedContact?.contactEmail && matchedContact.contactEmail.trim() !== "")
           ? matchedContact.contactEmail
           : raiseTicket.customer.email;
-
       return { customer: raiseTicket.customer, matchedEmail };
     }
 
     return { customer: null, matchedEmail: null };
   }
 
-  // ── SEARCH BY EMAIL ──
   if (email) {
     const emailStr = String(email).trim().toLowerCase();
 
-    // 1️⃣ Search in Customer model — main email + all 5 contact emails
     let customer = await Customer.findOne({
       $or: [
         { email: emailStr },
@@ -82,8 +68,6 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
 
     if (customer) {
       console.log(`✅ Found in Customer model by email: ${emailStr}`);
-
-      // Find which exact email matched
       let matchedEmail = null;
       if (customer.email?.toLowerCase() === emailStr) {
         matchedEmail = customer.email;
@@ -98,12 +82,10 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
       } else if (customer.customerContactPersonEmail5?.toLowerCase() === emailStr) {
         matchedEmail = customer.customerContactPersonEmail5;
       }
-
       if (!matchedEmail) matchedEmail = customer.email;
       return { customer, matchedEmail };
     }
 
-    // 2️⃣ Search in CustomerRaiseTicket — contacts[].contactEmail
     const raiseTicket = await CustomerRaiseTicket.findOne({
       "contacts.contactEmail": emailStr,
     }).populate({
@@ -113,8 +95,6 @@ const findCustomerByMobileOrEmail = async (mobile, email) => {
 
     if (raiseTicket && raiseTicket.customer) {
       console.log(`✅ Found in CustomerRaiseTicket by email: ${emailStr}`);
-
-      // OTP goes to the exact email they entered
       return { customer: raiseTicket.customer, matchedEmail: emailStr };
     }
 
@@ -148,6 +128,18 @@ const generateTicketId = async () => {
 };
 
 // ============================================================
+// ✅ CHECK IF CUSTOMER IS BOSCH
+// Returns true if customer name contains "bosch" (case insensitive)
+// ============================================================
+const isBoschCustomer = (custName) => {
+  if (!custName) return false;
+  return custName.toLowerCase().includes("bosch");
+};
+
+// Bosch CC email
+const BOSCH_CC_EMAIL = "security.iccc@in.bosch.com";
+
+// ============================================================
 // STEP 1 — SEND OTP
 // ============================================================
 exports.sendOtp = async (req, res) => {
@@ -178,7 +170,6 @@ exports.sendOtp = async (req, res) => {
     const mobileStr = mobile ? String(mobile).trim() : null;
     const emailStr = email ? String(email).trim().toLowerCase() : null;
 
-    // ✅ Search Customer model + CustomerRaiseTicket model
     const { customer, matchedEmail } = await findCustomerByMobileOrEmail(
       mobileStr,
       emailStr
@@ -352,6 +343,7 @@ exports.verifyOtp = async (req, res) => {
 
 // ============================================================
 // ✅ SEND TICKET CONFIRMATION EMAIL TO CUSTOMER
+// ✅ NEW: If customer name contains "bosch" → CC to BOSCH_CC_EMAIL
 // ============================================================
 const sendTicketConfirmationToCustomer = async (
   email, custName, ticketId, product, complaint
@@ -368,6 +360,14 @@ const sendTicketConfirmationToCustomer = async (
         pass: process.env.EMAIL_APP_PASSWORD.trim(),
       },
     });
+
+    // ✅ Check if Bosch customer — add CC if yes
+    const boschCustomer = isBoschCustomer(custName);
+    const ccEmails = boschCustomer ? [BOSCH_CC_EMAIL] : [];
+
+    if (boschCustomer) {
+      console.log(`🔵 BOSCH customer detected: "${custName}" — CC will be sent to ${BOSCH_CC_EMAIL}`);
+    }
 
     const htmlContent = `
       <div style="font-family:Poppins,Arial,sans-serif;max-width:650px;margin:auto;background:#ffffff;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);overflow:hidden;">
@@ -411,14 +411,27 @@ const sendTicketConfirmationToCustomer = async (
       </div>
     `;
 
-    await transporter.sendMail({
+    // ✅ Build mail options — add cc only for Bosch customers
+    const mailOptions = {
       from: `"ProClient360 Support" <${process.env.EMAIL.trim()}>`,
       to: email,
       subject: `Complaint Registered – Ticket ID: ${ticketId} – ProClient360`,
       html: htmlContent,
-    });
+    };
+
+    // ✅ Add CC only if Bosch customer
+    if (ccEmails.length > 0) {
+      mailOptions.cc = ccEmails.join(", ");
+      console.log(`📧 CC added: ${mailOptions.cc}`);
+    }
+
+    await transporter.sendMail(mailOptions);
 
     console.log(`✅ Confirmation email sent to ${email} — Ticket: ${ticketId}`);
+    if (boschCustomer) {
+      console.log(`✅ CC sent to ${BOSCH_CC_EMAIL} (Bosch customer)`);
+    }
+
     return true;
   } catch (error) {
     console.error("❌ Confirmation email failed:", error.message);
@@ -465,7 +478,6 @@ exports.raiseTicket = async (req, res) => {
       });
     }
 
-    // Build Address object
     const b = customer.billingAddress || {};
     const Address = {
       add:     (b.add     && b.add.trim()     !== "") ? b.add.trim()     : "N/A",
@@ -475,10 +487,14 @@ exports.raiseTicket = async (req, res) => {
       pincode: (b.pincode && b.pincode !== "")        ? b.pincode        : 0,
     };
 
-    // Generate Ticket ID: TKT-2026-22JUN-0001
     const uniqueTicketId = await generateTicketId();
 
     console.log(`🎫 Creating ticket ${uniqueTicketId} for: ${customer.custName}`);
+
+    // ✅ Log if Bosch customer
+    if (isBoschCustomer(customer.custName)) {
+      console.log(`🔵 BOSCH customer ticket: ${customer.custName} — CC will be sent to ${BOSCH_CC_EMAIL}`);
+    }
 
     const newTicket = await Ticket.create({
       uniqueTicketId,
@@ -496,20 +512,19 @@ exports.raiseTicket = async (req, res) => {
 
     console.log(`✅ Ticket created: ${uniqueTicketId}`);
 
-    // ✅ Send confirmation to exact email used to login
+    // ✅ Send confirmation email with CC for Bosch customers
     const confirmationEmail = email
       ? String(email).trim().toLowerCase()
       : customer.email;
 
     sendTicketConfirmationToCustomer(
       confirmationEmail,
-      customer.custName,
+      customer.custName,     // ✅ Pass custName so Bosch check works
       uniqueTicketId,
       product,
       complaint.trim()
     );
 
-    // Clean up OTP
     await Otp.deleteMany({ mobile: otpKey });
 
     return res.status(201).json({
