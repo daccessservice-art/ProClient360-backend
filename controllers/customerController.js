@@ -87,7 +87,8 @@ exports.showAll = async (req, res) => {
               limit, hasNextPage: false, hasPrevPage: false,
             },
             counts: { main: 0, branch: 0 },
-            allCounts: { main: 0, branch: 0 },
+            allCounts: { main: 0, branch: 0, total: 0 },
+            verifiedCounts: { all: 0, ownedBy: null },
           });
         }
       } catch (empError) {
@@ -147,10 +148,38 @@ exports.showAll = async (req, res) => {
     const branchCount = await Customer.countDocuments({ ...query, customerType: "branch" });
 
     // ── ALL-TIME total counts: always unfiltered (only scoped to company) ──
-    // These are shown permanently in the header badges regardless of active filters
     const allMainCount = await Customer.countDocuments({ company: companyId, customerType: "main" });
     const allBranchCount = await Customer.countDocuments({ company: companyId, customerType: "branch" });
     const allTotalCount = await Customer.countDocuments({ company: companyId });
+
+    // ── Verified counts ──
+    // Always show total verified (all company, no filter)
+    const allVerifiedCount = await Customer.countDocuments({ company: companyId, isChecked: true });
+
+    // If ownedBy filter is active, also count verified for that specific owner
+    let ownedByVerifiedCount = null;
+    if (ownedBy && ownedBy.trim() !== "" && ownedBy.toLowerCase() !== "null") {
+      if (ownedBy.trim().toLowerCase() === "na") {
+        ownedByVerifiedCount = await Customer.countDocuments({
+          company: companyId,
+          isChecked: true,
+          $or: [
+            { ownedBy: { $exists: false } },
+            { ownedBy: null },
+            { ownedBy: "" },
+            { ownedBy: { $regex: /^na$/i } },
+            { ownedBy: "N/A" },
+            { ownedBy: "n/a" },
+          ],
+        });
+      } else {
+        ownedByVerifiedCount = await Customer.countDocuments({
+          company: companyId,
+          isChecked: true,
+          ownedBy: ownedBy.trim(),
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,
@@ -169,6 +198,11 @@ exports.showAll = async (req, res) => {
         main: allMainCount,
         branch: allBranchCount,
         total: allTotalCount,
+      },
+      // Verified counts
+      verifiedCounts: {
+        all: allVerifiedCount,       // always shown — total verified company-wide
+        ownedBy: ownedByVerifiedCount, // non-null only when ownedBy filter is active
       },
     });
   } catch (error) {
