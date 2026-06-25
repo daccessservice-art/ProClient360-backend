@@ -313,9 +313,8 @@ exports.feedback = async (req, res) => {
                 { $limit: limit }
             ];
 
-            // Populate feedback for each service
             services = await Service.aggregate(aggregatePipeline);
-            // Manually populate feedback
+
             const feedbackIds = services.map(s => s.feedback).filter(Boolean);
             const { default: FeedbackModel } = await Promise.resolve().then(() => ({ default: Feedback }));
             const feedbacks = await FeedbackModel.find({ _id: { $in: feedbackIds } }).lean();
@@ -362,6 +361,69 @@ exports.feedback = async (req, res) => {
 
             totalRecords = await Service.countDocuments(baseQuery);
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // 📞 EMBED CALL LOG SUMMARY INTO EACH SERVICE — Non-blocking
+        // ═══════════════════════════════════════════════════════════════
+        try {
+            let CallLog;
+            try {
+                CallLog = require('../models/callLogModel');
+            } catch (modelErr) {
+                console.log("CallLog model not found, skipping call summary");
+                CallLog = null;
+            }
+
+            if (CallLog && services.length > 0) {
+                const serviceIds = services.map(s => s._id);
+
+                // Get call summary per service
+                const callSummaries = await CallLog.aggregate([
+                    { $match: { service: { $in: serviceIds } } },
+                    { $sort: { callDateTime: 1 } },
+                    {
+                        $group: {
+                            _id: "$service",
+                            totalCalls: { $sum: 1 },
+                            answeredCalls: {
+                                $sum: { $cond: [{ $eq: ["$callStatus", "Answered"] }, 1, 0] }
+                            },
+                            lastCallDateTime: { $last: "$callDateTime" },
+                            lastCallStatus: { $last: "$callStatus" },
+                            callTimes: { $push: { dt: "$callDateTime", status: "$callStatus" } },
+                        }
+                    }
+                ]);
+
+                // Build map: serviceId → call summary
+                const callMap = {};
+                callSummaries.forEach(s => {
+                    callMap[s._id.toString()] = {
+                        totalCalls: s.totalCalls || 0,
+                        answeredCalls: s.answeredCalls || 0,
+                        notAnsweredCalls: (s.totalCalls || 0) - (s.answeredCalls || 0),
+                        lastCallDateTime: s.lastCallDateTime || null,
+                        lastCallStatus: s.lastCallStatus || null,
+                        callTimes: (s.callTimes || []).map(ct => ({
+                            dateTime: ct.dt,
+                            status: ct.status
+                        }))
+                    };
+                });
+
+                // Attach to each service
+                services = services.map(s => ({
+                    ...s,
+                    callSummary: callMap[s._id.toString()] || null
+                }));
+            } else {
+                services = services.map(s => ({ ...s, callSummary: null }));
+            }
+        } catch (callErr) {
+            console.error("Call log embed error (non-blocking):", callErr.message);
+            services = services.map(s => ({ ...s, callSummary: null }));
+        }
+        // ═══════════════════════════════════════════════════════════════
 
         const totalPages = Math.ceil(totalRecords / limit);
 

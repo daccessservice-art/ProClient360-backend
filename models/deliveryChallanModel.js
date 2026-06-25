@@ -1,20 +1,18 @@
 const mongoose = require('mongoose');
 
 const dcItemSchema = new mongoose.Schema({
-  // ── NEW: store product name alongside brand/model so it can be
-  // displayed in the Add/Update item table and on the printed DC ──
+  // ── Product name can be typed manually or auto-filled from selection ──
   productName: {
     type: String,
     trim: true,
   },
+  // ── FIX: Removed required: true — these are optional when product is typed manually ──
   brandName: {
     type: String,
-    required: [true, 'Brand name is required'],
     trim: true,
   },
   modelNo: {
     type: String,
-    required: [true, 'Model number is required'],
     trim: true,
   },
   quantity: {

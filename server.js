@@ -66,6 +66,8 @@ const customerTicketRoutes = require("./routes/customerTicketRoutes");
 
 const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
 
+const callLogRoutes = require('./routes/callLogRoutes');
+
 const app = express();
 
 const PORT = process.env.PORT || 5443;
@@ -193,6 +195,8 @@ app.use('/api/ticket', ticketRoutes);
 app.use("/api/customer-ticket", customerTicketRoutes);
 
 app.use('/api/customer-raise-ticket', customerRaiseTicketRoutes);
+
+app.use('/api/callLog', callLogRoutes);
 
 app.use('/api/service', serviceRoutes);
 
