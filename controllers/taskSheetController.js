@@ -8,26 +8,28 @@ const { newTaskAssignedMail } = require("../mailsService/newTaskAssign");
 const { taskCompletedMail } = require("../mailsService/taskCompletedMail");
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
+// ─── EXISTING: showAll ────────────────────────────────────────────────────────
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
     const task = await TaskSheet.find({
       company: user.company ? user.company : user._id,
     })
-    .populate("project", "name")
-    .populate("assignedBy", "name")
-    .populate("taskName", "name");
+      .populate("project", "name")
+      .populate("assignedBy", "name")
+      .populate("taskName", "name");
 
     if (task.length <= 0) {
       return res.status(404).json({ success: false, error: "No Task Found" });
     }
-    
+
     res.status(200).json({ task, totalRecord: task.length, success: true });
   } catch (error) {
     res.status(500).json({ error: "Error while fetching the Task Sheets: " + error.message });
   }
 };
 
+// ─── EXISTING: getTaskSheet (Manager view — now also returns child sub-tasks) ─
 exports.getTaskSheet = async (req, res) => {
   try {
     const user = req.user;
@@ -50,27 +52,30 @@ exports.getTaskSheet = async (req, res) => {
       }
     }
 
-    const task = await TaskSheet.find(query)
+    // Fetch ALL task sheets for this project (both manager-assigned and teamlead-assigned)
+    const allTasks = await TaskSheet.find(query)
       .populate({
         path: 'project',
-        select: 'name startDate endDate completeLevel custId', 
+        select: 'name startDate endDate completeLevel custId',
         populate: { path: 'custId', select: 'custName' }
       })
       .populate('taskName', 'name')
       .populate('employees', 'name')
       .populate('assignedBy', 'name')
+      .populate('parentTaskId', 'taskName subtaskName')
       .sort({ startDate: 1 });
 
-    if (task.length <= 0) {
+    if (allTasks.length <= 0) {
       return res.status(404).json({ success: false, error: "No Task Found" });
     }
-    
-    res.status(200).json({ success: true, task });
+
+    res.status(200).json({ success: true, task: allTasks });
   } catch (error) {
     res.status(500).json({ error: "Error while getting taskSheet using id: " + error.message });
   }
 };
 
+// ─── EXISTING: myTask (Employee / Team Lead sees tasks assigned to them) ──────
 exports.myTask = async (req, res) => {
   try {
     const user = req.user;
@@ -85,9 +90,12 @@ exports.myTask = async (req, res) => {
       query.company = user.company;
     }
 
+    // Return tasks assigned directly to this employee/team-lead
+    // (both manager-assigned and teamlead-assigned tasks show up here)
     const task = await TaskSheet.find(query)
       .populate('taskName', 'name')
-      .populate('assignedBy', 'name');
+      .populate('assignedBy', 'name')
+      .populate('parentTaskId', 'taskName subtaskName taskLevel');
 
     res.status(200).json({
       task: task || [],
@@ -100,7 +108,124 @@ exports.myTask = async (req, res) => {
   }
 };
 
-// NEW: Employee updates ONLY the subtask name
+// ─── NEW: getSubTasksForParent ─────────────────────────────────────────────────
+// Returns all child sub-tasks that a Team Lead assigned under a parent task.
+// Used by Manager's TaskSheetMaster to show the full tree.
+exports.getSubTasksForParent = async (req, res) => {
+  try {
+    const { parentId } = req.params;
+    const user = req.user;
+
+    const subTasks = await TaskSheet.find({
+      parentTaskId: parentId,
+      company: user.company ? user.company : user._id,
+    })
+      .populate('taskName', 'name')
+      .populate('employees', 'name')
+      .populate('assignedBy', 'name')
+      .sort({ startDate: 1 });
+
+    res.status(200).json({ success: true, subTasks: subTasks || [] });
+  } catch (error) {
+    res.status(500).json({ error: "Error fetching sub-tasks: " + error.message });
+  }
+};
+
+// ─── NEW: createSubTask ────────────────────────────────────────────────────────
+// Team Lead calls this from their EmployeeTaskGrid to assign a sub-task
+// to one or more employees under one of their own tasks.
+exports.createSubTask = async (req, res) => {
+  try {
+    const { parentTaskId, employees, taskName, subtaskName, startDate, endDate, remark, priority } = req.body;
+    const user = req.user; // Team Lead (employee)
+
+    // Validate required fields
+    if (!parentTaskId || !employees || !taskName || !startDate || !endDate || !priority) {
+      return res.status(400).json({
+        success: false,
+        error: "All required fields must be provided (parentTaskId, employees, taskName, startDate, endDate, priority)"
+      });
+    }
+
+    if (!Array.isArray(employees) || employees.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one employee must be assigned" });
+    }
+
+    if (!['low', 'medium', 'high'].includes(priority)) {
+      return res.status(400).json({ success: false, error: "Invalid priority value" });
+    }
+
+    // Verify the parent task exists and this Team Lead is assigned to it
+    const parentTask = await TaskSheet.findById(parentTaskId).populate('project');
+    if (!parentTask) {
+      return res.status(404).json({ success: false, error: "Parent task not found" });
+    }
+
+    const isAssigned = parentTask.employees.some(
+      empId => empId.toString() === user._id.toString()
+    );
+    if (!isAssigned) {
+      return res.status(403).json({
+        success: false,
+        error: "You can only create sub-tasks under tasks assigned to you"
+      });
+    }
+
+    // Determine company from parent task
+    const companyId = parentTask.company;
+
+    const subTask = await TaskSheet.create({
+      employees,
+      taskName,
+      subtaskName: subtaskName || "",
+      project: parentTask.project._id || parentTask.project,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      remark,
+      priority,
+      company: companyId,
+      assignedBy: user._id,
+      parentTaskId: parentTaskId,
+      assignedByRole: 'teamlead'
+    });
+
+    if (subTask) {
+      const populatedSubTask = await TaskSheet.findById(subTask._id)
+        .populate('taskName', 'name')
+        .populate('employees', 'name')
+        .populate('project', 'name')
+        .populate('assignedBy', 'name')
+        .populate('parentTaskId', 'taskName subtaskName');
+
+      // Send email notifications to assigned employees
+      if (employees && Array.isArray(employees)) {
+        const projectName = parentTask.project?.name || 'Project';
+        for (const employeeId of employees) {
+          try {
+            newTaskAssignedMail(employeeId, subTask, projectName);
+          } catch (emailError) {
+            console.error("Failed to send subtask email:", emailError);
+          }
+        }
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: "Sub-task assigned to employee(s) successfully",
+        data: populatedSubTask
+      });
+    }
+  } catch (error) {
+    console.error("Error creating sub-task:", error);
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ success: false, error: errors.join(', ') });
+    }
+    res.status(500).json({ error: "Error while creating sub-task: " + error.message });
+  }
+};
+
+// ─── EXISTING: updateSubtask ──────────────────────────────────────────────────
 exports.updateSubtask = async (req, res) => {
   try {
     const { id } = req.params;
@@ -108,12 +233,10 @@ exports.updateSubtask = async (req, res) => {
     const user = req.user;
 
     const task = await TaskSheet.findById(id);
-
     if (!task) {
       return res.status(404).json({ success: false, error: "Task not found" });
     }
 
-    // Ensure the employee is assigned to this task
     if (!task.employees.includes(user._id)) {
       return res.status(403).json({ success: false, error: "You are not authorized to update this task" });
     }
@@ -127,6 +250,7 @@ exports.updateSubtask = async (req, res) => {
   }
 };
 
+// ─── EXISTING: notifyCompletion ───────────────────────────────────────────────
 exports.notifyCompletion = async (req, res) => {
   try {
     const { taskId, assignedById, employeeId, taskName } = req.body;
@@ -172,30 +296,22 @@ exports.notifyCompletion = async (req, res) => {
   }
 };
 
+// ─── EXISTING: create (Manager assigns task to Team Lead or Employee) ─────────
 exports.create = async (req, res) => {
   try {
     const { project, employees, taskName, subtaskName, startDate, endDate, remark, priority } = req.body;
     const user = req.user;
 
     if (!project || !employees || !taskName || !startDate || !endDate || !priority) {
-      return res.status(400).json({
-        success: false,
-        error: "All required fields must be provided"
-      });
+      return res.status(400).json({ success: false, error: "All required fields must be provided" });
     }
 
     if (!Array.isArray(employees) || employees.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "At least one employee must be assigned"
-      });
+      return res.status(400).json({ success: false, error: "At least one employee must be assigned" });
     }
 
     if (!['low', 'medium', 'high'].includes(priority)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid priority value"
-      });
+      return res.status(400).json({ success: false, error: "Invalid priority value" });
     }
 
     const existingProject = await Project.findById(project);
@@ -206,14 +322,17 @@ exports.create = async (req, res) => {
     const task = await TaskSheet.create({
       employees,
       taskName,
-      subtaskName, // ✅ Save subtask
+      subtaskName,
       project,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
       remark,
       priority,
       company: user.company ? user.company : user._id,
-      assignedBy: user._id
+      assignedBy: user._id,
+      // Manager-created tasks always have role 'manager' and no parent
+      assignedByRole: 'manager',
+      parentTaskId: null
     });
 
     if (task) {
@@ -227,7 +346,7 @@ exports.create = async (req, res) => {
         .populate('employees', 'name')
         .populate('project', 'name')
         .populate('assignedBy', 'name');
-      
+
       await logCreation(populatedTask, user, req, 'Task');
 
       if (employees && Array.isArray(employees)) {
@@ -253,32 +372,30 @@ exports.create = async (req, res) => {
     }
   } catch (error) {
     console.error("Error creating task sheet:", error);
-    
     if (error.name === 'ValidationError') {
       const errors = Object.values(error.errors).map(err => err.message);
       return res.status(400).json({ success: false, error: errors.join(', ') });
     }
-    
     if (error.code === 11000) {
       return res.status(400).json({ success: false, error: "Duplicate entry found" });
     }
-    
     res.status(500).json({ error: "Error while creating taskSheet: " + error.message });
   }
 };
 
+// ─── EXISTING: update ─────────────────────────────────────────────────────────
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
     const updateData = req.body;
-    
+
     const existingTask = await TaskSheet.findById(id)
       .populate('taskName', 'name')
       .populate('employees', 'name')
       .populate('project', 'name')
       .populate('assignedBy', 'name');
-      
+
     if (!existingTask) {
       return res.status(404).json({ success: false, error: "TaskSheet not found" });
     }
@@ -299,10 +416,10 @@ exports.update = async (req, res) => {
     const oldEmployeeIds = oldTaskData.employees;
     const newEmployeeIds = updateData.employees ? updateData.employees.map(id => id.toString()).sort() : oldEmployeeIds;
     const employeesChanged = JSON.stringify(oldEmployeeIds) !== JSON.stringify(newEmployeeIds);
-    
+
     delete updateData.company;
     delete updateData.assignedBy;
-    
+
     const task = await TaskSheet.findByIdAndUpdate(id, updateData, { new: true, runValidators: true })
       .populate('taskName', 'name')
       .populate('employees', 'name')
@@ -336,7 +453,7 @@ exports.update = async (req, res) => {
       const { logAssignment } = require('../helpers/activityLogHelper');
       const addedEmployeeIds = newEmployeeIds.filter(id => !oldEmployeeIds.includes(id));
       const removedEmployeeIds = oldEmployeeIds.filter(id => !newEmployeeIds.includes(id));
-      
+
       for (const employeeId of addedEmployeeIds) {
         try {
           const employee = await Employee.findById(employeeId);
@@ -345,7 +462,7 @@ exports.update = async (req, res) => {
           console.error('Error logging employee assignment:', error);
         }
       }
-      
+
       for (const employeeId of removedEmployeeIds) {
         try {
           const employee = await Employee.findById(employeeId);
@@ -399,6 +516,7 @@ exports.update = async (req, res) => {
   }
 };
 
+// ─── EXISTING: delete ─────────────────────────────────────────────────────────
 exports.delete = async (req, res) => {
   try {
     const taskSheetId = req.params.id;
@@ -412,6 +530,13 @@ exports.delete = async (req, res) => {
     await logDeletion(task, user, req, 'Task');
     await TaskSheet.findByIdAndDelete(taskSheetId);
     await Action.deleteMany({ task: taskSheetId });
+
+    // Also delete any child sub-tasks created under this task
+    const childIds = await TaskSheet.find({ parentTaskId: taskSheetId }).distinct('_id');
+    if (childIds.length > 0) {
+      await TaskSheet.deleteMany({ parentTaskId: taskSheetId });
+      await Action.deleteMany({ task: { $in: childIds } });
+    }
 
     res.status(200).json({ success: true, message: "TaskSheet and associated actions deleted successfully" });
   } catch (error) {

@@ -18,7 +18,7 @@ const taskSheetSchema = new Schema({
   taskName: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Task',
-    required: [true, 'Task name is required'], 
+    required: [true, 'Task name is required'],
   },
   subtaskName: {
     type: String,
@@ -29,6 +29,24 @@ const taskSheetSchema = new Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: "Employee"
   },
+
+  // ─── NEW FIELDS FOR TEAM LEAD LAYER ───────────────────────────────────────
+  // If this task was created by a Team Lead as a sub-assignment,
+  // parentTaskId points to the original Manager-assigned TaskSheet.
+  parentTaskId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'TaskSheet',
+    default: null
+  },
+  // 'manager' = assigned directly by Manager
+  // 'teamlead' = assigned by Team Lead (sub-task under a parent)
+  assignedByRole: {
+    type: String,
+    enum: ['manager', 'teamlead'],
+    default: 'manager'
+  },
+  // ──────────────────────────────────────────────────────────────────────────
+
   priority: {
     type: String,
     enum: ['low', 'medium', 'high'],
@@ -49,7 +67,7 @@ const taskSheetSchema = new Schema({
     required: [true, 'End date is required'],
     validate: [
       {
-        validator: function(value) {
+        validator: function (value) {
           if (!value || !this.startDate) return true;
           return value >= this.startDate;
         },
@@ -68,11 +86,11 @@ const taskSheetSchema = new Schema({
   taskLevel: {
     type: Number,
     min: [0, 'Task level cannot be less than 0'],
-    max: [100, 'Task level cannot exceed 100'], 
+    max: [100, 'Task level cannot exceed 100'],
     default: 0,
   },
   workCompletionPhoto: {
-    type: String 
+    type: String
   }
 }, {
   timestamps: true
