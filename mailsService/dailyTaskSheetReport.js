@@ -113,7 +113,7 @@ const sendDailyTaskSheetReport = async (isScheduledRun = false) => {
 
     // ── Target designations ──
     const targetDesignationNames = [
-      'CEO & Founder',
+      'CEO',
       'Director Digi Solution',
       'Junior Software Developer',
       'Executive Director-Project'

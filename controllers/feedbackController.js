@@ -9,7 +9,7 @@ const { sendLowRatingAlert } = require("../mailsService/lowRatingAlertService");
 // ─── Designations that receive low-rating (1-star) alert emails ────────────
 const MANAGEMENT_DESIGNATION_NAMES = [
     'Director Customer Delight',
-    'CEO & Founder',
+    'CEO',
     'Director Digi Solution',
     'Executive Director-Project',
 ];

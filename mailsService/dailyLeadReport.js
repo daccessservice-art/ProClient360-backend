@@ -76,7 +76,7 @@ const sendDailyLeadReport = async (isScheduledRun = false) => {
     const Designation = require('../models/designationModel');
     const targetDesignationNames = [
       'Director Customer Delight',
-      'CEO & Founder',
+      'CEO',
       'Director Digi Solution',
       'Junior Software Developer',
       'Sales Manager',
