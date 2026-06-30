@@ -53,6 +53,51 @@ const leadSchema = new Schema({
     ref: 'Customer',
     default: null
   },
+  
+  // ✅ NEW FIELDS ADDED
+  customerPriority: {
+    type: String,
+    enum: ['P1', 'P2', 'P3'],
+    default: null
+  },
+  industryType: {
+    type: String,
+    enum: {
+      values: [
+        'IT & Software',
+        'Manufacturing',
+        'Construction & Infrastructure',
+        'Healthcare',
+        'Education',
+        'Retail',
+        'Banking & Finance',
+        'Logistics & Supply Chain',
+        'Hospitality',
+        'Real Estate',
+        'Government & Public Sector',
+        'Energy & Utilities',
+        'Telecom',
+        'Pharmaceuticals',
+        'Automotive',
+        'Dealer',
+        'Hotel',
+        'Gym & Club',
+        'Facility Services',
+        'Labour Contractor',
+        'Security Systems Dealer',
+        'Other',
+      ],
+      message: '{VALUE} is not a valid industry type'
+    },
+    default: null
+  },
+  industryTypeOther: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  // ✅ END NEW FIELDS
+
   remark: {
     type: String,
     trim: true,

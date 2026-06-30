@@ -650,7 +650,9 @@ exports.createLead = async (req, res) => {
       QUERY_PRODUCT_NAME, QUERY_MESSAGE, QUERY_SOURCES_NAME,
       feasibility, assignedTo, assignedBy, assignedTime, customerType, customerId, callLeads,
       projectSize, requirementType, requirementMode, surveyNeeded, surveyDetails,
-      assignedSurveyEngineer, surveyEngineerAssignedAt, surveyEngineerAssignedBy
+      assignedSurveyEngineer, surveyEngineerAssignedAt, surveyEngineerAssignedBy,
+      // ✅ NEW FIELDS
+      customerPriority, industryType, industryTypeOther
     } = req.body;
 
     const leadData = {
@@ -670,6 +672,16 @@ exports.createLead = async (req, res) => {
 
     if (customerType) leadData.customerType = customerType;
     if (customerId)   leadData.customerId   = new Types.ObjectId(customerId);
+
+    // ✅ NEW FIELDS HANDLING
+    if (customerPriority) leadData.customerPriority = customerPriority;
+    if (industryType) {
+      leadData.industryType = industryType;
+      if (industryType === 'Other' && industryTypeOther) {
+        leadData.industryTypeOther = industryTypeOther;
+      }
+    }
+    // ✅ END NEW FIELDS
 
     if (projectSize)       leadData.projectSize       = projectSize;
     if (requirementType)   leadData.requirementType   = requirementType;

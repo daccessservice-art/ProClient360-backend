@@ -12,6 +12,8 @@ dotenv.config();
 const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLeadReport');
 const { initCallUnansweredMailScheduler } = require('./mailsService/callUnansweredMailService');
 const { initializeDailyTaskSheetReportScheduler } = require('./mailsService/dailyTaskSheetReport');
+const { initializeDailySalesManagerReportScheduler } = require('./mailsService/dailySalesManagerReport');
+
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
@@ -67,6 +69,9 @@ const customerTicketRoutes = require("./routes/customerTicketRoutes");
 const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
 
 const callLogRoutes = require('./routes/callLogRoutes');
+
+console.log('Initializing daily Sales Manager report scheduler...');
+initializeDailySalesManagerReportScheduler();
 
 const app = express();
 
