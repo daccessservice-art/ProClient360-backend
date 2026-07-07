@@ -594,6 +594,7 @@ exports.exportCustomersPDF = async (req, res) => {
       margin: 30,
       size: 'A4',
       layout: 'landscape',
+      bufferPages: true, // ← FIX: prevents PDFKit from crashing on switchToPage() for multi-page PDFs
       info: { Title: 'Customer Master Export', Author: 'ProClient360', Subject: 'Customer Data Export', CreationDate: new Date() },
     });
 
@@ -866,6 +867,7 @@ exports.exportVerifiedCustomersPDF = async (req, res) => {
       margin: 30,
       size: 'A4',
       layout: 'landscape',
+      bufferPages: true, // ← FIX: prevents PDFKit from crashing on switchToPage() for multi-page PDFs
       info: { Title: 'Verified Customer Export', Author: 'ProClient360', Subject: 'Verified Customer Data Export', CreationDate: new Date() },
     });
 
@@ -997,6 +999,7 @@ exports.exportNotVerifiedCustomersPDF = async (req, res) => {
       margin: 30,
       size: 'A4',
       layout: 'landscape',
+      bufferPages: true, // ← FIX: prevents PDFKit from crashing on switchToPage() for multi-page PDFs
       info: { Title: 'Not Verified Customer Export', Author: 'ProClient360', Subject: 'Not Verified Customer Data Export', CreationDate: new Date() },
     });
 
