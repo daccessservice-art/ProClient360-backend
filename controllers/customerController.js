@@ -849,3 +849,262 @@ exports.exportCustomersExcel = async (req, res) => {
     if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating Excel: " + error.message });
   }
 };
+
+// ── Verified Customers PDF Export (NEW) ──
+exports.exportVerifiedCustomersPDF = async (req, res) => {
+  try {
+    const user = req.user;
+    const query = { company: user.company || user._id, isChecked: true };
+
+    const customers = await Customer.find(query)
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
+      .populate("createdBy", "name")
+      .populate("branchOf", "custName")
+      .sort({ custName: 1 });
+
+    const doc = new PDFDocument({
+      margin: 30,
+      size: 'A4',
+      layout: 'landscape',
+      info: { Title: 'Verified Customer Export', Author: 'ProClient360', Subject: 'Verified Customer Data Export', CreationDate: new Date() },
+    });
+
+    const filename = `verified_customers_export_${new Date().toISOString().split('T')[0]}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    doc.on('error', (err) => {
+      console.error('Verified PDF generation error:', err);
+      if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating PDF: " + err.message });
+    });
+
+    doc.pipe(res);
+
+    doc.fontSize(20).fillColor('#2c3e50').text('Verified Customer Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).fillColor('#7f8c8d').text(`Generated on: ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).fillColor('#2c3e50').text(`Total Verified Customers: ${customers.length}`);
+    doc.moveDown();
+
+    const tableTop = doc.y;
+    const headers = [
+      'Sr No', 'Name', 'Email', 'Phone 1', 'Contact 1', 'Email 1', 'Designation 1',
+      'Contact 2', 'Email 2', 'Designation 2',
+      'GST No', 'Zone', 'Industry', 'Priority', 'Type', 'Branch Of', 'City', 'State', 'Created By', 'Owned By',
+    ];
+    const columnWidth = [25, 50, 60, 45, 45, 55, 50, 45, 55, 50, 45, 28, 45, 30, 30, 50, 35, 35, 40, 40];
+    const rowHeight = 25;
+
+    const drawHeaders = (yPosition) => {
+      let currentX = 30;
+      doc.rect(30, yPosition, 820, rowHeight).fill('#22c55e');
+      doc.fillColor('#ffffff');
+      doc.fontSize(7);
+      headers.forEach((header, i) => {
+        doc.text(header, currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
+        currentX += columnWidth[i];
+      });
+      return yPosition + rowHeight;
+    };
+
+    let yPosition = drawHeaders(tableTop);
+    let alternateRow = false;
+
+    customers.forEach((customer, index) => {
+      if (yPosition > 500) {
+        doc.addPage();
+        yPosition = 50;
+        yPosition = drawHeaders(yPosition);
+      }
+      if (alternateRow) doc.rect(30, yPosition, 820, rowHeight).fill('#f0fdf4');
+      alternateRow = !alternateRow;
+
+      let currentX = 30;
+      doc.fontSize(6).fillColor('#2c3e50');
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
+      const rowData = [
+        index + 1,
+        customer.custName || '',
+        customer.email || '',
+        customer.phoneNumber1 || '',
+        customer.customerContactPersonName1 || '',
+        customer.customerContactPersonEmail1 || '',
+        customer.customerContactPersonDesignation1 || '',
+        customer.customerContactPersonName2 || '',
+        customer.customerContactPersonEmail2 || '',
+        customer.customerContactPersonDesignation2 || '',
+        customer.GSTNo || '',
+        customer.zone || '',
+        industryDisplay,
+        customer.customerPriority || 'P2',
+        customer.customerType === 'branch' ? 'Branch' : 'Main',
+        customer.branchOf?.custName || '',
+        customer.billingAddress?.city || '',
+        customer.billingAddress?.state || '',
+        customer.createdBy?.name || '',
+        customer.ownedBy || '',
+      ];
+
+      rowData.forEach((text, i) => {
+        doc.text(String(text), currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
+        currentX += columnWidth[i];
+      });
+      yPosition += rowHeight;
+    });
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#95a5a6').text(
+        `Page ${i + 1} of ${range.count}`, 30, doc.page.height - 30, { align: 'center' }
+      );
+    }
+
+    doc.end();
+  } catch (error) {
+    console.error('Verified PDF export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating PDF: " + error.message });
+  }
+};
+
+// ── Not Verified Customers PDF Export (NEW) ──
+exports.exportNotVerifiedCustomersPDF = async (req, res) => {
+  try {
+    const user = req.user;
+    const query = {
+      company: user.company || user._id,
+      $or: [{ isChecked: false }, { isChecked: { $exists: false } }],
+    };
+
+    const customers = await Customer.find(query)
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
+      .populate("createdBy", "name")
+      .populate("branchOf", "custName")
+      .sort({ custName: 1 });
+
+    const doc = new PDFDocument({
+      margin: 30,
+      size: 'A4',
+      layout: 'landscape',
+      info: { Title: 'Not Verified Customer Export', Author: 'ProClient360', Subject: 'Not Verified Customer Data Export', CreationDate: new Date() },
+    });
+
+    const filename = `not_verified_customers_export_${new Date().toISOString().split('T')[0]}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    doc.on('error', (err) => {
+      console.error('Not Verified PDF generation error:', err);
+      if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating PDF: " + err.message });
+    });
+
+    doc.pipe(res);
+
+    doc.fontSize(20).fillColor('#2c3e50').text('Not Verified Customer Report', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(10).fillColor('#7f8c8d').text(`Generated on: ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}`, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).fillColor('#2c3e50').text(`Total Not Verified Customers: ${customers.length}`);
+    doc.moveDown();
+
+    const tableTop = doc.y;
+    const headers = [
+      'Sr No', 'Name', 'Email', 'Phone 1', 'Contact 1', 'Email 1', 'Designation 1',
+      'Contact 2', 'Email 2', 'Designation 2',
+      'GST No', 'Zone', 'Industry', 'Priority', 'Type', 'Branch Of', 'City', 'State', 'Created By', 'Owned By',
+    ];
+    const columnWidth = [25, 50, 60, 45, 45, 55, 50, 45, 55, 50, 45, 28, 45, 30, 30, 50, 35, 35, 40, 40];
+    const rowHeight = 25;
+
+    const drawHeaders = (yPosition) => {
+      let currentX = 30;
+      doc.rect(30, yPosition, 820, rowHeight).fill('#ef4444');
+      doc.fillColor('#ffffff');
+      doc.fontSize(7);
+      headers.forEach((header, i) => {
+        doc.text(header, currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
+        currentX += columnWidth[i];
+      });
+      return yPosition + rowHeight;
+    };
+
+    let yPosition = drawHeaders(tableTop);
+    let alternateRow = false;
+
+    customers.forEach((customer, index) => {
+      if (yPosition > 500) {
+        doc.addPage();
+        yPosition = 50;
+        yPosition = drawHeaders(yPosition);
+      }
+      if (alternateRow) doc.rect(30, yPosition, 820, rowHeight).fill('#fef2f2');
+      alternateRow = !alternateRow;
+
+      let currentX = 30;
+      doc.fontSize(6).fillColor('#2c3e50');
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
+      const rowData = [
+        index + 1,
+        customer.custName || '',
+        customer.email || '',
+        customer.phoneNumber1 || '',
+        customer.customerContactPersonName1 || '',
+        customer.customerContactPersonEmail1 || '',
+        customer.customerContactPersonDesignation1 || '',
+        customer.customerContactPersonName2 || '',
+        customer.customerContactPersonEmail2 || '',
+        customer.customerContactPersonDesignation2 || '',
+        customer.GSTNo || '',
+        customer.zone || '',
+        industryDisplay,
+        customer.customerPriority || 'P2',
+        customer.customerType === 'branch' ? 'Branch' : 'Main',
+        customer.branchOf?.custName || '',
+        customer.billingAddress?.city || '',
+        customer.billingAddress?.state || '',
+        customer.createdBy?.name || '',
+        customer.ownedBy || '',
+      ];
+
+      rowData.forEach((text, i) => {
+        doc.text(String(text), currentX + 2, yPosition + 8, { width: columnWidth[i] - 4 });
+        currentX += columnWidth[i];
+      });
+      yPosition += rowHeight;
+    });
+
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#95a5a6').text(
+        `Page ${i + 1} of ${range.count}`, 30, doc.page.height - 30, { align: 'center' }
+      );
+    }
+
+    doc.end();
+  } catch (error) {
+    console.error('Not Verified PDF export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating PDF: " + error.message });
+  }
+};

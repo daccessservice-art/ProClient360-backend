@@ -381,3 +381,33 @@ exports.updateProduct = async (req, res) => {
     });
   }
 };
+
+// ── NEW: distinct brand list for this company, pulled from the DB instead
+// of localStorage, so every user/browser sees the same up-to-date list. ──
+exports.getBrandsList = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+
+    const brands = await Product.distinct("brandName", {
+      company: companyId,
+      brandName: { $exists: true, $ne: "" },
+    });
+
+    const cleanBrands = brands
+      .filter(Boolean)
+      .map((b) => b.trim())
+      .filter((b) => b.length > 0)
+      .sort((a, b) => a.localeCompare(b));
+
+    res.status(200).json({
+      success: true,
+      brands: cleanBrands,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while fetching brand list: " + error.message,
+    });
+  }
+};

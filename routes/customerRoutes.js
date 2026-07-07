@@ -1,9 +1,15 @@
 const express = require('express');
 const { permissionMiddleware, isCompany } = require('../middlewares/auth');
-const { showAll, createCustomer, updateCustomer, deleteCustomer, getCustomer, exportCustomersPDF, exportCustomersExcel, getCustomersForBranch } = require('../controllers/customerController');
+const {
+  showAll, createCustomer, updateCustomer, deleteCustomer, getCustomer,
+  exportCustomersPDF, exportCustomersExcel, getCustomersForBranch,
+  exportVerifiedCustomersPDF, exportNotVerifiedCustomersPDF, // ← NEW
+} = require('../controllers/customerController');
 const router = express.Router();
 
 router.get('/export/pdf', permissionMiddleware(['viewCustomer']), exportCustomersPDF);
+router.get('/export/pdf/verified', permissionMiddleware(['viewCustomer']), exportVerifiedCustomersPDF); // ← NEW
+router.get('/export/pdf/not-verified', permissionMiddleware(['viewCustomer']), exportNotVerifiedCustomersPDF); // ← NEW
 router.get('/export/excel', permissionMiddleware(['viewCustomer']), exportCustomersExcel);
 router.get('/branch-customers', permissionMiddleware(['viewCustomer']), getCustomersForBranch);
 router.get('/', permissionMiddleware(['viewCustomer']), showAll);

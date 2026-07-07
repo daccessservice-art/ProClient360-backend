@@ -9,6 +9,8 @@ const {
   getAllProductsForReport,
   getDuplicateProducts,  // ✅ NEW
   bulkDeleteProducts,    // ✅ NEW
+  getBrandsList,   // ✅ NEW
+
 } = require('../controllers/productController');
 
 const router = express.Router();
@@ -20,6 +22,7 @@ router.delete('/bulk', permissionMiddleware(['deleteProduct']), bulkDeleteProduc
 router.get('/:id', permissionMiddleware(['viewProduct']), getProduct);
 router.post('/', permissionMiddleware(['createProduct']), createProduct);
 router.put('/:id', permissionMiddleware(['updateProduct']), updateProduct);
+router.get('/brands', permissionMiddleware(['viewProduct']), getBrandsList); // ✅ NEW ROUTE
 router.delete('/:id', permissionMiddleware(['deleteProduct']), deleteProduct);
 
 module.exports = router;
