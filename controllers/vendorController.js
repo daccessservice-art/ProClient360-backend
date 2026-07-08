@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Vendor = require("../models/vendorModel");
 const VendorHistory = require("../models/vendorHistoryModel");
 const VendorLink = require("../models/vendorLinkModel");
@@ -69,7 +70,6 @@ exports.showAll = async (req, res) => {
           { typeOfVendor: { $regex: searchRegex } },
           { materialCategory: { $regex: searchRegex } },
           { customMaterialCategory: { $regex: searchRegex } },
-          // ✅ NEW: also search vendorProducts
           { vendorProducts: { $regex: searchRegex } },
         ],
       };
@@ -116,6 +116,39 @@ exports.showAll = async (req, res) => {
   }
 };
 
+// ✅ NEW: Aggregate vendor counts by typeOfVendor across ALL vendors
+// belonging to the company (not just the current paginated page).
+// This powers the summary cards on the Vendor Master page.
+exports.getVendorTypeCounts = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company ? user.company : user._id;
+
+    const counts = await Vendor.aggregate([
+      { $match: { company: new mongoose.Types.ObjectId(companyId) } },
+      { $group: { _id: "$typeOfVendor", count: { $sum: 1 } } }
+    ]);
+
+    const countByType = {};
+    counts.forEach((c) => {
+      countByType[c._id] = c.count;
+    });
+
+    const totalVendors = await Vendor.countDocuments({ company: companyId });
+
+    res.status(200).json({
+      success: true,
+      countByType,
+      totalVendors
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error fetching vendor type counts: " + error.message
+    });
+  }
+};
+
 // helper: if email is "na" or has no "@", make it unique
 const normalizeEmail = (email) => {
   const e = email.toLowerCase().trim();
@@ -145,7 +178,6 @@ exports.createVendor = async (req, res) => {
       customVendorType,
       remarks,
       manualAddress,
-      // ✅ NEW FIELD
       vendorProducts,
     } = req.body;
 
@@ -179,7 +211,6 @@ exports.createVendor = async (req, res) => {
       customVendorType: typeOfVendor === 'Other' ? customVendorType : "",
       remarks: remarks || "",
       manualAddress: typeOfVendor === 'Import' ? manualAddress : "",
-      // ✅ NEW FIELD
       vendorProducts: vendorProducts || "",
     });
 
@@ -220,12 +251,10 @@ exports.updateVendor = async (req, res) => {
     const { id } = req.params;
     const updatedData = req.body;
 
-    // normalize email on update too
     if (updatedData.email) {
       updatedData.email = normalizeEmail(updatedData.email);
     }
 
-    // Handle customMaterialCategory: clear it if materialCategory is not "Other"
     if (updatedData.materialCategory && updatedData.materialCategory !== 'Other') {
       updatedData.customMaterialCategory = "";
     }
@@ -265,7 +294,6 @@ exports.updateVendor = async (req, res) => {
     trackChanges("customVendorType", existingVendor.customVendorType, updatedData.customVendorType);
     trackChanges("remarks", existingVendor.remarks, updatedData.remarks);
     trackChanges("manualAddress", existingVendor.manualAddress, updatedData.manualAddress);
-    // ✅ NEW FIELD tracking
     trackChanges("vendorProducts", existingVendor.vendorProducts, updatedData.vendorProducts);
 
     if (updatedData.typeOfVendor !== 'Import' && updatedData.typeOfVendor !== 'Other' && updatedData.billingAddress) {
@@ -411,7 +439,6 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       'phoneNumber1', 'vendorContactPersonName2', 'phoneNumber2', 'materialCategory',
       'customMaterialCategory', 'vendorRating', 'brandsWorkWith', 'customVendorType',
       'remarks', 'manualAddress',
-      // ✅ NEW FIELD
       'vendorProducts',
     ];
 
@@ -419,12 +446,10 @@ async function processVendorRegistration(linkId, vendorId, formData, res) {
       if (formData[field]) vendorData[field] = formData[field];
     });
 
-    // normalize email in link registration too
     if (vendorData.email) {
       vendorData.email = normalizeEmail(vendorData.email);
     }
 
-    // Handle customMaterialCategory
     if (vendorData.materialCategory && vendorData.materialCategory !== 'Other') {
       vendorData.customMaterialCategory = "";
     }
