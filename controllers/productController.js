@@ -411,3 +411,32 @@ exports.getBrandsList = async (req, res) => {
     });
   }
 };
+
+// ── NEW: distinct product categories for this company, from the DB ──
+exports.getCategoriesList = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+
+    const categories = await Product.distinct("productCategory", {
+      company: companyId,
+      productCategory: { $exists: true, $ne: "" },
+    });
+
+    const cleanCategories = categories
+      .filter(Boolean)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0)
+      .sort((a, b) => a.localeCompare(b));
+
+    res.status(200).json({
+      success: true,
+      categories: cleanCategories,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while fetching category list: " + error.message,
+    });
+  }
+};

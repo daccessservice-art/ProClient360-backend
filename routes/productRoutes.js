@@ -10,20 +10,20 @@ const {
   getDuplicateProducts,
   bulkDeleteProducts,
   getBrandsList,
+  getCategoriesList,
 } = require('../controllers/productController');
 
 const router = express.Router();
 
-// ── FIXED: All specific named GET routes MUST come before /:id,
-// otherwise Express matches "brands" or "duplicates" as an :id param ──
-
+// ── All specific named GET routes BEFORE /:id ──
 router.get('/', permissionMiddleware(['viewProduct']), showAll);
 router.get('/report/all', permissionMiddleware(['viewProduct']), getAllProductsForReport);
 router.get('/brands', permissionMiddleware(['viewProduct']), getBrandsList);
+router.get('/categories', permissionMiddleware(['viewProduct']), getCategoriesList);
 router.get('/duplicates', permissionMiddleware(['viewProduct']), getDuplicateProducts);
 router.delete('/bulk', permissionMiddleware(['deleteProduct']), bulkDeleteProducts);
 
-// ── Parameterized route LAST — it's a catch-all for any single-segment GET ──
+// ── Parameterized route LAST ──
 router.get('/:id', permissionMiddleware(['viewProduct']), getProduct);
 
 router.post('/', permissionMiddleware(['createProduct']), createProduct);
