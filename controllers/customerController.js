@@ -245,6 +245,32 @@ exports.getCustomersForBranch = async (req, res) => {
   }
 };
 
+// ── Check if Customer Already Exists (by email) — used by "Create Customer" from Won lead ──
+exports.checkCustomerExists = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+    const { email } = req.query;
+
+    if (!email || email.trim() === '') {
+      return res.status(400).json({ success: false, error: "Email is required" });
+    }
+
+    const customer = await Customer.findOne({
+      company: companyId,
+      email: email.toLowerCase().trim(),
+    }).select('_id custName email customerType isChecked');
+
+    if (customer) {
+      return res.status(200).json({ success: true, exists: true, customer });
+    }
+
+    res.status(200).json({ success: true, exists: false, customer: null });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error checking customer: " + error.message });
+  }
+};
+
 exports.createCustomer = async (req, res) => {
   try {
     const user = req.user;
