@@ -1137,3 +1137,294 @@ exports.exportNotVerifiedCustomersPDF = async (req, res) => {
     if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating PDF: " + error.message });
   }
 };
+
+// ── Verified Customers Excel Export (NEW) ──
+exports.exportVerifiedCustomersExcel = async (req, res) => {
+  try {
+    const user = req.user;
+    const query = { company: user.company || user._id, isChecked: true };
+
+    const customers = await Customer.find(query)
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
+      .populate("createdBy", "name email")
+      .populate("branchOf", "custName email")
+      .sort({ custName: 1 });
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ProClient360';
+    workbook.created = new Date();
+
+    const worksheet = workbook.addWorksheet('Verified Customers');
+
+    worksheet.columns = [
+      { header: 'Sr No', key: 'srNo', width: 8 },
+      { header: 'Customer Name', key: 'custName', width: 25 },
+      { header: 'Type', key: 'customerType', width: 10 },
+      { header: 'Branch Of', key: 'branchOf', width: 25 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Phone 1', key: 'phoneNumber1', width: 18 },
+      { header: 'GST No', key: 'GSTNo', width: 15 },
+      { header: 'Zone', key: 'zone', width: 10 },
+      { header: 'Industry Type', key: 'industryType', width: 25 },
+      { header: 'Priority', key: 'customerPriority', width: 10 },
+      { header: 'Contact 1 Name', key: 'contactName1', width: 20 },
+      { header: 'Contact 1 Phone', key: 'contactPhone1', width: 18 },
+      { header: 'Contact 1 Email', key: 'contactEmail1', width: 28 },
+      { header: 'Contact 1 Designation', key: 'contactDesig1', width: 22 },
+      { header: 'Contact 2 Name', key: 'contactName2', width: 20 },
+      { header: 'Contact 2 Phone', key: 'contactPhone2', width: 18 },
+      { header: 'Contact 2 Email', key: 'contactEmail2', width: 28 },
+      { header: 'Contact 2 Designation', key: 'contactDesig2', width: 22 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'City', key: 'city', width: 15 },
+      { header: 'State', key: 'state', width: 15 },
+      { header: 'Country', key: 'country', width: 15 },
+      { header: 'Pincode', key: 'pincode', width: 10 },
+      { header: 'Created By', key: 'createdByName', width: 15 },
+      { header: 'Created By Email', key: 'createdByEmail', width: 25 },
+      { header: 'Owned By', key: 'ownedByName', width: 15 },
+      { header: 'Created Date', key: 'createdAt', width: 15 },
+      { header: 'Is Checked', key: 'isChecked', width: 12 },
+    ];
+
+    const headerRow = worksheet.getRow(1);
+    headerRow.height = 25;
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '22c55e' } }; // green header for Verified
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+
+    customers.forEach((customer, index) => {
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
+      const row = worksheet.addRow({
+        srNo: index + 1,
+        custName: customer.custName || '',
+        customerType: customer.customerType === 'branch' ? 'Branch' : 'Main',
+        branchOf: customer.branchOf?.custName || '',
+        email: customer.email || '',
+        phoneNumber1: customer.phoneNumber1 || '',
+        GSTNo: customer.GSTNo || '',
+        zone: customer.zone || '',
+        industryType: industryDisplay,
+        customerPriority: customer.customerPriority || 'P2',
+        contactName1: customer.customerContactPersonName1 || '',
+        contactPhone1: customer.phoneNumber1 || '',
+        contactEmail1: customer.customerContactPersonEmail1 || '',
+        contactDesig1: customer.customerContactPersonDesignation1 || '',
+        contactName2: customer.customerContactPersonName2 || '',
+        contactPhone2: customer.phoneNumber2 || '',
+        contactEmail2: customer.customerContactPersonEmail2 || '',
+        contactDesig2: customer.customerContactPersonDesignation2 || '',
+        address: customer.billingAddress?.add || '',
+        city: customer.billingAddress?.city || '',
+        state: customer.billingAddress?.state || '',
+        country: customer.billingAddress?.country || '',
+        pincode: customer.billingAddress?.pincode || '',
+        createdByName: customer.createdBy?.name || '',
+        createdByEmail: customer.createdBy?.email || '',
+        ownedByName: customer.ownedBy || '',
+        createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : '',
+        isChecked: customer.isChecked ? '✓ Yes' : 'No',
+      });
+
+      row.height = 20;
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin' }, left: { style: 'thin' },
+          bottom: { style: 'thin' }, right: { style: 'thin' },
+        };
+      });
+
+      if (index % 2 === 0) {
+        row.eachCell((cell) => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'f0fdf4' } };
+        });
+      }
+    });
+
+    const summaryRow = worksheet.addRow({
+      srNo: '', custName: 'Total Verified Customers:', email: customers.length,
+    });
+    summaryRow.height = 25;
+    summaryRow.eachCell((cell, colNumber) => {
+      if (colNumber === 2 || colNumber === 4) {
+        cell.font = { bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'e8f5e9' } };
+      }
+    });
+
+    worksheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
+
+    const filename = `verified_customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Verified Excel export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating Excel: " + error.message });
+  }
+};
+
+// ── Not Verified Customers Excel Export (NEW) ──
+exports.exportNotVerifiedCustomersExcel = async (req, res) => {
+  try {
+    const user = req.user;
+    const query = {
+      company: user.company || user._id,
+      $or: [{ isChecked: false }, { isChecked: { $exists: false } }],
+    };
+
+    const customers = await Customer.find(query)
+      .select('custName email phoneNumber1 phoneNumber2 GSTNo zone billingAddress customerContactPersonName1 customerContactPersonEmail1 customerContactPersonDesignation1 customerContactPersonName2 customerContactPersonEmail2 customerContactPersonDesignation2 customerContactPersonName3 phoneNumber3 customerContactPersonEmail3 customerContactPersonDesignation3 createdAt createdBy ownedBy industryType industryTypeOther customerPriority customerType branchOf isChecked')
+      .populate("createdBy", "name email")
+      .populate("branchOf", "custName email")
+      .sort({ custName: 1 });
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'ProClient360';
+    workbook.created = new Date();
+
+    const worksheet = workbook.addWorksheet('Not Verified Customers');
+
+    worksheet.columns = [
+      { header: 'Sr No', key: 'srNo', width: 8 },
+      { header: 'Customer Name', key: 'custName', width: 25 },
+      { header: 'Type', key: 'customerType', width: 10 },
+      { header: 'Branch Of', key: 'branchOf', width: 25 },
+      { header: 'Email', key: 'email', width: 30 },
+      { header: 'Phone 1', key: 'phoneNumber1', width: 18 },
+      { header: 'GST No', key: 'GSTNo', width: 15 },
+      { header: 'Zone', key: 'zone', width: 10 },
+      { header: 'Industry Type', key: 'industryType', width: 25 },
+      { header: 'Priority', key: 'customerPriority', width: 10 },
+      { header: 'Contact 1 Name', key: 'contactName1', width: 20 },
+      { header: 'Contact 1 Phone', key: 'contactPhone1', width: 18 },
+      { header: 'Contact 1 Email', key: 'contactEmail1', width: 28 },
+      { header: 'Contact 1 Designation', key: 'contactDesig1', width: 22 },
+      { header: 'Contact 2 Name', key: 'contactName2', width: 20 },
+      { header: 'Contact 2 Phone', key: 'contactPhone2', width: 18 },
+      { header: 'Contact 2 Email', key: 'contactEmail2', width: 28 },
+      { header: 'Contact 2 Designation', key: 'contactDesig2', width: 22 },
+      { header: 'Address', key: 'address', width: 35 },
+      { header: 'City', key: 'city', width: 15 },
+      { header: 'State', key: 'state', width: 15 },
+      { header: 'Country', key: 'country', width: 15 },
+      { header: 'Pincode', key: 'pincode', width: 10 },
+      { header: 'Created By', key: 'createdByName', width: 15 },
+      { header: 'Created By Email', key: 'createdByEmail', width: 25 },
+      { header: 'Owned By', key: 'ownedByName', width: 15 },
+      { header: 'Created Date', key: 'createdAt', width: 15 },
+      { header: 'Is Checked', key: 'isChecked', width: 12 },
+    ];
+
+    const headerRow = worksheet.getRow(1);
+    headerRow.height = 25;
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'ef4444' } }; // red header for Not Verified
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+      cell.border = {
+        top: { style: 'thin' }, left: { style: 'thin' },
+        bottom: { style: 'thin' }, right: { style: 'thin' },
+      };
+    });
+
+    customers.forEach((customer, index) => {
+      const industryDisplay = customer.industryType === 'Other'
+        ? (customer.industryTypeOther || 'Other')
+        : (customer.industryType || '');
+
+      const row = worksheet.addRow({
+        srNo: index + 1,
+        custName: customer.custName || '',
+        customerType: customer.customerType === 'branch' ? 'Branch' : 'Main',
+        branchOf: customer.branchOf?.custName || '',
+        email: customer.email || '',
+        phoneNumber1: customer.phoneNumber1 || '',
+        GSTNo: customer.GSTNo || '',
+        zone: customer.zone || '',
+        industryType: industryDisplay,
+        customerPriority: customer.customerPriority || 'P2',
+        contactName1: customer.customerContactPersonName1 || '',
+        contactPhone1: customer.phoneNumber1 || '',
+        contactEmail1: customer.customerContactPersonEmail1 || '',
+        contactDesig1: customer.customerContactPersonDesignation1 || '',
+        contactName2: customer.customerContactPersonName2 || '',
+        contactPhone2: customer.phoneNumber2 || '',
+        contactEmail2: customer.customerContactPersonEmail2 || '',
+        contactDesig2: customer.customerContactPersonDesignation2 || '',
+        address: customer.billingAddress?.add || '',
+        city: customer.billingAddress?.city || '',
+        state: customer.billingAddress?.state || '',
+        country: customer.billingAddress?.country || '',
+        pincode: customer.billingAddress?.pincode || '',
+        createdByName: customer.createdBy?.name || '',
+        createdByEmail: customer.createdBy?.email || '',
+        ownedByName: customer.ownedBy || '',
+        createdAt: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : '',
+        isChecked: customer.isChecked ? '✓ Yes' : 'No',
+      });
+
+      row.height = 20;
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin' }, left: { style: 'thin' },
+          bottom: { style: 'thin' }, right: { style: 'thin' },
+        };
+      });
+
+      if (index % 2 === 0) {
+        row.eachCell((cell) => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'fef2f2' } };
+        });
+      }
+    });
+
+    const summaryRow = worksheet.addRow({
+      srNo: '', custName: 'Total Not Verified Customers:', email: customers.length,
+    });
+    summaryRow.height = 25;
+    summaryRow.eachCell((cell, colNumber) => {
+      if (colNumber === 2 || colNumber === 4) {
+        cell.font = { bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'fee2e2' } };
+      }
+    });
+
+    worksheet.views = [{ state: 'frozen', xSplit: 0, ySplit: 1 }];
+
+    const filename = `not_verified_customers_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error('Not Verified Excel export error:', error);
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Error generating Excel: " + error.message });
+  }
+};
