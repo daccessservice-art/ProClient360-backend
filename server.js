@@ -70,6 +70,8 @@ const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
 
 const callLogRoutes = require('./routes/callLogRoutes');
 
+const oldAMCHistoryRoutes = require('./routes/oldAMCHistoryRoutes');
+
 console.log('Initializing daily Sales Manager report scheduler...');
 initializeDailySalesManagerReportScheduler();
 
@@ -240,6 +242,7 @@ app.use('/api/exhibition', exhibitionRoutes);
 app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/projectPurchase', projectPurchaseRoutes);
+app.use('/api/old-amc-history', oldAMCHistoryRoutes);
 
 
 app.use((err, req, res, next) => {

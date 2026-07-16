@@ -98,6 +98,11 @@ const designationSchema = new mongoose.Schema({
             "updateAMC",
             "deleteAMC",
 
+            "viewOldAMCHistory",
+            "createOldAMCHistory",
+            "updateOldAMCHistory",
+            "deleteOldAMCHistory",
+
             "viewInventory",
             "createInventory",
             "updateInventory",
