@@ -147,8 +147,8 @@ const sendCanteenEmail = () => {
 // Runs once immediately for a manual test — comment out if you only want the scheduled run
 sendCanteenEmail();
 
-// Scheduled daily send at 12:55 PM IST
-cron.schedule('55 12 * * *', () => {
+// Scheduled daily send at 1:18 PM IST
+cron.schedule('18 13 * * *', () => {
   console.log('⏰ CRON: Sending scheduled canteen email at', new Date().toISOString());
   sendCanteenEmail();
 }, {
@@ -156,4 +156,4 @@ cron.schedule('55 12 * * *', () => {
   timezone: "Asia/Kolkata"
 });
 
-console.log('📅 Scheduler initialized — canteen email will be sent daily at 12:55 PM IST.');
+console.log('📅 Scheduler initialized — canteen email will be sent daily at 1:18 PM IST.');
