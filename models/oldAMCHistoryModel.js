@@ -26,6 +26,9 @@ const oldAMCHistorySchema = new mongoose.Schema({
   GSTNo: { type: String, trim: true, default: '' },
   zone: { type: String, trim: true, default: '' },
 
+  startDate: { type: Date, default: null },
+  endDate: { type: Date, default: null },
+
   importBatch: { type: String, default: '' },
   importedBy: {
     type: mongoose.Schema.Types.ObjectId,

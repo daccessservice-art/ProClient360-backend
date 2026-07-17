@@ -2,7 +2,6 @@ const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const OldAMCHistory = require('../models/oldAMCHistoryModel');
 
-// ── Flexible column-name matching for import — matches your exact field list ──
 const HEADER_MAP = {
   custName: ['customer name', 'cust name', 'customername', 'name'],
   customerType: ['customer type', 'type'],
@@ -19,6 +18,8 @@ const HEADER_MAP = {
   pincode: ['pincode', 'pin code', 'zip', 'zip code'],
   GSTNo: ['gst number', 'gst no', 'gst', 'gstin'],
   zone: ['zone', 'region'],
+  startDate: ['start date', 'amc start date', 'contract start'],
+  endDate: ['end date', 'amc end date', 'contract end', 'expiry date'],
 };
 
 const normalizeHeader = (h) => (h || '').toString().trim().toLowerCase();
@@ -37,8 +38,14 @@ const buildHeaderIndex = (headerRow) => {
   return indexMap;
 };
 
-// ── Import Excel/CSV — NOTHING is mandatory in the file except a usable Customer Name column.
-//     Rows with a blank Customer Name are skipped; everything else is stored as-is (blank if absent). ──
+const parseDateCell = (val) => {
+  if (!val) return null;
+  if (val instanceof Date && !isNaN(val)) return val;
+  const parsed = new Date(val);
+  return isNaN(parsed) ? null : parsed;
+};
+
+// ── Import Excel/CSV — NOTHING is mandatory in the file except a usable Customer Name column. ──
 exports.importOldAMCHistory = async (req, res) => {
   try {
     const user = req.user;
@@ -116,6 +123,8 @@ exports.importOldAMCHistory = async (req, res) => {
         },
         GSTNo: get('GSTNo') ? String(get('GSTNo')).trim().toUpperCase() : '',
         zone: get('zone') ? String(get('zone')).trim() : '',
+        startDate: parseDateCell(get('startDate')),
+        endDate: parseDateCell(get('endDate')),
         importBatch,
         importedBy: user._id,
         importedByName: user.name || '',
@@ -142,7 +151,7 @@ exports.importOldAMCHistory = async (req, res) => {
   }
 };
 
-// ── Manual Create (single record) — nothing mandatory except Customer Name ──
+// ── Manual Create (single record) ──
 exports.createOldAMCHistory = async (req, res) => {
   try {
     const user = req.user;
@@ -151,6 +160,7 @@ exports.createOldAMCHistory = async (req, res) => {
       custName, customerType, email, ownedBy, industryType, customerPriority,
       customerContactPersonName1, phoneNumber1, customerContactPersonEmail1,
       customerContactPersonDesignation1, billingAddress, GSTNo, zone,
+      startDate, endDate,
     } = req.body;
 
     if (!custName || custName.trim() === '') {
@@ -176,6 +186,8 @@ exports.createOldAMCHistory = async (req, res) => {
       },
       GSTNo: GSTNo || '',
       zone: zone || '',
+      startDate: startDate || null,
+      endDate: endDate || null,
       importBatch: 'MANUAL',
       importedBy: user._id,
       importedByName: user.name || '',
@@ -217,6 +229,8 @@ exports.updateOldAMCHistory = async (req, res) => {
         email: updatedData.email ? updatedData.email.toLowerCase().trim() : '',
         customerContactPersonEmail1: updatedData.customerContactPersonEmail1
           ? updatedData.customerContactPersonEmail1.toLowerCase().trim() : '',
+        startDate: updatedData.startDate || null,
+        endDate: updatedData.endDate || null,
       },
       { new: true, runValidators: true }
     );
@@ -351,6 +365,8 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
       { header: 'Pincode', key: 'pincode', width: 12 },
       { header: 'GST Number', key: 'GSTNo', width: 16 },
       { header: 'Zone', key: 'zone', width: 12 },
+      { header: 'Start Date', key: 'startDate', width: 14 },
+      { header: 'End Date', key: 'endDate', width: 14 },
       { header: 'Imported On', key: 'importedOn', width: 18 },
     ];
 
@@ -380,6 +396,8 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
         pincode: r.billingAddress?.pincode || '',
         GSTNo: r.GSTNo || '',
         zone: r.zone || '',
+        startDate: r.startDate ? new Date(r.startDate).toLocaleDateString() : '',
+        endDate: r.endDate ? new Date(r.endDate).toLocaleDateString() : '',
         importedOn: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
       });
       row.eachCell((cell) => { cell.alignment = { vertical: 'middle', wrapText: true }; });
@@ -439,13 +457,13 @@ exports.exportOldAMCHistoryPDF = async (req, res) => {
     doc.fontSize(12).fillColor('#2c3e50').text(`Total Records: ${records.length}`);
     doc.moveDown();
 
-    const headers = ['Sr No', 'Name', 'Type', 'Email', 'Owned By', 'Industry', 'Priority', 'Contact 1', 'Phone 1', 'Designation 1', 'City', 'State', 'GST No', 'Zone'];
-    const columnWidth = [28, 85, 45, 100, 60, 70, 45, 70, 55, 65, 55, 50, 60, 45];
+    const headers = ['Sr No', 'Name', 'Type', 'Email', 'Owned By', 'Industry', 'Priority', 'Contact 1', 'Phone 1', 'Designation 1', 'City', 'State', 'GST No', 'Zone', 'Start', 'End'];
+    const columnWidth = [26, 75, 40, 90, 55, 60, 40, 60, 50, 55, 50, 45, 55, 42, 45, 45];
     const rowHeight = 22;
 
     const drawHeaders = (y) => {
       let x = 30;
-      doc.rect(30, y, 830, rowHeight).fill('#8e44ad');
+      doc.rect(30, y, 833, rowHeight).fill('#8e44ad');
       doc.fillColor('#ffffff').fontSize(7);
       headers.forEach((h, i) => { doc.text(h, x + 2, y + 7, { width: columnWidth[i] - 4 }); x += columnWidth[i]; });
       return y + rowHeight;
@@ -456,7 +474,7 @@ exports.exportOldAMCHistoryPDF = async (req, res) => {
 
     records.forEach((r, idx) => {
       if (y > 500) { doc.addPage(); y = drawHeaders(50); }
-      if (alt) doc.rect(30, y, 830, rowHeight).fill('#f5eef8');
+      if (alt) doc.rect(30, y, 833, rowHeight).fill('#f5eef8');
       alt = !alt;
 
       let x = 30;
@@ -466,6 +484,8 @@ exports.exportOldAMCHistoryPDF = async (req, res) => {
         r.ownedBy || '', r.industryType || '', r.customerPriority || '',
         r.customerContactPersonName1 || '', r.phoneNumber1 || '', r.customerContactPersonDesignation1 || '',
         r.billingAddress?.city || '', r.billingAddress?.state || '', r.GSTNo || '', r.zone || '',
+        r.startDate ? new Date(r.startDate).toLocaleDateString() : '',
+        r.endDate ? new Date(r.endDate).toLocaleDateString() : '',
       ];
       rowData.forEach((val, i) => { doc.text(String(val), x + 2, y + 7, { width: columnWidth[i] - 4 }); x += columnWidth[i]; });
       y += rowHeight;
