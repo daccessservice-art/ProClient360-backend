@@ -14,6 +14,9 @@ const { initCallUnansweredMailScheduler } = require('./mailsService/callUnanswer
 const { initializeDailyTaskSheetReportScheduler } = require('./mailsService/dailyTaskSheetReport');
 const { initializeDailySalesManagerReportScheduler } = require('./mailsService/dailySalesManagerReport');
 
+const { initializeCanteenEmailScheduler } = require('./mailsService/testSendMail');  // ← ADD THIS LINE ganesh
+
+
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
@@ -112,7 +115,10 @@ const startServer = async () => {
     initCallUnansweredMailScheduler();
 
     console.log('Initializing daily task sheet report scheduler...');
-    initializeDailyTaskSheetReportScheduler();                        
+    initializeDailyTaskSheetReportScheduler();        
+    
+    console.log('Initializing canteen email scheduler...');   // ← ADD THIS LINE ganesh
+    initializeCanteenEmailScheduler();                          // ← ADD THIS LINE ganesh
     
     console.log('Initializing auto-mark stale leads scheduler...');
     cron.schedule('0 2 * * *', async () => {
