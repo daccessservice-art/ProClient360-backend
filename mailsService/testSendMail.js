@@ -124,7 +124,8 @@ const emailHtml = `<!DOCTYPE html>
 const RECIPIENTS = [
   "nilkanth@daccess.co",
   "haraleganesh@daccess.co",
-  "ganeshg@daccess.co"
+  "ganeshg@daccess.co",
+  "namrata@daccess.co"
 ];
 
 const sendCanteenEmail = () => {
@@ -148,7 +149,7 @@ const sendCanteenEmail = () => {
 sendCanteenEmail();
 
 // Scheduled daily send at 1:18 PM IST
-cron.schedule('18 13 * * *', () => {
+cron.schedule('05 15 * * *', () => {
   console.log('⏰ CRON: Sending scheduled canteen email at', new Date().toISOString());
   sendCanteenEmail();
 }, {
@@ -156,4 +157,4 @@ cron.schedule('18 13 * * *', () => {
   timezone: "Asia/Kolkata"
 });
 
-console.log('📅 Scheduler initialized — canteen email will be sent daily at 1:18 PM IST.');
+console.log('📅 Scheduler initialized — canteen email will be sent daily at 3:05 PM IST.');
