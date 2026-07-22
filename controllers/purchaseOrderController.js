@@ -1,5 +1,6 @@
 const PurchaseOrder = require("../models/purchaseOrderModel");
 const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
+const { sendPurchaseOrderApprovalMail } = require("../mailsService/purchaseOrderApprovalMail");
 
 exports.getPurchaseOrder = async (req, res) => {
   try {
@@ -220,6 +221,12 @@ exports.deletePurchaseOrder = async (req, res) => {
   }
 };
 
+// ── NOTE: previously this file had TWO exports.updatePurchaseOrder
+// definitions (a leftover from an earlier edit). In JS the second one
+// silently wins at runtime, so it "worked" — but it's confusing and
+// risky to maintain. This is now the single, de-duplicated version,
+// with mailStatus tracking added so the frontend can tell the user
+// whether the approval email actually sent or failed. ──
 exports.updatePurchaseOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -282,10 +289,37 @@ exports.updatePurchaseOrder = async (req, res) => {
       changes: { statusChanged, itemsChanged, paymentTermsChanged }
     }).save();
 
+    // ── send approval email when status transitions TO "Approved" ──
+    let mailStatus = null; // null = not applicable, true = sent, false = failed
+    if (statusChanged && updatedData.status === 'Approved') {
+      try {
+        const populatedPO = await PurchaseOrder.findById(id)
+          .populate('vendor', 'vendorName email')
+          .populate('company', 'name email')
+          .lean();
+
+        console.log('[PO-APPROVE-MAIL] Preparing to send. Vendor email:', populatedPO?.vendor?.email, '| Company email:', populatedPO?.company?.email);
+
+        if (!populatedPO?.vendor?.email && !populatedPO?.company?.email) {
+          console.warn('[PO-APPROVE-MAIL] ⚠️ No vendor or company email found on this PO — mail NOT sent.');
+          mailStatus = false;
+        } else {
+          const result = await sendPurchaseOrderApprovalMail(populatedPO);
+          mailStatus = !!result?.success;
+          console.log(mailStatus ? '[PO-APPROVE-MAIL] ✅ Mail sent successfully' : '[PO-APPROVE-MAIL] ❌ Mail failed: ' + result?.error);
+        }
+      } catch (mailErr) {
+        console.error('[PO-APPROVE-MAIL] ❌ Unexpected error sending PO approval mail:', mailErr.message);
+        mailStatus = false;
+        // Do not fail the request just because the email failed
+      }
+    }
+
     res.status(200).json({ 
       success: true, 
       message: "Purchase order updated successfully", 
-      updatedPurchaseOrder 
+      updatedPurchaseOrder,
+      mailStatus // true | false | null — frontend can show a note if false
     });
   } catch (error) {
     console.error(error);
