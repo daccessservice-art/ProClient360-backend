@@ -16,6 +16,26 @@ const ASSET_SEARCH_PATHS = [
   path.join(__dirname, '..', 'public', 'assets'),
 ];
 
+// ── Signature search paths: checks the same "assets" folder as the
+// company logos FIRST (most reliable, since backend can already read
+// ENTERO.png / DACCESS.png from there), then falls back to various
+// frontend build/public locations in case those are available too. ──
+const SIGNATURE_SEARCH_PATHS = [
+  path.join(__dirname, '..', 'assets'),
+  path.join(__dirname, '..', '..', 'assets'),
+  path.join(process.cwd(), 'assets'),
+  path.join(__dirname, '..', 'public', 'assets'),
+  path.join(__dirname, '..', 'public', 'static', 'assets', 'img'),
+  path.join(__dirname, '..', '..', 'public', 'static', 'assets', 'img'),
+  path.join(__dirname, '..', 'frontend', 'build', 'static', 'assets', 'img'),
+  path.join(__dirname, '..', '..', 'frontend', 'build', 'static', 'assets', 'img'),
+  path.join(__dirname, '..', 'frontend', 'public', 'static', 'assets', 'img'),
+  path.join(__dirname, '..', '..', 'frontend', 'public', 'static', 'assets', 'img'),
+  path.join(process.cwd(), 'public', 'static', 'assets', 'img'),
+  path.join(process.cwd(), 'frontend', 'build', 'static', 'assets', 'img'),
+  path.join(process.cwd(), 'frontend', 'public', 'static', 'assets', 'img'),
+];
+
 function findFile(filename) {
   for (const dir of ASSET_SEARCH_PATHS) {
     const fp = path.join(dir, filename);
@@ -31,6 +51,26 @@ function findFile(filename) {
     } catch (_) {}
   }
   console.warn(`[PDF-LOGO] ❌ ${filename} NOT found. Searched:`, ASSET_SEARCH_PATHS.map(p => path.join(p, filename)));
+  return null;
+}
+
+function findSignatureFile(filename) {
+  for (const dir of SIGNATURE_SEARCH_PATHS) {
+    const fp = path.join(dir, filename);
+    try {
+      if (fs.existsSync(fp)) {
+        const stat = fs.statSync(fp);
+        if (stat.size > 100) {
+          console.log(`[PDF-SIGN] ✅ Found ${filename} at: ${fp} (${stat.size} bytes)`);
+          return fp;
+        }
+        console.warn(`[PDF-SIGN] ⚠️  ${fp} exists but only ${stat.size} bytes — likely corrupt, skipping`);
+      } else {
+        console.log(`[PDF-SIGN]   … not at ${fp}`);
+      }
+    } catch (_) {}
+  }
+  console.warn(`[PDF-SIGN] ❌ ${filename} NOT found in any search path.`);
   return null;
 }
 
@@ -85,54 +125,72 @@ function downloadBuffer(url, timeout = 15000) {
   });
 }
 
-const logoCache = { entero: null, daccess: null };
+const logoCache = { entero: null, daccess: null, signature: null };
 let logoInitPromise = null;
 
 async function ensureLogos() {
-  if (logoCache.entero && logoCache.daccess) return;
-  if (logoInitPromise) return logoInitPromise;
+  if (logoCache.entero && logoCache.daccess && logoCache.signature) return;
 
-  logoInitPromise = (async () => {
-    console.log('[PDF-LOGO] ── Initializing logos ──');
+  console.log('[PDF-LOGO] ── Initializing logos/signature (ensureLogos) ──');
 
-    const enteroPath = findFile('ENTERO.png');
-    if (enteroPath) logoCache.entero = readImageFile(enteroPath);
-    if (!logoCache.entero) {
-      const enteroJpg = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
-      if (enteroJpg) logoCache.entero = readImageFile(enteroJpg);
+  const enteroPath = findFile('ENTERO.png');
+  if (enteroPath) logoCache.entero = readImageFile(enteroPath);
+  if (!logoCache.entero) {
+    const enteroJpg = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
+    if (enteroJpg) logoCache.entero = readImageFile(enteroJpg);
+  }
+  if (!logoCache.entero) {
+    try {
+      logoCache.entero = await downloadBuffer(
+        'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png'
+      );
+    } catch (e) {
+      console.warn('[PDF-LOGO] ❌ Entero URL download failed:', e.message);
     }
-    if (!logoCache.entero) {
+  }
+
+  const daccessPath = findFile('DACCESS.png');
+  if (daccessPath) logoCache.daccess = readImageFile(daccessPath);
+  if (!logoCache.daccess) {
+    const daccessJpg = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
+    if (daccessJpg) logoCache.daccess = readImageFile(daccessJpg);
+  }
+  if (!logoCache.daccess) {
+    const daccessUrl = process.env.DACCESS_LOGO_URL;
+    if (daccessUrl) {
       try {
-        logoCache.entero = await downloadBuffer(
-          'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png'
-        );
+        logoCache.daccess = await downloadBuffer(daccessUrl);
       } catch (e) {
-        console.warn('[PDF-LOGO] ❌ Entero URL download failed:', e.message);
+        console.warn('[PDF-LOGO] ❌ DAccess URL download failed:', e.message);
       }
     }
+  }
 
-    const daccessPath = findFile('DACCESS.png');
-    if (daccessPath) logoCache.daccess = readImageFile(daccessPath);
-    if (!logoCache.daccess) {
-      const daccessJpg = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
-      if (daccessJpg) logoCache.daccess = readImageFile(daccessJpg);
-    }
-    if (!logoCache.daccess) {
-      const daccessUrl = process.env.DACCESS_LOGO_URL;
-      if (daccessUrl) {
-        try {
-          logoCache.daccess = await downloadBuffer(daccessUrl);
-        } catch (e) {
-          console.warn('[PDF-LOGO] ❌ DAccess URL download failed:', e.message);
-        }
+  // ── sign.png: file search (checks backend "assets" folder first), then
+  // URL fallback via SIGN_URL env var ──
+  if (!logoCache.signature) {
+    const signPath = findSignatureFile('sign.png');
+    if (signPath) logoCache.signature = readImageFile(signPath);
+  }
+  if (!logoCache.signature) {
+    const signJpg = findSignatureFile('sign.jpg') || findSignatureFile('sign.jpeg');
+    if (signJpg) logoCache.signature = readImageFile(signJpg);
+  }
+  if (!logoCache.signature) {
+    const signUrl = process.env.SIGN_URL;
+    if (signUrl) {
+      try {
+        logoCache.signature = await downloadBuffer(signUrl);
+        console.log('[PDF-SIGN] ✅ Loaded signature from SIGN_URL env var');
+      } catch (e) {
+        console.warn('[PDF-SIGN] ❌ SIGN_URL download failed:', e.message);
       }
     }
+  }
 
-    console.log('[PDF-LOGO]   Entero:', logoCache.entero ? `✅ ${logoCache.entero.length} bytes` : '❌ MISSING');
-    console.log('[PDF-LOGO]   DAccess:', logoCache.daccess ? `✅ ${logoCache.daccess.length} bytes` : '❌ MISSING');
-  })();
-
-  return logoInitPromise;
+  console.log('[PDF-LOGO]   Entero:', logoCache.entero ? `✅ ${logoCache.entero.length} bytes` : '❌ MISSING');
+  console.log('[PDF-LOGO]   DAccess:', logoCache.daccess ? `✅ ${logoCache.daccess.length} bytes` : '❌ MISSING');
+  console.log('[PDF-SIGN]   Signature:', logoCache.signature ? `✅ ${logoCache.signature.length} bytes` : '❌ MISSING — copy sign.png into the backend "assets" folder (same place as ENTERO.png/DACCESS.png), or set SIGN_URL env var.');
 }
 
 (function initSync() {
@@ -148,7 +206,12 @@ async function ensureLogos() {
     const dpJ = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
     if (dpJ) logoCache.daccess = readImageFile(dpJ);
   }
-  if (logoCache.entero && logoCache.daccess) logoInitPromise = Promise.resolve();
+  const sp = findSignatureFile('sign.png');
+  if (sp) logoCache.signature = readImageFile(sp);
+  if (!logoCache.signature) {
+    const spJ = findSignatureFile('sign.jpg') || findSignatureFile('sign.jpeg');
+    if (spJ) logoCache.signature = readImageFile(spJ);
+  }
 })();
 
 
@@ -232,6 +295,12 @@ function estimateLines(doc, text, width, fontSize, font = 'Helvetica') {
 // MAIN CONTROLLER
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.downloadPurchaseOrderPDF = async (req, res) => {
+  // Tracks whether doc.pipe(res) has started streaming. Once true, we can
+  // no longer send a JSON error response — we must instead abort the
+  // stream so the client's request actually finishes instead of hanging.
+  let streamingStarted = false;
+  let doc = null;
+
   try {
     const { id } = req.params;
 
@@ -252,6 +321,8 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     if (!po) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
+
+    console.log(`[PDF-SIGN] PO ${po.orderNumber || id} → status="${po.status}" | signature buffer loaded: ${!!logoCache.signature}`);
 
     const items      = po.items || [];
     const totalAmt   = Number(po.totalAmount) || 0;
@@ -274,12 +345,17 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       paymentText = parts.join(' | ') || 'As per agreement';
     }
 
-    const doc      = new PDFDocument({ margin: 0, size: 'A4' });
+    doc = new PDFDocument({ margin: 0, size: 'A4' });
     const filename = `PO_${po.orderNumber || id}.pdf`;
+
+    doc.on('error', (streamErr) => {
+      console.error('[PDF] ❌ PDFDocument stream error:', streamErr.message);
+    });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     doc.pipe(res);
+    streamingStarted = true;
 
     const PW = doc.page.width;
     const M  = 20;
@@ -328,9 +404,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 2. VENDOR DETAILS + INVOICE DETAILS
-    // ── FIX 1: Dynamic box height based on actual vendor address
-    // length so long addresses are never clipped. GSTIN/UIN always
-    // renders at the bottom of the vendor box.
     // ════════════════════════════════════════════════════════════
     const leftW  = CW * 0.52;
     const rightW = CW - leftW - 2;
@@ -338,7 +411,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     const vendor = po.vendor || {};
 
-    // Build full vendor address string (same logic as UI)
     const vendorAddress = vendor.typeOfVendor === 'Import'
       ? (vendor.manualAddress || null)
       : vendor.billingAddress?.add
@@ -350,18 +422,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           ].filter(Boolean).join(', ')
         : null;
 
-    // ── Measure how tall the vendor box needs to be ──
-    // Name: ~13px, address block: measured, GSTIN: ~12px, padding: 16px
     const vendorNameH    = 13;
     const vendorAddrH    = vendorAddress
       ? doc.font('Helvetica').fontSize(8).heightOfString(vendorAddress, { width: leftW - 8 })
       : 0;
     const vendorGstH     = vendor.GSTNo ? 12 : 0;
     const vendorPadding  = 18;
-    // Minimum 68, grows as needed
     const boxH = Math.max(68, vendorNameH + vendorAddrH + vendorGstH + vendorPadding);
 
-    // Header rows
     fillRect(doc, M, y, leftW, 14, COLOR_TABLE_HDR);
     strokeRect(doc, M, y, leftW, 14);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
@@ -374,30 +442,25 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     y += 14;
 
-    // Vendor box — full dynamic height
     strokeRect(doc, M, y, leftW, boxH);
 
     let vy = y + 5;
 
-    // Vendor name
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
        .text(vendor.vendorName || 'N/A', M + 4, vy, { width: leftW - 8 });
     vy += vendorNameH;
 
-    // Full address — rendered with word-wrap, never clipped
     if (vendorAddress) {
       doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
          .text(vendorAddress, M + 4, vy, { width: leftW - 8 });
       vy += vendorAddrH + 3;
     }
 
-    // GSTIN — always shown after address
     if (vendor.GSTNo) {
       doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
          .text(`GSTIN/UIN: ${vendor.GSTNo}`, M + 4, vy, { width: leftW - 8 });
     }
 
-    // Invoice details box — same dynamic height
     strokeRect(doc, rightX, y, rightW, boxH);
     const invoiceFields = [
       ['Order No.',        po.orderNumber || 'N/A'],
@@ -416,13 +479,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 3. ITEMS TABLE
-    // ── FIX 2: Description is now ALWAYS shown as a sub-line
-    // (same as the UI which joins brand • model • description).
-    // Previously description was skipped when it matched productName;
-    // now all three lines render independently — product name (bold),
-    // brand + model (grey, labeled), description (grey, smaller) —
-    // matching the ViewPurchaseOrderPopUp UI exactly.
-    // Row height auto-expands to fit all content lines.
     // ════════════════════════════════════════════════════════════
     const itemCols = [
       { key: 'sr',       label: 'SR.',            w: 18,  align: 'center' },
@@ -441,10 +497,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     const rowH     = 16;
     const emptyRowH = 16;
-    const itemColW  = 128; // ITEM DETAILS column width
+    const itemColW  = 128;
     const itemTextW = itemColW - 4;
 
-    // Column header row
     let cx = M;
     itemCols.forEach(col => {
       fillRect(doc, cx, y, col.w, rowH, COLOR_TABLE_HDR);
@@ -473,24 +528,18 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
         const gstText  = taxPct > 0 ? `@${taxPct}%  ${taxAmt.toFixed(2)}` : '-';
         const discText = disc > 0 ? `${disc}%` : '-';
 
-        // ── Line 1: Product name (bold) ──────────────────────────────────
         const itemNameLine = item.productName || item.brandName || '-';
 
-        // ── Line 2: Brand + Model (labeled, grey) — always shown if present
         const brandModelParts = [
           item.brandName ? `Brand: ${item.brandName}` : null,
           item.modelNo   ? `Model: ${item.modelNo}`   : null,
         ].filter(Boolean);
         const brandModelLine = brandModelParts.length > 0 ? brandModelParts.join('   ') : null;
 
-        // ── Line 3: Description — FIX: ALWAYS shown when it exists,
-        // regardless of whether it matches productName.
-        // This matches the UI which always includes description in subParts.
         const descLine = (item.description && item.description.trim() !== '')
           ? item.description.trim()
           : null;
 
-        // ── Measure each line height to auto-size the row ────────────────
         const nameLinesH = doc.font('Helvetica-Bold').fontSize(7)
           .heightOfString(itemNameLine, { width: itemTextW });
 
@@ -502,7 +551,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           ? doc.font('Helvetica').fontSize(6).heightOfString(descLine, { width: itemTextW })
           : 0;
 
-        // Total content height + top/bottom padding (6px each)
         const contentH    = nameLinesH + (brandModelH > 0 ? brandModelH + 2 : 0) + (descH > 0 ? descH + 2 : 0);
         const currentRowH = Math.max(emptyRowH, contentH + 10);
 
@@ -526,26 +574,22 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
           strokeRect(doc, cx, y, col.w, currentRowH);
 
           if (col.key === 'item') {
-            // Line 1: Product name (bold, 7pt)
             let lineY = y + 4;
             doc.font('Helvetica-Bold').fontSize(7).fillColor(COLOR_BLACK)
                .text(itemNameLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
             lineY += nameLinesH + 2;
 
-            // Line 2: Brand + Model (6pt, dark grey)
             if (brandModelLine) {
               doc.font('Helvetica').fontSize(6).fillColor(COLOR_DARK_GREY)
                  .text(brandModelLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
               lineY += brandModelH + 2;
             }
 
-            // Line 3: Description (6pt, grey) — always rendered when present
             if (descLine) {
               doc.font('Helvetica').fontSize(6).fillColor('#666666')
                  .text(descLine, cx + 2, lineY, { width: itemTextW, align: 'left' });
             }
           } else {
-            // Other columns: vertically centered
             const textY = y + (currentRowH / 2) - 4;
             doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_BLACK)
                .text(String(rowData[ci].text), cx + 2, textY, {
@@ -557,7 +601,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
         y += currentRowH;
       } else {
-        // Empty padding rows
         itemCols.forEach(col => {
           fillRect(doc, cx, y, col.w, emptyRowH, bg);
           strokeRect(doc, cx, y, col.w, emptyRowH);
@@ -567,7 +610,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       }
     }
 
-    // Total row
     cx = M;
     const totalRowData = [
       { text: '',                     align: 'center' },
@@ -725,6 +767,10 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 6. PAYMENT TERMS + SIGNATURE
+    // Signature-stamping code is wrapped in its own try/catch so ANY
+    // failure there (bad buffer, pdfkit internal error, etc.) can NEVER
+    // abort the whole PDF generation — it always falls back to the
+    // placeholder text and the document still completes and downloads.
     // ════════════════════════════════════════════════════════════
     const footerH = 55;
     strokeRect(doc, M, y, CW, footerH);
@@ -738,11 +784,42 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
        .text(`For, ${companyConfig.name}`, sigX, y + 8, { width: CW * 0.36 });
 
-    strokeRect(doc, sigX + 10, y + 18, 80, 26, COLOR_BORDER);
-    doc.font('Helvetica').fontSize(7).fillColor('#AAAAAA')
-       .text('Authorised Signatory', sigX + 12, y + 28, { width: 76, align: 'center' });
+    // Enlarged signature box (was 80x26) to match the bigger on-screen preview box
+    const sigBoxX = sigX + 5;
+    const sigBoxY = y + 16;
+    const sigBoxW = 110;
+    const sigBoxH = 40;
+
+    strokeRect(doc, sigBoxX, sigBoxY, sigBoxW, sigBoxH, COLOR_BORDER);
+
+    let signatureStamped = false;
+    try {
+      const isApproved = po.status === 'Approved';
+      const SIGNATURE_BUFFER = logoCache.signature;
+
+      if (isApproved && SIGNATURE_BUFFER) {
+        doc.image(SIGNATURE_BUFFER, sigBoxX + 5, sigBoxY + 3, {
+          fit: [sigBoxW - 10, sigBoxH - 6],
+          align: 'center',
+          valign: 'center',
+        });
+        signatureStamped = true;
+        console.log('[PDF-SIGN] ✅ Signature stamped on PDF');
+      } else if (isApproved && !SIGNATURE_BUFFER) {
+        console.warn('[PDF-SIGN] ⚠️ PO is Approved but no signature buffer is loaded — falling back to placeholder text.');
+      }
+    } catch (e) {
+      console.error('[PDF-SIGN] ❌ doc.image() for signature FAILED — falling back to placeholder text:', e.message);
+      signatureStamped = false;
+    }
+
+    if (!signatureStamped) {
+      doc.font('Helvetica').fontSize(7).fillColor('#AAAAAA')
+         .text('Authorised Signatory', sigBoxX + 2, sigBoxY + (sigBoxH / 2) - 4, { width: sigBoxW - 4, align: 'center' });
+    }
+
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-       .text('Signature', sigX + 30, y + 46);
+       .text('Signature', sigX + 40, y + 60);
 
     y += footerH + 6;
 
@@ -755,9 +832,21 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     doc.end();
 
   } catch (error) {
-    console.error('Error generating Purchase Order PDF:', error);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: 'Error generating PDF: ' + error.message });
+    console.error('Error generating Purchase Order PDF:', error.stack || error.message);
+
+    if (!streamingStarted && !res.headersSent) {
+      // Nothing was sent yet — safe to respond with a normal JSON error.
+      return res.status(500).json({ success: false, error: 'Error generating PDF: ' + error.message });
+    }
+
+    // Streaming had already begun (headers sent) when the error hit. We
+    // can't send JSON anymore, but we MUST terminate the response or the
+    // client's request hangs forever with a spinner that never resolves.
+    try {
+      if (doc && typeof doc.destroy === 'function') doc.destroy();
+    } catch (_) {}
+    if (!res.writableEnded) {
+      res.end();
     }
   }
 };
