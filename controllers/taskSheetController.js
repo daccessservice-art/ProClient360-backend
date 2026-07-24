@@ -29,7 +29,7 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ─── EXISTING: getTaskSheet (Manager view — now also returns child sub-tasks) ─
+// ─── EXISTING: getTaskSheet (Manager view) ─────────────────────────────────────
 exports.getTaskSheet = async (req, res) => {
   try {
     const user = req.user;
@@ -52,7 +52,6 @@ exports.getTaskSheet = async (req, res) => {
       }
     }
 
-    // Fetch ALL task sheets for this project (both manager-assigned and teamlead-assigned)
     const allTasks = await TaskSheet.find(query)
       .populate({
         path: 'project',
@@ -62,6 +61,7 @@ exports.getTaskSheet = async (req, res) => {
       .populate('taskName', 'name')
       .populate('employees', 'name')
       .populate('assignedBy', 'name')
+      .populate('assignedTester', 'name')
       .populate('parentTaskId', 'taskName subtaskName')
       .sort({ startDate: 1 });
 
@@ -75,7 +75,7 @@ exports.getTaskSheet = async (req, res) => {
   }
 };
 
-// ─── EXISTING: myTask (Employee / Team Lead sees tasks assigned to them) ──────
+// ─── EXISTING: myTask ──────────────────────────────────────────────────────────
 exports.myTask = async (req, res) => {
   try {
     const user = req.user;
@@ -90,11 +90,10 @@ exports.myTask = async (req, res) => {
       query.company = user.company;
     }
 
-    // Return tasks assigned directly to this employee/team-lead
-    // (both manager-assigned and teamlead-assigned tasks show up here)
     const task = await TaskSheet.find(query)
       .populate('taskName', 'name')
       .populate('assignedBy', 'name')
+      .populate('assignedTester', 'name')
       .populate('parentTaskId', 'taskName subtaskName taskLevel');
 
     res.status(200).json({
@@ -109,8 +108,6 @@ exports.myTask = async (req, res) => {
 };
 
 // ─── NEW: getSubTasksForParent ─────────────────────────────────────────────────
-// Returns all child sub-tasks that a Team Lead assigned under a parent task.
-// Used by Manager's TaskSheetMaster to show the full tree.
 exports.getSubTasksForParent = async (req, res) => {
   try {
     const { parentId } = req.params;
@@ -132,14 +129,11 @@ exports.getSubTasksForParent = async (req, res) => {
 };
 
 // ─── NEW: createSubTask ────────────────────────────────────────────────────────
-// Team Lead calls this from their EmployeeTaskGrid to assign a sub-task
-// to one or more employees under one of their own tasks.
 exports.createSubTask = async (req, res) => {
   try {
     const { parentTaskId, employees, taskName, subtaskName, startDate, endDate, remark, priority } = req.body;
-    const user = req.user; // Team Lead (employee)
+    const user = req.user;
 
-    // Validate required fields
     if (!parentTaskId || !employees || !taskName || !startDate || !endDate || !priority) {
       return res.status(400).json({
         success: false,
@@ -155,7 +149,6 @@ exports.createSubTask = async (req, res) => {
       return res.status(400).json({ success: false, error: "Invalid priority value" });
     }
 
-    // Verify the parent task exists and this Team Lead is assigned to it
     const parentTask = await TaskSheet.findById(parentTaskId).populate('project');
     if (!parentTask) {
       return res.status(404).json({ success: false, error: "Parent task not found" });
@@ -171,7 +164,6 @@ exports.createSubTask = async (req, res) => {
       });
     }
 
-    // Determine company from parent task
     const companyId = parentTask.company;
 
     const subTask = await TaskSheet.create({
@@ -197,7 +189,6 @@ exports.createSubTask = async (req, res) => {
         .populate('assignedBy', 'name')
         .populate('parentTaskId', 'taskName subtaskName');
 
-      // Send email notifications to assigned employees
       if (employees && Array.isArray(employees)) {
         const projectName = parentTask.project?.name || 'Project';
         for (const employeeId of employees) {
@@ -296,10 +287,10 @@ exports.notifyCompletion = async (req, res) => {
   }
 };
 
-// ─── EXISTING: create (Manager assigns task to Team Lead or Employee) ─────────
+// ─── EXISTING: create (Manager assigns task) ───────────────────────────────────
 exports.create = async (req, res) => {
   try {
-    const { project, employees, taskName, subtaskName, startDate, endDate, remark, priority } = req.body;
+    const { project, employees, taskName, subtaskName, startDate, endDate, remark, priority, assignedTester } = req.body;
     const user = req.user;
 
     if (!project || !employees || !taskName || !startDate || !endDate || !priority) {
@@ -330,9 +321,11 @@ exports.create = async (req, res) => {
       priority,
       company: user.company ? user.company : user._id,
       assignedBy: user._id,
-      // Manager-created tasks always have role 'manager' and no parent
       assignedByRole: 'manager',
-      parentTaskId: null
+      parentTaskId: null,
+      // Optional — if the Manager doesn't pick one, the developer picks
+      // their own tester later when they submit for testing.
+      assignedTester: assignedTester || null,
     });
 
     if (task) {
@@ -345,7 +338,8 @@ exports.create = async (req, res) => {
         .populate('taskName', 'name')
         .populate('employees', 'name')
         .populate('project', 'name')
-        .populate('assignedBy', 'name');
+        .populate('assignedBy', 'name')
+        .populate('assignedTester', 'name');
 
       await logCreation(populatedTask, user, req, 'Task');
 
@@ -361,6 +355,14 @@ exports.create = async (req, res) => {
           } catch (emailError) {
             console.error("Failed to send email:", emailError);
           }
+        }
+      }
+
+      if (assignedTester) {
+        try {
+          newTaskAssignedMail(assignedTester, task, existingProject.name);
+        } catch (emailError) {
+          console.error("Failed to send tester notification email:", emailError);
         }
       }
 
@@ -516,6 +518,232 @@ exports.update = async (req, res) => {
   }
 };
 
+// ─── NEW: assignTester ─────────────────────────────────────────────────────────
+// Manager can (re)assign a tester on an existing task without recreating it.
+exports.assignTester = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { testerId } = req.body;
+
+    if (!testerId) {
+      return res.status(400).json({ success: false, error: "testerId is required" });
+    }
+
+    const task = await TaskSheet.findById(id);
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    task.assignedTester = testerId;
+    await task.save();
+
+    const populated = await TaskSheet.findById(id)
+      .populate('taskName', 'name')
+      .populate('employees', 'name')
+      .populate('assignedTester', 'name email')
+      .populate('assignedBy', 'name')
+      .populate('project', 'name');
+
+    try {
+      newTaskAssignedMail(testerId, populated, populated.project?.name || 'Project');
+    } catch (e) {
+      console.error("Tester notification failed:", e);
+    }
+
+    res.status(200).json({ success: true, message: "Tester assigned successfully", data: populated });
+  } catch (error) {
+    res.status(500).json({ error: "Error assigning tester: " + error.message });
+  }
+};
+
+// ─── UPDATED: submitForTesting ──────────────────────────────────────────────────
+// Developer calls this once their work reaches 100%.
+//
+// ── NEW BEHAVIOR ──
+// - If the Manager already assigned a tester on this task, `testerId` in the
+//   body is ignored — the existing tester is used.
+// - If NO tester was assigned by the Manager, the developer MUST choose one
+//   in `testerId` — this is their own decision about who reviews their work.
+// - testStartDate is stamped automatically the moment this runs — no manual
+//   date entry needed anywhere in this workflow.
+// - testProgress resets to 0 for the new testing round.
+exports.submitForTesting = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { testerId } = req.body; // only used if task has no assignedTester yet
+    const user = req.user;
+
+    const task = await TaskSheet.findById(id).populate('assignedTester', 'name email');
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    if (!task.employees.some(empId => empId.toString() === user._id.toString())) {
+      return res.status(403).json({ success: false, error: "You are not assigned to this task" });
+    }
+
+    // ── Determine the tester: Manager's choice wins if already set;
+    // otherwise the developer's choice (testerId from the request) is used. ──
+    if (!task.assignedTester) {
+      if (!testerId) {
+        return res.status(400).json({
+          success: false,
+          error: "No tester is assigned to this task. Please choose a tester before submitting for testing."
+        });
+      }
+      const testerExists = await Employee.findById(testerId).select('_id name');
+      if (!testerExists) {
+        return res.status(404).json({ success: false, error: "Selected tester not found" });
+      }
+      task.assignedTester = testerId;
+    }
+
+    task.taskLevel = 100;
+    task.taskStatus = 'inprocess'; // not fully "completed" yet — pending QA review
+    task.qaStatus = 'pending_test';
+    task.testStartDate = new Date();   // ✅ automatic — no manual date entry
+    task.testEndDate = null;
+    task.testProgress = 0;             // reset for this testing round
+    await task.save();
+
+    const populated = await TaskSheet.findById(id).populate('assignedTester', 'name email');
+
+    res.status(200).json({
+      success: true,
+      message: `Work submitted for testing. ${populated.assignedTester?.name || 'The tester'} has been notified.`,
+      data: populated
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error submitting for testing: " + error.message });
+  }
+};
+
+// ─── NEW: updateTestProgress ─────────────────────────────────────────────────────
+// Tester updates their own in-progress completion percentage while reviewing
+// (e.g. "I've tested 90% so far") — independent from the developer's taskLevel.
+// This does not finalize the task; only Pass/Fail (submitTestResult) does that.
+exports.updateTestProgress = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { progress } = req.body;
+    const user = req.user;
+
+    const progressNum = Number(progress);
+    if (isNaN(progressNum) || progressNum < 0 || progressNum > 100) {
+      return res.status(400).json({ success: false, error: "Progress must be a number between 0 and 100" });
+    }
+
+    const task = await TaskSheet.findById(id);
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    if (!task.assignedTester || task.assignedTester.toString() !== user._id.toString()) {
+      return res.status(403).json({ success: false, error: "You are not the assigned tester for this task" });
+    }
+
+    task.testProgress = progressNum;
+    // Move from 'pending_test' to 'testing' once the tester actually starts logging progress
+    if (task.qaStatus === 'pending_test') {
+      task.qaStatus = 'testing';
+    }
+    await task.save();
+
+    res.status(200).json({ success: true, message: "Testing progress updated", data: task });
+  } catch (error) {
+    res.status(500).json({ error: "Error updating test progress: " + error.message });
+  }
+};
+
+// ─── NEW: getTesterTasks ─────────────────────────────────────────────────────────
+exports.getTesterTasks = async (req, res) => {
+  try {
+    const user = req.user;
+    const tasks = await TaskSheet.find({
+      assignedTester: user._id,
+      qaStatus: { $in: ['pending_test', 'testing', 'bug_found', 'passed'] }
+    })
+      .populate('taskName', 'name')
+      .populate('employees', 'name')
+      .populate('project', 'name')
+      .populate('assignedBy', 'name')
+      .sort({ updatedAt: -1 });
+
+    res.status(200).json({ success: true, task: tasks || [] });
+  } catch (error) {
+    res.status(500).json({ error: "Error fetching tester tasks: " + error.message });
+  }
+};
+
+// ─── UPDATED: submitTestResult ────────────────────────────────────────────────────
+// Tester marks Pass (fully complete) or Fail (bounces back to developer with
+// a bug remark). testEndDate is now stamped automatically on either outcome.
+exports.submitTestResult = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { result, remark } = req.body; // result: 'pass' | 'fail'
+    const user = req.user;
+
+    if (!['pass', 'fail'].includes(result)) {
+      return res.status(400).json({ success: false, error: "result must be 'pass' or 'fail'" });
+    }
+
+    const task = await TaskSheet.findById(id)
+      .populate('taskName', 'name')
+      .populate('employees', 'name email')
+      .populate('project', 'name');
+
+    if (!task) {
+      return res.status(404).json({ success: false, error: "Task not found" });
+    }
+
+    if (!task.assignedTester || task.assignedTester.toString() !== user._id.toString()) {
+      return res.status(403).json({ success: false, error: "You are not the assigned tester for this task" });
+    }
+
+    const now = new Date(); // ✅ automatic test-end timestamp for both outcomes
+
+    if (result === 'pass') {
+      task.qaStatus = 'passed';
+      task.taskStatus = 'completed';
+      task.taskLevel = 100;
+      task.testProgress = 100;
+      task.testEndDate = now;
+    } else {
+      if (!remark || !remark.trim()) {
+        return res.status(400).json({ success: false, error: "Please describe the bug before returning the task" });
+      }
+      task.qaStatus = 'bug_found';
+      task.taskStatus = 'stuck';
+      task.taskLevel = Math.min(task.taskLevel, 90);
+      task.testCycles = (task.testCycles || 0) + 1;
+      task.testEndDate = now;
+      task.bugHistory.push({ remark: remark.trim(), reportedBy: user._id, reportedAt: now });
+    }
+
+    await task.save();
+
+    if (result === 'fail' && task.employees && Array.isArray(task.employees)) {
+      for (const emp of task.employees) {
+        try {
+          const empId = emp._id || emp;
+          newTaskAssignedMail(empId, task, task.project?.name || 'Project');
+        } catch (e) {
+          console.error("Bug notification failed:", e);
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: result === 'pass' ? "Task passed and marked completed" : "Bug reported — task returned to developer",
+      data: task
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Error submitting test result: " + error.message });
+  }
+};
+
 // ─── EXISTING: delete ─────────────────────────────────────────────────────────
 exports.delete = async (req, res) => {
   try {
@@ -531,7 +759,6 @@ exports.delete = async (req, res) => {
     await TaskSheet.findByIdAndDelete(taskSheetId);
     await Action.deleteMany({ task: taskSheetId });
 
-    // Also delete any child sub-tasks created under this task
     const childIds = await TaskSheet.find({ parentTaskId: taskSheetId }).distinct('_id');
     if (childIds.length > 0) {
       await TaskSheet.deleteMany({ parentTaskId: taskSheetId });

@@ -30,20 +30,68 @@ const taskSheetSchema = new Schema({
     ref: "Employee"
   },
 
-  // ─── NEW FIELDS FOR TEAM LEAD LAYER ───────────────────────────────────────
-  // If this task was created by a Team Lead as a sub-assignment,
-  // parentTaskId points to the original Manager-assigned TaskSheet.
+  // ─── TEAM LEAD LAYER ───────────────────────────────────────────────────────
   parentTaskId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TaskSheet',
     default: null
   },
-  // 'manager' = assigned directly by Manager
-  // 'teamlead' = assigned by Team Lead (sub-task under a parent)
   assignedByRole: {
     type: String,
     enum: ['manager', 'teamlead'],
     default: 'manager'
+  },
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // ─── TESTER / QA AGILE WORKFLOW ────────────────────────────────────────────
+  // Manager can assign a tester up front. If left empty, the developer picks
+  // the tester themselves when they submit their finished work for testing.
+  assignedTester: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Employee',
+    default: null
+  },
+  // 'none'         → no tester assigned yet, or dev hasn't submitted yet
+  // 'pending_test' → developer submitted work, waiting for tester to start
+  // 'testing'      → tester has started reviewing (progress may be partial)
+  // 'bug_found'    → tester rejected — task returned to developer
+  // 'passed'       → tester approved — task is genuinely complete
+  qaStatus: {
+    type: String,
+    enum: ['none', 'pending_test', 'testing', 'bug_found', 'passed'],
+    default: 'none'
+  },
+  // ── NEW: automatic testing timestamps — set by the server, never typed
+  // in by hand. testStartDate is stamped the moment the developer submits
+  // for testing (or the tester opens/starts it); testEndDate is stamped
+  // the moment the tester gives a final Pass or Fail verdict. ──
+  testStartDate: {
+    type: Date,
+    default: null
+  },
+  testEndDate: {
+    type: Date,
+    default: null
+  },
+  // ── NEW: tester's own in-progress completion percentage (0-100),
+  // separate from the developer's taskLevel — e.g. "I've tested 90% of
+  // this so far." Reset to 0 each time a new testing round starts. ──
+  testProgress: {
+    type: Number,
+    min: 0,
+    max: 100,
+    default: 0
+  },
+  // Every time the tester rejects the work, a bug report is appended here.
+  bugHistory: [{
+    remark: { type: String, trim: true, maxlength: 1000 },
+    reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee' },
+    reportedAt: { type: Date, default: Date.now }
+  }],
+  // How many times this task has bounced back from the tester.
+  testCycles: {
+    type: Number,
+    default: 0
   },
   // ──────────────────────────────────────────────────────────────────────────
 
