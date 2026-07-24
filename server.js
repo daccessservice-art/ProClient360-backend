@@ -117,8 +117,8 @@ const startServer = async () => {
     console.log('Initializing daily task sheet report scheduler...');
     initializeDailyTaskSheetReportScheduler();        
     
-    console.log('Initializing canteen email scheduler...');   // ← ADD THIS LINE ganesh
-    initializeCanteenEmailScheduler();                          // ← ADD THIS LINE ganesh
+    // console.log('Initializing canteen email scheduler...');   // ← ADD THIS LINE ganesh
+    // initializeCanteenEmailScheduler();                          // ← ADD THIS LINE ganesh
     
     console.log('Initializing auto-mark stale leads scheduler...');
     cron.schedule('0 2 * * *', async () => {
