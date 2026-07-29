@@ -55,7 +55,7 @@ exports.showAll = async (req, res) => {
       .limit(limit)
       .populate("createdBy", "name email")
       .populate("company", "name")
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     // ── FIX: previously returned a 404 "No products found" whenever the

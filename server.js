@@ -256,7 +256,7 @@ app.use('/api/project-task-agent', projectTaskAgentRoutes);
 app.use('/api/reports', reportRoutes);
 
 
-app.use((err, req, res, next) => {
+app.use((err, req, res, next) => {  
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal Server Error: ' + err.message });
 });
