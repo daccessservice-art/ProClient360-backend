@@ -73,6 +73,12 @@ const callLogRoutes = require('./routes/callLogRoutes');
 
 const oldAMCHistoryRoutes = require('./routes/oldAMCHistoryRoutes');
 
+// ✅ NEW — Project Task Agent (suggest-assignees / suggest-tester / my-focus)
+const projectTaskAgentRoutes = require('./routes/projectTaskAgentRoutes');
+
+const reportRoutes = require('./routes/reportRoutes');
+
+
 console.log('Initializing daily Sales Manager report scheduler...');
 initializeDailySalesManagerReportScheduler();
 
@@ -244,6 +250,10 @@ app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/projectPurchase', projectPurchaseRoutes);
 app.use('/api/old-amc-history', oldAMCHistoryRoutes);
+
+// ✅ NEW — Project Task Agent routes
+app.use('/api/project-task-agent', projectTaskAgentRoutes);
+app.use('/api/reports', reportRoutes);
 
 
 app.use((err, req, res, next) => {
