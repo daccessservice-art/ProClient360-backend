@@ -23,8 +23,8 @@ const vendorSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Material category is required'],
     enum: {
-      values: ['Raw Material', 'Finished Goods', 'Scrap Material', 'Service', 'Logistics', 'Other'],
-      message: 'Material category must be one of: Raw Material, Finished Goods, Scrap Material, Service, Logistics, Other',
+      values: ['Raw Material', 'Finished Goods', 'Scrap Material', 'Service', 'Logistics', 'Manufacturing', 'Automotive', 'Other'],
+      message: 'Material category must be one of: Raw Material, Finished Goods, Scrap Material, Service, Logistics, Manufacturing, Automotive, Other',
     },
   },
   customMaterialCategory: {
@@ -146,7 +146,6 @@ const vendorSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Remarks cannot exceed 500 characters'],
   },
-  // ✅ NEW FIELD
   vendorProducts: {
     type: String,
     trim: true,
@@ -164,8 +163,6 @@ const vendorSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Compound unique index: same email is allowed across different companies,
-// but duplicate email within the same company is blocked.
 vendorSchema.index({ email: 1, company: 1 }, { unique: true });
 
 const Vendor = mongoose.model('Vendor', vendorSchema);

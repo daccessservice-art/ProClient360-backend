@@ -372,55 +372,73 @@ exports.chatWithAgent = async (req, res) => {
       return res.status(500).json({ success: false, error: "AI agent is not configured yet. Add ANTHROPIC_API_KEY to your backend .env file." });
     }
 
-    const openTasks = await TaskSheet.find({
-      employees: user._id,
-      taskStatus: { $in: OPEN_TASK_STATUSES },
-    })
+    // Two separate sets, on purpose:
+    //  - openTasks: what the write-tools (propose_task_update /
+    //    propose_log_work) are allowed to touch — editing a completed
+    //    task doesn't make sense for those actions.
+    //  - allTasks: everything, including completed — used only for
+    //    ANSWERING questions ("how many have I completed"), never for
+    //    matching a tool call.
+    const allTasks = await TaskSheet.find({ employees: user._id })
       .populate('project', 'name')
       .populate('taskName', 'name')
-      .limit(30)
+      .sort({ updatedAt: -1 })
+      .limit(50)
       .lean();
+
+    const openTasks = allTasks.filter(t => OPEN_TASK_STATUSES.includes(t.taskStatus));
+    const completedTasks = allTasks.filter(t => t.taskStatus === 'completed');
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const taskLines = openTasks.map(t => {
+    const buildTaskLine = (t) => {
       const end = new Date(t.endDate);
       end.setHours(0, 0, 0, 0);
       const daysOverdue = Math.round((today - end) / (1000 * 60 * 60 * 24));
-      const overdueNote = daysOverdue > 0 ? `${daysOverdue} day(s) overdue` : daysOverdue === 0 ? 'due today' : 'not yet due';
+      const overdueNote = t.taskStatus === 'completed'
+        ? 'completed'
+        : daysOverdue > 0 ? `${daysOverdue} day(s) overdue` : daysOverdue === 0 ? 'due today' : 'not yet due';
 
       const qaNote = t.qaStatus && t.qaStatus !== 'none' ? `, QA: ${t.qaStatus}` : '';
       const cyclesNote = t.testCycles ? `, ${t.testCycles} bug round(s)` : '';
       const remarkNote = t.remark ? `, last remark: "${t.remark.slice(0, 120)}"` : '';
-
-      // Assigned date = when this task record was created (timestamps:true
-      // on the schema). This is what lets the Agent actually answer
-      // "what was assigned today" instead of falsely claiming it has no
-      // access to dates — it always did, it just wasn't being told.
       const assignedNote = t.createdAt ? `, assigned: ${new Date(t.createdAt).toISOString().slice(0, 10)}` : '';
 
-      return `- "${t.taskName?.name || 'Task'}" on project "${t.project?.name || 'Project'}", priority: ${t.priority}, status: ${t.taskStatus}, level: ${t.taskLevel}%, ${overdueNote}${assignedNote}${qaNote}${cyclesNote}${remarkNote}`;
-    }).join('\n');
+      return `- [[${t.taskName?.name || 'Task'}]] on project [[${t.project?.name || 'Project'}]], priority: ${t.priority}, status: ${t.taskStatus}, level: ${t.taskLevel}%, ${overdueNote}${assignedNote}${qaNote}${cyclesNote}${remarkNote}`;
+    };
 
+    const openLines = openTasks.map(buildTaskLine).join('\n');
+    const completedLines = completedTasks.map(buildTaskLine).join('\n');
     const todayISO = today.toISOString().slice(0, 10);
 
-    const systemPrompt = `You are the "Work Agent" inside ProClient360. You are speaking with ${user.name || 'an employee'} about their own current tasks.
+    const systemPrompt = `You are the "Work Agent" inside ProClient360. You are speaking with ${user.name || 'an employee'} about their own tasks.
 
-Today's date is ${todayISO}. You DO have access to the current date and to each task's assigned date (shown below as "assigned: YYYY-MM-DD") — never claim you lack access to dates or a calendar. To answer "what was assigned today", compare each task's assigned date to today's date given above.
+Today's date is ${todayISO}. You DO have access to the current date and to each task's assigned date (shown below as "assigned: YYYY-MM-DD") — never claim you lack access to dates or a calendar.
+
+Totals: ${allTasks.length} tasks shown in total — ${openTasks.length} currently open, ${completedTasks.length} completed. If the real total is larger than what's listed below, mention that only the most recent 50 are shown.
+
+Formatting:
+- Plain text only — NEVER use markdown like **bold**, bullet symbols (*, •), or headers.
+- Whenever you mention a specific task name or project name, wrap it in double square brackets exactly like [[Task Name]] or [[Project Name]] — every single time you say one, even if repeated. This is required so the app can highlight it — do not use this bracket style for anything else.
+- When listing more than one task, put each on its own line like: "- [[Task Name]] — 35% complete". Use a real line break between items.
 
 Rules:
 - Answer using ONLY the task data below. Never invent task names, dates, or numbers.
-- Keep replies short: 2-3 sentences, suitable to be read aloud.
+- Keep replies short: 2-4 sentences, suitable to be read aloud.
+- You can answer questions about BOTH open and completed tasks using the data below (e.g. "how many have I completed").
 - If asked WHY a task is late, stuck, or not completed, reason from the signals actually present in its data — QA status, bug round count, and its last remark are the real evidence. If none of that explains it, say the data doesn't show a clear reason rather than inventing one.
-- When it fits naturally, offer one brief, practical suggestion (e.g. "worth pinging QA" or "this one's overdue and low priority — maybe reprioritize it") — but only when grounded in the visible data, not generic advice.
-- If the user describes work they DID (e.g. "I finished the API integration, it's 80% done now"), use the propose_log_work tool.
-- If the user asks to change ONE specific field without describing new work (e.g. "change the end date to Friday"), use the propose_task_update tool.
+- When it fits naturally, offer one brief, practical suggestion — but only when grounded in the visible data, not generic advice.
+- If the user describes work they DID, use the propose_log_work tool — this only works on OPEN tasks, never completed ones.
+- If the user asks to change ONE specific field without describing new work, use the propose_task_update tool — also only for OPEN tasks.
 - If unsure which task they mean, ask a clarifying question in plain text — do not guess or call a tool.
 - You cannot touch other employees' tasks, only ${user.name || 'this user'}'s own tasks listed below.
 
-${user.name || 'This user'}'s current open tasks (${openTasks.length} total):
-${taskLines || 'No open tasks right now.'}
+${user.name || 'This user'}'s OPEN tasks (${openTasks.length}):
+${openLines || 'None right now.'}
+
+${user.name || 'This user'}'s COMPLETED tasks (${completedTasks.length}, most recent first):
+${completedLines || 'None yet.'}
 `;
 
     const conversationHistory = Array.isArray(history)
