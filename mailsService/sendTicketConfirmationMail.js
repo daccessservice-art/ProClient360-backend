@@ -115,11 +115,18 @@ exports.sendConfirmationMail = async (id) => {
                   </div>
   
                   <p>Our dedicated support team is already on it and will review your ticket shortly. We aim to resolve your issue as quickly as possible.</p>
-                  <p>If you have any questions or need further assistance, please feel free to reach us at our toll-free number: ${ticket?.company?.landlineNo || ticket?.company?.mobileNo}.</p>
+                  <p>If you have any questions or need further assistance, please feel free to reach us on our toll-free number: <span class="highlight">1800 209 7799</span> or on our service lines: <span class="highlight">9371199635 / 9511905078</span>.</p>
 
-                  <p>Thank you for trusting ${ticket?.company?.name}!</p>
+                  <div class="ticket-details">
+                      <p><strong>Escalation Matrix:</strong></p>
+                      <p>If you are not satisfied with the response or if there is any delay, please contact:</p>
+                      <p>• Service Manager – Mr. Vitthal: <span class="highlight">9372341588</span></p>
+                      <p>• AVP – Mr. Pravin: <span class="highlight">9373085760</span></p>
+                  </div>
 
-                  <p>Warm regards,<br>The ${ticket?.company?.name} Service Team</p>
+                  <p>We appreciate your trust in our services and thank you for giving us the opportunity to serve you.</p>
+
+                  <p>Warm regards,<br>Service Management Team</p>
               </div>
               <div class="footer">
                   <p>This email was sent to you by ${ticket?.company?.name}. Please note that this is an auto-generated message, and replies to this email will not be monitored.</p>
