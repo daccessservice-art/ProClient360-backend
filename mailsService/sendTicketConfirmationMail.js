@@ -103,7 +103,7 @@ exports.sendConfirmationMail = async (id) => {
                       <p><strong>Product Name:</strong> <span class="highlight">${
                         ticket?.product
                       }</span></p>
-                      <p><strong>Issue Description:</strong> <span class="highlight">${
+                      <p><strong> Issue Description:</strong> <span class="highlight">${
                         ticket?.details
                       }</span></p>
                       <p><strong>Registered By:</strong> <span class="highlight">${
