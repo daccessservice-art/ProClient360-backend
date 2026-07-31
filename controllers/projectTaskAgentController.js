@@ -154,7 +154,11 @@ exports.suggestNextFocus = async (req, res) => {
       employees: user._id,
       taskStatus: { $in: OPEN_TASK_STATUSES },
     })
-      .populate('project', 'name')
+      .populate({
+        path: 'project',
+        select: 'name custId',
+        populate: { path: 'custId', select: 'custName' },
+      })
       .populate('taskName', 'name')
       .lean();
 
@@ -174,7 +178,11 @@ exports.suggestNextFocus = async (req, res) => {
 
       return {
         taskId: task._id,
-        projectName: task.project?.name || 'Unknown Project',
+        // Distinguish "project exists but has no name" from "task has no
+        // project linked at all" — the second case is the real data
+        // problem worth investigating in that task's record directly.
+        projectName: task.project ? (task.project.name || 'Unnamed Project') : 'No project linked',
+        customerName: task.project?.custId?.custName || null,
         taskName: task.taskName?.name || 'Task',
         priority: task.priority || 'medium',
         endDate: task.endDate,
@@ -405,7 +413,7 @@ exports.chatWithAgent = async (req, res) => {
       const remarkNote = t.remark ? `, last remark: "${t.remark.slice(0, 120)}"` : '';
       const assignedNote = t.createdAt ? `, assigned: ${new Date(t.createdAt).toISOString().slice(0, 10)}` : '';
 
-      return `- [[${t.taskName?.name || 'Task'}]] on project [[${t.project?.name || 'Project'}]], priority: ${t.priority}, status: ${t.taskStatus}, level: ${t.taskLevel}%, ${overdueNote}${assignedNote}${qaNote}${cyclesNote}${remarkNote}`;
+      return `- [[T:${t.taskName?.name || 'Task'}]] on project [[P:${t.project?.name || 'Project'}]], priority: ${t.priority}, status: ${t.taskStatus}, level: ${t.taskLevel}%, ${overdueNote}${assignedNote}${qaNote}${cyclesNote}${remarkNote}`;
     };
 
     const openLines = openTasks.map(buildTaskLine).join('\n');
@@ -420,8 +428,8 @@ Totals: ${allTasks.length} tasks shown in total — ${openTasks.length} currentl
 
 Formatting:
 - Plain text only — NEVER use markdown like **bold**, bullet symbols (*, •), or headers.
-- Whenever you mention a specific task name or project name, wrap it in double square brackets exactly like [[Task Name]] or [[Project Name]] — every single time you say one, even if repeated. This is required so the app can highlight it — do not use this bracket style for anything else.
-- When listing more than one task, put each on its own line like: "- [[Task Name]] — 35% complete". Use a real line break between items.
+- Whenever you mention a specific TASK name, wrap it exactly like [[T:Task Name]]. Whenever you mention a specific PROJECT name, wrap it exactly like [[P:Project Name]]. Use these every single time you say one, even if repeated — this is required so the app can show them as distinct colored badges.
+- When listing more than one task, put each on its own line like: "- [[T:Task Name]] on [[P:Project Name]] — 35% complete". Use a real line break between items.
 
 Rules:
 - Answer using ONLY the task data below. Never invent task names, dates, or numbers.
@@ -448,8 +456,13 @@ ${completedLines || 'None yet.'}
     const anthropicResponse = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-opus-5',
         max_tokens: 400,
+        // Opus 5 defaults to "high" reasoning effort, which costs more and
+        // isn't needed for a grounded, constrained lookup/tool-call task
+        // like this one — "low" keeps it fast and cheap while still
+        // capable enough for picking the right tool and summarizing data.
+        output_config: { effort: 'low' },
         system: systemPrompt,
         tools: TOOLS,
         messages: [...conversationHistory, { role: 'user', content: message.trim() }],
