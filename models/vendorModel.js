@@ -163,7 +163,8 @@ const vendorSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-vendorSchema.index({ email: 1, company: 1 }, { unique: true });
+// ✅ REMOVED: unique index on { email, company } — duplicate emails are now allowed
+// (previously: vendorSchema.index({ email: 1, company: 1 }, { unique: true });)
 
 const Vendor = mongoose.model('Vendor', vendorSchema);
 

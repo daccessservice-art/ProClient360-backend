@@ -109,6 +109,15 @@ const startServer = async () => {
       } catch (e) {
         // Ignore error if index doesn't exist
       }
+
+        // ✅ NEW: allow duplicate vendor emails — drop the old unique index
+      try {
+        await db.collection('vendors').dropIndex('email_1_company_1');
+        console.log('✅ Dropped old unique email_1_company_1 index on vendors');
+      } catch (e) {
+        // Ignore error if index doesn't exist
+      }
+
     }
     // ===== END INDEX FIX =====
 
