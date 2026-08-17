@@ -1,0 +1,483 @@
+// controllers/campaignController.js
+//
+// Product-wise WhatsApp campaign module, sending to your Customer Master.
+//
+// UPDATED — the real clickable-questionnaire flow:
+//   1. sendCampaign() sends the template AND creates a PENDING CampaignSession
+//      per customer (if the template has questions defined).
+//   2. receiveWhatsAppReply() is the engine: when a customer's first reply
+//      arrives, it starts the session and sends Question 1 as a tappable
+//      List Message. Each subsequent list_reply tap advances to the next
+//      question, until all are answered.
+//   3. listSessions() lets the app show the structured Q&A that resulted.
+
+const CampaignTemplate = require('../models/campaignTemplateModel');
+const CampaignLog = require('../models/campaignLogModel');
+const CampaignReply = require('../models/campaignReplyModel');
+const CampaignSession = require('../models/campaignSessionModel');
+const wa = require('../services/campaignWhatsAppService');
+
+// ── Templates ──────────────────────────────────────────────────────
+
+// GET /api/campaigns/templates
+exports.listTemplates = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const templates = await CampaignTemplate.find({ company: companyId }).sort({ createdAt: -1 });
+    res.status(200).json({ success: true, templates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET /api/campaigns/templates/approved
+exports.listApprovedTemplates = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const templates = await CampaignTemplate.find({ company: companyId, status: 'APPROVED' })
+      .select('title metaTemplateName language questions')
+      .sort({ title: 1 });
+    res.status(200).json({ success: true, templates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/templates
+// Body may include:
+//   buttons:   [{ text: "CALL ME" }]                          — max 3
+//   questions: [{ questionText, options: [{title, description}] }] — max 10
+exports.createTemplate = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const { title, category, language, bodyText, buttons, questions } = req.body;
+
+    if (!title || !title.trim()) return res.status(400).json({ success: false, error: 'Product name (title) is required.' });
+    if (!bodyText || !bodyText.trim()) return res.status(400).json({ success: false, error: 'bodyText is required.' });
+    if (buttons && buttons.length > 3) {
+      return res.status(400).json({ success: false, error: 'Maximum 3 quick-reply buttons allowed.' });
+    }
+    if (questions && questions.length > 10) {
+      return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
+    }
+
+    const template = await CampaignTemplate.create({
+      company: companyId,
+      title: title.trim(),
+      metaTemplateName: wa.slugify(title),
+      category: category || 'MARKETING',
+      language: language || 'en',
+      bodyText,
+      buttons: buttons || [],
+      questions: questions || [],
+      status: 'DRAFT',
+      createdBy: req.user._id,
+    });
+
+    res.status(201).json({ success: true, message: 'Template saved as draft.', template });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ success: false, error: 'A template with a similar product name already exists.' });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// PUT /api/campaigns/templates/:id
+exports.updateTemplate = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const { title, category, language, bodyText, buttons, questions } = req.body;
+
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    if (buttons && buttons.length > 3) {
+      return res.status(400).json({ success: false, error: 'Maximum 3 quick-reply buttons allowed.' });
+    }
+    if (questions && questions.length > 10) {
+      return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
+    }
+
+    const bodyChanged = bodyText !== undefined && bodyText !== template.bodyText;
+    const buttonsChanged = buttons !== undefined && JSON.stringify(buttons) !== JSON.stringify(template.buttons.map(b => ({ text: b.text })));
+
+    if (title !== undefined) template.title = title.trim();
+    if (category !== undefined) template.category = category;
+    if (language !== undefined) template.language = language;
+    if (bodyText !== undefined) template.bodyText = bodyText;
+    if (buttons !== undefined) template.buttons = buttons;
+    if (questions !== undefined) template.questions = questions; // questions don't need Meta re-approval — sent as session messages, not part of the template
+
+    if (bodyChanged || buttonsChanged) {
+      template.status = 'DRAFT';
+      template.rejectionReason = '';
+    }
+
+    await template.save();
+    res.status(200).json({ success: true, message: 'Template updated.', template });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// DELETE /api/campaigns/templates/:id
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const template = await CampaignTemplate.findOneAndDelete({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+    res.status(200).json({ success: true, message: 'Template deleted.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/templates/:id/submit
+exports.submitTemplate = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    const result = await wa.submitTemplateToMeta(template);
+    template.status = result.status || 'PENDING';
+    template.rejectionReason = '';
+    if (result.id && !template.metaTemplateId) template.metaTemplateId = result.id; // only set once, on first create
+    await template.save();
+
+    const message = result.mode === 'edited'
+      ? 'Changes submitted to Meta — back under review.'
+      : 'Submitted to Meta for review.';
+
+    res.status(200).json({ success: true, message, template });
+  } catch (err) {
+    const msg = err.response?.data?.error?.message || err.message;
+    res.status(500).json({ success: false, error: msg });
+  }
+};
+
+// POST /api/campaigns/templates/:id/sync-status
+exports.syncTemplateStatus = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    const status = await wa.checkTemplateStatus(template.metaTemplateName);
+    if (status) template.status = status;
+    await template.save();
+
+    res.status(200).json({ success: true, template });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Sending (targets Customer Master) ─────────────────────────────
+
+// POST /api/campaigns/send
+exports.sendCampaign = async (req, res) => {
+  try {
+    const Customer = require('../models/customerModel');
+    const companyId = req.user.company || req.user._id;
+    const { templateId, customerIds } = req.body;
+
+    if (!templateId) return res.status(400).json({ success: false, error: 'templateId is required.' });
+    if (!Array.isArray(customerIds) || customerIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'No customers selected.' });
+    }
+    if (customerIds.length > 200) {
+      return res.status(400).json({ success: false, error: 'Max 200 customers per campaign.' });
+    }
+
+    const template = await CampaignTemplate.findOne({ _id: templateId, company: companyId, status: 'APPROVED' });
+    if (!template) {
+      return res.status(400).json({ success: false, error: 'Template not found or not yet approved by Meta.' });
+    }
+
+    const customers = await Customer.find({ _id: { $in: customerIds }, company: companyId });
+
+    const recipients = [];
+    let sentCount = 0;
+    let skippedCount = 0;
+
+    for (const customer of customers) {
+      const name = customer.custName || 'Unnamed customer';
+
+      if (!customer.phoneNumber1) {
+        recipients.push({ customerId: customer._id, name, mobile: '', status: 'skipped', reason: 'No phone number on file.' });
+        skippedCount++;
+        continue;
+      }
+
+      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language);
+
+      if (result.ok) {
+        recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
+        sentCount++;
+
+        // NEW — if this template has tappable questions, set up a session
+        // now so the webhook knows to start the question flow the moment
+        // this customer replies. Upsert so re-sending the same campaign
+        // doesn't create duplicate sessions.
+        if (template.questions && template.questions.length > 0) {
+          await CampaignSession.findOneAndUpdate(
+            { company: companyId, phone: customer.phoneNumber1, template: template._id },
+            {
+              $setOnInsert: {
+                company: companyId,
+                customer: customer._id,
+                template: template._id,
+                phone: customer.phoneNumber1,
+                status: 'PENDING',
+                currentQuestionIndex: -1,
+                answers: [],
+              },
+            },
+            { upsert: true, new: true }
+          );
+        }
+      } else {
+        recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'skipped', reason: result.reason });
+        skippedCount++;
+      }
+
+      await new Promise((r) => setTimeout(r, 300)); // gentle pacing to avoid rate limits
+    }
+
+    const log = await CampaignLog.create({
+      company: companyId,
+      template: template._id,
+      templateTitle: template.title,
+      sentBy: req.user._id,
+      recipients,
+      sentCount,
+      skippedCount,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Campaign done: ${sentCount} sent, ${skippedCount} skipped.`,
+      log,
+    });
+  } catch (err) {
+    console.error('sendCampaign error:', err);
+    res.status(500).json({ success: false, error: `Campaign failed: ${err.message}` });
+  }
+};
+
+// GET /api/campaigns/logs
+exports.listCampaignLogs = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const logs = await CampaignLog.find({ company: companyId })
+      .populate('sentBy', 'name email')
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.status(200).json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Replies (raw inbound messages, text or button/list taps) ─────
+
+// GET /api/campaigns/replies
+// GET /api/campaigns/replies?customerId=<id>
+exports.listReplies = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const { customerId } = req.query;
+
+    const query = { company: companyId };
+    if (customerId) query.customer = customerId;
+
+    const replies = await CampaignReply.find(query)
+      .populate('customer', 'custName phoneNumber1')
+      .sort({ createdAt: -1 })
+      .limit(200);
+
+    res.status(200).json({ success: true, replies });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Sessions (structured Q&A answers) ─────────────────────────────
+
+// GET /api/campaigns/sessions
+// GET /api/campaigns/sessions?customerId=<id>
+// This is the NEW structured view — the actual filled-in answers from
+// the tap-through questionnaire, as opposed to raw free-text replies.
+exports.listSessions = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const { customerId } = req.query;
+
+    const query = { company: companyId };
+    if (customerId) query.customer = customerId;
+
+    const sessions = await CampaignSession.find(query)
+      .populate('customer', 'custName phoneNumber1')
+      .populate('template', 'title')
+      .sort({ updatedAt: -1 })
+      .limit(200);
+
+    res.status(200).json({ success: true, sessions });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Inbound webhook — this is the engine that drives the question flow ──
+
+function last10Digits(phone) {
+  if (!phone) return null;
+  return String(phone).replace(/\D/g, '').slice(-10);
+}
+
+/**
+ * Advances (or starts) a customer's question session in response to any
+ * inbound event. Returns nothing — fire-and-forget, errors are logged
+ * not thrown, since this must never block the webhook's fast ack.
+ */
+async function advanceSession(phone, listReplyId, listReplyTitle) {
+  // NOTE: intentionally NOT filtering by company here. sendCampaign()
+  // creates the session using the logged-in user's real company ID, but
+  // this webhook only has DEFAULT_WHATSAPP_COMPANY_ID from .env — if
+  // those two values aren't byte-for-byte identical, filtering by
+  // company here would silently find nothing and Question 1 would never
+  // fire, no matter how many times the customer replies. Since one WABA
+  // phone number webhook effectively belongs to one company in this
+  // architecture anyway, matching on phone + status is safe and removes
+  // that fragile dependency entirely.
+  const session = await CampaignSession.findOne({
+    phone,
+    status: { $in: ['PENDING', 'IN_PROGRESS'] },
+  }).sort({ updatedAt: -1 }).populate('template');
+
+  if (!session || !session.template) return;
+
+  const questions = session.template.questions || [];
+  if (questions.length === 0) return;
+
+  // If this inbound event is a tap on the CURRENT question's list, record it.
+  if (session.status === 'IN_PROGRESS' && listReplyId != null) {
+    const current = questions[session.currentQuestionIndex];
+    if (current) {
+      const optIndex = parseInt(String(listReplyId).replace('opt_', ''), 10);
+      const chosen = current.options[optIndex];
+      session.answers.push({
+        questionText: current.questionText,
+        answerTitle: listReplyTitle || chosen?.title || '',
+        answerDescription: chosen?.description || '',
+      });
+    }
+  }
+
+  const nextIndex = session.currentQuestionIndex + 1;
+
+  if (nextIndex < questions.length) {
+    // Send the next question.
+    const nextQ = questions[nextIndex];
+    const result = await wa.sendListMessage(phone, nextQ.questionText, nextQ.options, 'Select');
+    if (result.ok) {
+      session.currentQuestionIndex = nextIndex;
+      session.status = 'IN_PROGRESS';
+      if (!session.startedAt) session.startedAt = new Date();
+    } else {
+      console.error(`[Campaign Session] Failed to send question ${nextIndex} to ${phone}:`, result.reason);
+    }
+  } else {
+    // All questions answered.
+    session.status = 'COMPLETED';
+    session.completedAt = new Date();
+    await wa.sendTextMessage(phone, 'Thank you! We\'ve got your details and our team will reach out shortly.');
+  }
+
+  await session.save();
+}
+
+exports.receiveWhatsAppReply = async (req, res) => {
+  res.sendStatus(200); // ack fast — Meta/Pinnacle retries if you don't respond quickly
+
+  try {
+    const Customer = require('../models/customerModel');
+    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const incomingMessages = value?.messages;
+
+    if (incomingMessages && incomingMessages.length > 0) {
+      const companyId = process.env.DEFAULT_WHATSAPP_COMPANY_ID;
+      if (!companyId) {
+        console.warn('[Campaign Webhook] DEFAULT_WHATSAPP_COMPANY_ID not set — cannot match customers.');
+        return;
+      }
+
+      for (const msg of incomingMessages) {
+        const from = msg.from;
+        const target = last10Digits(from);
+        if (!target) continue;
+
+        // Detect the exact event type Meta sends.
+        let text;
+        let isButtonClick = false;
+        let listReplyId = null;
+        let listReplyTitle = null;
+
+        if (msg.type === 'button' && msg.button?.text) {
+          // Tap on a template's quick-reply button.
+          text = msg.button.text;
+          isButtonClick = true;
+        } else if (msg.type === 'interactive' && msg.interactive?.list_reply) {
+          // Tap on a List Message row — this is what the question flow uses.
+          text = msg.interactive.list_reply.title;
+          isButtonClick = true;
+          listReplyId = msg.interactive.list_reply.id;
+          listReplyTitle = msg.interactive.list_reply.title;
+        } else if (msg.type === 'interactive' && msg.interactive?.button_reply) {
+          text = msg.interactive.button_reply.title;
+          isButtonClick = true;
+        } else {
+          text = msg.text?.body || `[${msg.type} message]`;
+        }
+
+        const customers = await Customer.find({
+          company: companyId,
+          phoneNumber1: { $regex: `${target}$` },
+        }).limit(1);
+        const customer = customers[0] || null;
+
+        // Always log the raw event, same as before.
+        await CampaignReply.create({
+          company: companyId,
+          customer: customer ? customer._id : null,
+          phone: from,
+          message: text,
+          messageId: msg.id || '',
+          isButtonClick,
+        });
+
+        // NEW — drive the question flow forward.
+        try {
+          await advanceSession(from, listReplyId, listReplyTitle);
+        } catch (sessErr) {
+          console.error('[Campaign Session] advanceSession error:', sessErr);
+        }
+
+        console.log(
+          customer
+            ? `[Campaign Webhook] ${isButtonClick ? 'Click' : 'Reply'} stored, matched customer ${customer._id}`
+            : `[Campaign Webhook] ${isButtonClick ? 'Click' : 'Reply'} stored, no matching customer for ${from}`
+        );
+      }
+    }
+
+    const statuses = value?.statuses;
+    if (statuses) {
+      statuses.forEach((s) => console.log(`[Campaign Webhook] Status: ${s.recipient_id} -> ${s.status}`));
+    }
+  } catch (err) {
+    console.error('[Campaign Webhook] Error:', err);
+  }
+};

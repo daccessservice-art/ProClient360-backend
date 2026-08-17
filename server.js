@@ -64,6 +64,9 @@ const accountMasterRoutes = require('./routes/accountMasterRoutes');
 
 const projectPurchaseRoutes = require('./routes/projectPurchaseRoutes');
 
+// ✅ NEW — WhatsApp Campaign module (product-wise, sends to Customer Master)
+const campaignRoutes = require('./routes/campaignRoutes');
+
 // ✅ MISSING IMPORT ADDED HERE
 const customerTicketRoutes = require("./routes/customerTicketRoutes");
 
@@ -264,6 +267,11 @@ app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/projectPurchase', projectPurchaseRoutes);
 app.use('/api/old-amc-history', oldAMCHistoryRoutes);
+
+// ✅ NEW — WhatsApp Campaign module routes
+console.log('Registering /api/campaigns routes...');
+app.use('/api/campaigns', campaignRoutes);
+console.log('Campaign routes registered at /api/campaigns');
 
 // ✅ NEW — Project Task Agent routes
 app.use('/api/project-task-agent', projectTaskAgentRoutes);

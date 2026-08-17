@@ -180,6 +180,12 @@ const designationSchema = new mongoose.Schema({
             'viewProjectPurchase',
             'updateProjectPurchase',
             'deleteProjectPurchase',
+
+            'createCampaign',
+            'viewCampaign',
+            'updateCampaign',
+            'deleteCampaign',
+            'sendCampaign',
         ],
     }]
 
