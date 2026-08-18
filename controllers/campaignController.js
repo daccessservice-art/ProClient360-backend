@@ -241,15 +241,20 @@ exports.sendCampaign = async (req, res) => {
         recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
         sentCount++;
 
-        // NEW — if this template has tappable questions, set up a session
-        // now so the webhook knows to start the question flow the moment
-        // this customer replies. Upsert so re-sending the same campaign
-        // doesn't create duplicate sessions.
+        // FIXED: previously used $setOnInsert, which only applied when NO
+        // session existed yet for this customer+template. If this customer
+        // was ever sent this same product before (even in an old test),
+        // clicking "Send Campaign" again silently did nothing to their
+        // existing session — it could already be COMPLETED or mid-way
+        // through questions, meaning images and Question 1 would never
+        // fire again for them. Every send now genuinely restarts the
+        // conversation from scratch for that customer, as the person
+        // clicking "Send" would reasonably expect.
         if (template.questions && template.questions.length > 0) {
           await CampaignSession.findOneAndUpdate(
             { company: companyId, phone: customer.phoneNumber1, template: template._id },
             {
-              $setOnInsert: {
+              $set: {
                 company: companyId,
                 customer: customer._id,
                 template: template._id,
@@ -257,6 +262,8 @@ exports.sendCampaign = async (req, res) => {
                 status: 'PENDING',
                 currentQuestionIndex: -1,
                 answers: [],
+                startedAt: null,
+                completedAt: null,
               },
             },
             { upsert: true, new: true }
