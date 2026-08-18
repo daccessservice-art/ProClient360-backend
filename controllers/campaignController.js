@@ -50,7 +50,7 @@ exports.listApprovedTemplates = async (req, res) => {
 exports.createTemplate = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
-    const { title, category, language, bodyText, buttons, questions } = req.body;
+    const { title, category, language, bodyText, buttons, questions, images } = req.body;
 
     if (!title || !title.trim()) return res.status(400).json({ success: false, error: 'Product name (title) is required.' });
     if (!bodyText || !bodyText.trim()) return res.status(400).json({ success: false, error: 'bodyText is required.' });
@@ -59,6 +59,9 @@ exports.createTemplate = async (req, res) => {
     }
     if (questions && questions.length > 10) {
       return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
+    }
+    if (images && images.length > 5) {
+      return res.status(400).json({ success: false, error: 'Maximum 5 images allowed.' });
     }
 
     const template = await CampaignTemplate.create({
@@ -70,6 +73,7 @@ exports.createTemplate = async (req, res) => {
       bodyText,
       buttons: buttons || [],
       questions: questions || [],
+      images: images || [],
       status: 'DRAFT',
       createdBy: req.user._id,
     });
@@ -87,7 +91,7 @@ exports.createTemplate = async (req, res) => {
 exports.updateTemplate = async (req, res) => {
   try {
     const companyId = req.user.company || req.user._id;
-    const { title, category, language, bodyText, buttons, questions } = req.body;
+    const { title, category, language, bodyText, buttons, questions, images } = req.body;
 
     const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
     if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
@@ -98,6 +102,9 @@ exports.updateTemplate = async (req, res) => {
     if (questions && questions.length > 10) {
       return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
     }
+    if (images && images.length > 5) {
+      return res.status(400).json({ success: false, error: 'Maximum 5 images allowed.' });
+    }
 
     const bodyChanged = bodyText !== undefined && bodyText !== template.bodyText;
     const buttonsChanged = buttons !== undefined && JSON.stringify(buttons) !== JSON.stringify(template.buttons.map(b => ({ text: b.text })));
@@ -107,7 +114,8 @@ exports.updateTemplate = async (req, res) => {
     if (language !== undefined) template.language = language;
     if (bodyText !== undefined) template.bodyText = bodyText;
     if (buttons !== undefined) template.buttons = buttons;
-    if (questions !== undefined) template.questions = questions; // questions don't need Meta re-approval — sent as session messages, not part of the template
+    if (questions !== undefined) template.questions = questions;
+    if (images !== undefined) template.images = images; // session images, never require re-approval
 
     if (bodyChanged || buttonsChanged) {
       template.status = 'DRAFT';
@@ -130,6 +138,22 @@ exports.deleteTemplate = async (req, res) => {
     res.status(200).json({ success: true, message: 'Template deleted.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/templates/upload-image
+// multipart/form-data, field name "image". Returns a mediaId to attach
+// to a template's images array — does NOT save it to any template itself,
+// the frontend does that via the normal create/update calls.
+exports.uploadTemplateImage = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No image file uploaded.' });
+
+    const mediaId = await wa.uploadMedia(req.file.buffer, req.file.mimetype, req.file.originalname);
+    res.status(200).json({ success: true, mediaId });
+  } catch (err) {
+    const msg = err.response?.data?.error?.message || err.message;
+    res.status(500).json({ success: false, error: msg });
   }
 };
 
@@ -352,15 +376,44 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   // phone number webhook effectively belongs to one company in this
   // architecture anyway, matching on phone + status is safe and removes
   // that fragile dependency entirely.
-  const session = await CampaignSession.findOne({
+  // FIXED: previously this searched PENDING and IN_PROGRESS together and
+  // just took whichever was most recently touched. If a customer has been
+  // sent multiple different products (common during testing — same test
+  // number, many campaigns), that could pick a brand-new PENDING session
+  // from an unrelated campaign instead of the conversation the customer
+  // is actually mid-way through, silently losing their answer. An
+  // IN_PROGRESS session — an active back-and-forth already happening —
+  // always takes priority; only fall back to PENDING (starting fresh)
+  // if nothing is currently in progress.
+  let session = await CampaignSession.findOne({
     phone,
-    status: { $in: ['PENDING', 'IN_PROGRESS'] },
+    status: 'IN_PROGRESS',
   }).sort({ updatedAt: -1 }).populate('template');
+
+  if (!session) {
+    session = await CampaignSession.findOne({
+      phone,
+      status: 'PENDING',
+    }).sort({ updatedAt: -1 }).populate('template');
+  }
 
   if (!session || !session.template) return;
 
   const questions = session.template.questions || [];
   if (questions.length === 0) return;
+
+  // NEW — first time this session becomes active (still PENDING, about to
+  // start), send any attached images before Question 1. Session-only
+  // content — never affects Meta approval status.
+  const isStarting = session.status === 'PENDING';
+  if (isStarting && session.template.images && session.template.images.length > 0) {
+    for (const img of session.template.images) {
+      const imgResult = await wa.sendImageMessage(phone, img.mediaId, img.caption);
+      if (!imgResult.ok) {
+        console.error(`[Campaign Session] Failed to send image to ${phone}:`, imgResult.reason);
+      }
+    }
+  }
 
   // If this inbound event is a tap on the CURRENT question's list, record it.
   if (session.status === 'IN_PROGRESS' && listReplyId != null) {
@@ -381,7 +434,13 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   if (nextIndex < questions.length) {
     // Send the next question.
     const nextQ = questions[nextIndex];
-    const result = await wa.sendListMessage(phone, nextQ.questionText, nextQ.options, 'Select');
+    const result = await wa.sendListMessage(
+      phone,
+      nextQ.questionText,
+      nextQ.options,
+      'Select',
+      session.template.title || 'Please choose an option'
+    );
     if (result.ok) {
       session.currentQuestionIndex = nextIndex;
       session.status = 'IN_PROGRESS';
