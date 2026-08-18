@@ -162,12 +162,19 @@ async function sendTemplateMessage(toRawNumber, metaTemplateName, language) {
  * to you. Do not call this as part of the initial campaign blast — only
  * in response to an inbound webhook event.
  *
+ * FIXED: Pinnacle's documented payload always includes a "header" field
+ * alongside body/action — this was missing entirely in the previous
+ * version, which is the likely reason list messages were never actually
+ * being accepted by their API even though the initial template send
+ * (a different, simpler endpoint) worked fine.
+ *
  * @param toRawNumber   customer's phone number
  * @param questionText  shown as the message body (max 1024 chars)
  * @param options       [{ title, description }] — 1 to 10 rows
  * @param buttonLabel   text on the "open list" button (max 20 chars)
+ * @param headerText    short label above the question (max 60 chars)
  */
-async function sendListMessage(toRawNumber, questionText, options, buttonLabel = 'Select') {
+async function sendListMessage(toRawNumber, questionText, options, buttonLabel = 'Select', headerText = 'Please choose an option') {
   const to = formatIndianMobile(toRawNumber);
   if (!to) return { ok: false, reason: `Invalid phone number: "${toRawNumber}"` };
   if (!options || options.length === 0) return { ok: false, reason: 'No options provided for this question.' };
@@ -185,6 +192,7 @@ async function sendListMessage(toRawNumber, questionText, options, buttonLabel =
     type: 'interactive',
     interactive: {
       type: 'list',
+      header: { type: 'text', text: String(headerText).slice(0, 60) },
       body: { text: String(questionText).slice(0, 1024) },
       action: {
         button: String(buttonLabel).slice(0, 20),
@@ -229,6 +237,63 @@ async function sendTextMessage(toRawNumber, body) {
   }
 }
 
+/**
+ * NEW — uploads an image to Pinnacle's media store, returning a mediaId
+ * that can then be used in sendImageMessage below. Per their docs
+ * ("UPLOAD MEDIA"), this is a simple form-data POST — a completely
+ * different, simpler flow than the multi-step Resumable Upload API
+ * required for template header images (not implemented here — this
+ * covers session images sent as part of the question flow).
+ *
+ * @param fileBuffer  raw file bytes (e.g. from multer's memory storage)
+ * @param mimeType    e.g. 'image/jpeg', 'image/png'
+ * @param filename    original filename, used for the form-data part
+ */
+async function uploadMedia(fileBuffer, mimeType, filename) {
+  if (!WABA_PHONE_NUMBER_ID) throw new Error('WABA_PHONE_NUMBER_ID is not set in .env.');
+
+  const FormData = require('form-data');
+  const form = new FormData();
+  form.append('sheet', fileBuffer, { filename, contentType: mimeType }); // field name "sheet" per Pinnacle's documented sample
+
+  const res = await axios.post(
+    `${WABA_BASE_URL}/${WABA_PHONE_NUMBER_ID}/media`,
+    form,
+    { headers: { ...form.getHeaders(), apikey: WABA_API_KEY }, timeout: 30000 }
+  );
+
+  const mediaId = res.data?.response?.id;
+  if (!mediaId) throw new Error('Pinnacle did not return a media id for the uploaded file.');
+  return mediaId;
+}
+
+/**
+ * NEW — sends a single image as a session message (customer must have
+ * messaged within the last 24 hours, same rule as List Messages).
+ * Per Pinnacle's "Send Image Message" docs.
+ */
+async function sendImageMessage(toRawNumber, mediaId, caption = '') {
+  const to = formatIndianMobile(toRawNumber);
+  if (!to) return { ok: false, reason: `Invalid phone number: "${toRawNumber}"` };
+  if (!mediaId) return { ok: false, reason: 'No mediaId provided.' };
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'image',
+    image: { id: mediaId, ...(caption ? { caption } : {}) },
+  };
+
+  try {
+    const res = await client.post(`/${WABA_PHONE_NUMBER_ID}/messages`, payload);
+    return { ok: true, data: res.data };
+  } catch (err) {
+    const reason = err.response?.data?.error?.message || err.response?.data?.message || err.message;
+    return { ok: false, reason };
+  }
+}
+
 module.exports = {
   formatIndianMobile,
   slugify,
@@ -237,4 +302,6 @@ module.exports = {
   sendTemplateMessage,
   sendListMessage,
   sendTextMessage,
+  uploadMedia,
+  sendImageMessage,
 };
