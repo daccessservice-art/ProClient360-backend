@@ -429,11 +429,18 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   // start), send any attached images before Question 1. Session-only
   // content — never affects Meta approval status.
   const isStarting = session.status === 'PENDING';
-  if (isStarting && session.template.images && session.template.images.length > 0) {
-    for (const img of session.template.images) {
-      const imgResult = await wa.sendImageMessage(phone, img.mediaId, img.caption);
-      if (!imgResult.ok) {
-        console.error(`[Campaign Session] Failed to send image to ${phone}:`, imgResult.reason);
+  if (isStarting) {
+    const imageCount = session.template.images ? session.template.images.length : 0;
+    console.log(`[Campaign Session] Starting session for ${phone}, template "${session.template.title}" has ${imageCount} image(s) attached.`);
+
+    if (imageCount > 0) {
+      for (const img of session.template.images) {
+        const imgResult = await wa.sendImageMessage(phone, img.mediaId, img.caption);
+        if (imgResult.ok) {
+          console.log(`[Campaign Session] Image sent successfully to ${phone}, mediaId: ${img.mediaId}`);
+        } else {
+          console.error(`[Campaign Session] Failed to send image to ${phone}:`, imgResult.reason);
+        }
       }
     }
   }
