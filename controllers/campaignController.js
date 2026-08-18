@@ -164,6 +164,22 @@ exports.submitTemplate = async (req, res) => {
     const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
     if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
 
+    // FIXED: previously this ALWAYS called Meta, even when the template
+    // was already APPROVED and only images/questions had been added —
+    // neither of which Meta reviews at all. Re-submitting identical
+    // body/buttons content that's already approved is pointless and was
+    // triggering an "Invalid parameter" rejection. Since createTemplate/
+    // updateTemplate already reset status back to DRAFT whenever body or
+    // buttons genuinely change, an APPROVED status here means nothing
+    // Meta-relevant changed — skip the call entirely.
+    if (template.status === 'APPROVED') {
+      return res.status(200).json({
+        success: true,
+        message: 'No changes requiring Meta review — template is already approved. Images/questions are saved and active immediately.',
+        template,
+      });
+    }
+
     const result = await wa.submitTemplateToMeta(template);
     template.status = result.status || 'PENDING';
     template.rejectionReason = '';
