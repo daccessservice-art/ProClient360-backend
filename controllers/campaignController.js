@@ -371,8 +371,11 @@ exports.listReplyCustomers = async (req, res) => {
 
     const Customer = require('../models/customerModel');
 
+    const mongoose = require('mongoose');
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+
     const grouped = await CampaignReply.aggregate([
-      { $match: { company: companyId } },
+      { $match: { company: companyObjectId } },
       { $sort: { createdAt: -1 } },
       {
         $group: {
