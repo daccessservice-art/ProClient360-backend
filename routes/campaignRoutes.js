@@ -34,6 +34,7 @@ router.get('/logs',  permissionMiddleware(['viewCampaign']), ctrl.listCampaignLo
 
 // Replies — raw inbound messages/taps
 router.get('/replies', permissionMiddleware(['viewCampaign']), ctrl.listReplies);
+router.get('/replies/customers', permissionMiddleware(['viewCampaign']), ctrl.listReplyCustomers);
 
 // Sessions — NEW: structured Q&A from the tap-through questionnaire
 router.get('/sessions', permissionMiddleware(['viewCampaign']), ctrl.listSessions);

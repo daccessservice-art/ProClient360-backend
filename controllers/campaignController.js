@@ -266,7 +266,13 @@ exports.sendCampaign = async (req, res) => {
         // fire again for them. Every send now genuinely restarts the
         // conversation from scratch for that customer, as the person
         // clicking "Send" would reasonably expect.
-        if (template.questions && template.questions.length > 0) {
+        // FIXED: previously only created a session when the template had
+        // QUESTIONS — meaning an image-only template (no questions) never
+        // got a session at all, so advanceSession would never find
+        // anything to act on and images would silently never send.
+        const hasImages = template.images && template.images.length > 0;
+        const hasQuestions = template.questions && template.questions.length > 0;
+        if (hasImages || hasQuestions) {
           await CampaignSession.findOneAndUpdate(
             { company: companyId, phone: customer.phoneNumber1, template: template._id },
             {
@@ -351,6 +357,83 @@ exports.listReplies = async (req, res) => {
   }
 };
 
+// GET /api/campaigns/replies/customers?page=&limit=
+// NEW — inbox-style view: one row per customer (grouped), showing their
+// most recent message, a total reply count, and whether their last
+// message was a typed reply or a tapped button. Paginated so this stays
+// fast and readable even with hundreds of replies across many customers.
+exports.listReplyCustomers = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, Math.min(50, parseInt(req.query.limit) || 15));
+    const skip = (page - 1) * limit;
+
+    const Customer = require('../models/customerModel');
+
+    const grouped = await CampaignReply.aggregate([
+      { $match: { company: companyId } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: { $ifNull: ['$customer', '$phone'] },
+          customer: { $first: '$customer' },
+          phone: { $first: '$phone' },
+          lastMessage: { $first: '$message' },
+          lastIsButtonClick: { $first: '$isButtonClick' },
+          lastAt: { $first: '$createdAt' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { lastAt: -1 } },
+      {
+        $facet: {
+          rows: [{ $skip: skip }, { $limit: limit }],
+          totalCount: [{ $count: 'total' }],
+        },
+      },
+    ]);
+
+    const rows = grouped[0]?.rows || [];
+    const total = grouped[0]?.totalCount[0]?.total || 0;
+
+    // Fill in real customer names for rows that have a linked customer.
+    const customerIds = rows.filter((r) => r.customer).map((r) => r.customer);
+    const customers = customerIds.length
+      ? await Customer.find({ _id: { $in: customerIds } }).select('custName phoneNumber1')
+      : [];
+    const customerMap = new Map(customers.map((c) => [String(c._id), c]));
+
+    const items = rows.map((r) => {
+      const cust = r.customer ? customerMap.get(String(r.customer)) : null;
+      return {
+        customerId: r.customer || null,
+        custName: cust?.custName || null,
+        phone: cust?.phoneNumber1 || r.phone,
+        lastMessage: r.lastMessage,
+        lastIsButtonClick: r.lastIsButtonClick,
+        lastAt: r.lastAt,
+        count: r.count,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      items,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit) || 1,
+        totalItems: total,
+        limit,
+        hasNextPage: skip + rows.length < total,
+        hasPrevPage: page > 1,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 // ── Sessions (structured Q&A answers) ─────────────────────────────
 
 // GET /api/campaigns/sessions
@@ -423,7 +506,12 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   if (!session || !session.template) return;
 
   const questions = session.template.questions || [];
-  if (questions.length === 0) return;
+
+  // FIXED: images used to be completely blocked whenever a template had
+  // zero questions, because the old code returned early BEFORE reaching
+  // the image-sending block below. Images must send on their own,
+  // independent of whether any questions exist — moved this check to
+  // happen only for the question-advancing logic further down, not here.
 
   // NEW — first time this session becomes active (still PENDING, about to
   // start), send any attached images before Question 1. Session-only
@@ -443,6 +531,18 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
         }
       }
     }
+  }
+
+  // Only questions need at least one to proceed — images above already
+  // sent regardless. If there are no questions, mark the session done
+  // right after the images (if any) go out.
+  if (questions.length === 0) {
+    if (isStarting) {
+      session.status = 'COMPLETED';
+      session.completedAt = new Date();
+      await session.save();
+    }
+    return;
   }
 
   // If this inbound event is a tap on the CURRENT question's list, record it.
