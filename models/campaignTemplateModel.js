@@ -24,6 +24,11 @@ const questionSchema = new Schema({
   },
 }, { _id: false });
 
+const imageSchema = new Schema({
+  mediaId: { type: String, required: true }, // returned by Pinnacle's Upload Media API
+  caption: { type: String, trim: true, maxlength: 1024, default: '' },
+}, { _id: false });
+
 const campaignTemplateSchema = new Schema({
   company: { type: Types.ObjectId, ref: 'Company', required: true, index: true },
 
@@ -63,6 +68,19 @@ const campaignTemplateSchema = new Schema({
     validate: {
       validator: (arr) => arr.length <= 10,
       message: 'Maximum 10 questions per template.',
+    },
+  },
+
+  // NEW — one or more images sent to the customer right after their first
+  // reply, before Question 1. These are session messages (not part of the
+  // Meta-reviewed template), so adding/removing images never requires
+  // resubmission for approval.
+  images: {
+    type: [imageSchema],
+    default: [],
+    validate: {
+      validator: (arr) => arr.length <= 5,
+      message: 'Maximum 5 images per template.',
     },
   },
 
