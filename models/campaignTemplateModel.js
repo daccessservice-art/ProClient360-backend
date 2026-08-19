@@ -25,7 +25,12 @@ const questionSchema = new Schema({
 }, { _id: false });
 
 const imageSchema = new Schema({
-  mediaId: { type: String, required: true }, // returned by Pinnacle's Upload Media API
+  mediaId: { type: String, required: true }, // used for SESSION sends (images after first reply)
+  // NEW — a completely different identifier, obtained via Meta's separate
+  // "Resumable Upload" process. Only the FIRST image's headerHandle is
+  // ever used — to attach it directly to the template itself, so it's
+  // sent together with the Initial Message, before the customer replies.
+  headerHandle: { type: String, default: null },
   caption: { type: String, trim: true, maxlength: 1024, default: '' },
 }, { _id: false });
 

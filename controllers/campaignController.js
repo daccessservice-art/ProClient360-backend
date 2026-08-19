@@ -93,6 +93,9 @@ exports.updateTemplate = async (req, res) => {
     const companyId = req.user.company || req.user._id;
     const { title, category, language, bodyText, buttons, questions, images } = req.body;
 
+    console.log('###IMAGE_DEBUG### updateTemplate called for id:', req.params.id);
+    console.log('###IMAGE_DEBUG### req.body.images received:', JSON.stringify(images));
+
     const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
     if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
 
@@ -108,6 +111,12 @@ exports.updateTemplate = async (req, res) => {
 
     const bodyChanged = bodyText !== undefined && bodyText !== template.bodyText;
     const buttonsChanged = buttons !== undefined && JSON.stringify(buttons) !== JSON.stringify(template.buttons.map(b => ({ text: b.text })));
+    // NEW — the FIRST image is now part of the template itself (its
+    // header), so changing it is a real Meta-reviewable change, unlike
+    // every other image (session-only, no re-approval needed).
+    const oldHeaderHandle = template.images?.[0]?.headerHandle || null;
+    const newHeaderHandle = images !== undefined ? (images?.[0]?.headerHandle || null) : oldHeaderHandle;
+    const headerImageChanged = newHeaderHandle !== oldHeaderHandle;
 
     if (title !== undefined) template.title = title.trim();
     if (category !== undefined) template.category = category;
@@ -117,12 +126,13 @@ exports.updateTemplate = async (req, res) => {
     if (questions !== undefined) template.questions = questions;
     if (images !== undefined) template.images = images; // session images, never require re-approval
 
-    if (bodyChanged || buttonsChanged) {
+    if (bodyChanged || buttonsChanged || headerImageChanged) {
       template.status = 'DRAFT';
       template.rejectionReason = '';
     }
 
     await template.save();
+    console.log('###IMAGE_DEBUG### AFTER SAVE, template.images is now:', JSON.stringify(template.images));
     res.status(200).json({ success: true, message: 'Template updated.', template });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -142,15 +152,25 @@ exports.deleteTemplate = async (req, res) => {
 };
 
 // POST /api/campaigns/templates/upload-image
-// multipart/form-data, field name "image". Returns a mediaId to attach
-// to a template's images array — does NOT save it to any template itself,
-// the frontend does that via the normal create/update calls.
+// multipart/form-data, field name "image". Returns a mediaId (for
+// sending as a session message) AND a headerHandle (for attaching as
+// the template's own header image, sent with the Initial Message).
 exports.uploadTemplateImage = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, error: 'No image file uploaded.' });
 
     const mediaId = await wa.uploadMedia(req.file.buffer, req.file.mimetype, req.file.originalname);
-    res.status(200).json({ success: true, mediaId });
+
+    let headerHandle = null;
+    try {
+      headerHandle = await wa.uploadMediaForHeaderHandle(req.file.buffer, req.file.mimetype);
+    } catch (err) {
+      // Non-fatal — the image still works fine as a session-only image
+      // even if the header-handle upload fails for some reason.
+      console.warn('[Campaign] Failed to get header handle for image (will still work as a session image):', err.message);
+    }
+
+    res.status(200).json({ success: true, mediaId, headerHandle });
   } catch (err) {
     const msg = err.response?.data?.error?.message || err.message;
     res.status(500).json({ success: false, error: msg });
@@ -251,7 +271,12 @@ exports.sendCampaign = async (req, res) => {
         continue;
       }
 
-      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language);
+      // NEW — if this template has a header image (images[0].headerHandle
+      // was set when it was submitted), pass its regular mediaId so the
+      // actual image displays. headerHandle was only ever used for Meta's
+      // review at creation time — sends use the normal mediaId instead.
+      const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
+      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language, headerImageMediaId);
 
       if (result.ok) {
         recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
@@ -533,15 +558,23 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   // happen only for the question-advancing logic further down, not here.
 
   // NEW — first time this session becomes active (still PENDING, about to
-  // start), send any attached images before Question 1. Session-only
+  // start), send any EXTRA images before Question 1. Session-only
   // content — never affects Meta approval status.
+  //
+  // IMPORTANT: if images[0] has a headerHandle, it was already sent
+  // together with the Initial Message itself (as the template's own
+  // header) — sending it again here would duplicate it. Only images
+  // AFTER the first one are ever sent as session messages.
   const isStarting = session.status === 'PENDING';
   if (isStarting) {
-    const imageCount = session.template.images ? session.template.images.length : 0;
-    console.log(`[Campaign Session] Starting session for ${phone}, template "${session.template.title}" has ${imageCount} image(s) attached.`);
+    const allImages = session.template.images || [];
+    const firstIsHeaderImage = allImages.length > 0 && !!allImages[0].headerHandle;
+    const sessionImages = firstIsHeaderImage ? allImages.slice(1) : allImages;
 
-    if (imageCount > 0) {
-      for (const img of session.template.images) {
+    console.log(`[Campaign Session] Starting session for ${phone}, template "${session.template.title}" has ${sessionImages.length} extra session image(s) to send (first image ${firstIsHeaderImage ? 'was already sent with the Initial Message' : 'not set as header'}).`);
+
+    if (sessionImages.length > 0) {
+      for (const img of sessionImages) {
         const imgResult = await wa.sendImageMessage(phone, img.mediaId, img.caption);
         if (imgResult.ok) {
           console.log(`[Campaign Session] Image sent successfully to ${phone}, mediaId: ${img.mediaId}`);

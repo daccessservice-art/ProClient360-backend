@@ -63,15 +63,45 @@ function slugify(title) {
  * quick_reply). This is a genuinely different endpoint and payload
  * shape per Pinnacle's docs — calling the CREATE endpoint again for an
  * already-submitted template is what was producing "Invalid parameter".
+ *
+ * NEW — if templateDoc.images[0].headerHandle is set, a HEADER component
+ * (format IMAGE) is included so the first image becomes part of the
+ * template itself, sent together with the Initial Message.
  */
+async function uploadMediaForHeaderHandle(fileBuffer, mimeType) {
+  const step1 = await axios.post(
+    `${WABA_BASE_URL}/app/uploads`,
+    null,
+    {
+      params: { file_length: fileBuffer.length, file_type: mimeType },
+      headers: { apikey: WABA_API_KEY },
+    }
+  );
+  const sessionId = step1.data?.id;
+  if (!sessionId) throw new Error('Pinnacle did not return an upload session id.');
+
+  const step2 = await axios.post(
+    `${WABA_BASE_URL}/${sessionId}`,
+    fileBuffer,
+    { headers: { apikey: WABA_API_KEY, 'Content-Type': 'application/octet-stream' } }
+  );
+  const handle = step2.data?.h;
+  if (!handle) throw new Error('Pinnacle did not return a file handle.');
+  return handle;
+}
+
 async function submitTemplateToMeta(templateDoc) {
   if (!WABA_ID) throw new Error('WABA_ID is not set in .env.');
 
+  const headerHandle = templateDoc.images?.[0]?.headerHandle;
+
   if (!templateDoc.metaTemplateId) {
     // ── CREATE (first submission) ──
-    const components = [
-      { type: 'BODY', text: templateDoc.bodyText },
-    ];
+    const components = [];
+    if (headerHandle) {
+      components.push({ type: 'HEADER', format: 'IMAGE', example: { header_handle: [headerHandle] } });
+    }
+    components.push({ type: 'BODY', text: templateDoc.bodyText });
     if (templateDoc.buttons && templateDoc.buttons.length > 0) {
       components.push({
         type: 'BUTTONS',
@@ -92,9 +122,11 @@ async function submitTemplateToMeta(templateDoc) {
   }
 
   // ── EDIT (resubmission of an already-created template) ──
-  const components = [
-    { type: 'body', text: templateDoc.bodyText },
-  ];
+  const components = [];
+  if (headerHandle) {
+    components.push({ type: 'header', format: 'image', example: { header_handle: [headerHandle] } });
+  }
+  components.push({ type: 'body', text: templateDoc.bodyText });
   if (templateDoc.buttons && templateDoc.buttons.length > 0) {
     components.push({
       type: 'buttons',
@@ -114,6 +146,7 @@ async function submitTemplateToMeta(templateDoc) {
   // Edit responses don't reliably include a fresh status — edits go back
   // to review, so the caller should treat this as PENDING regardless.
   return { id: templateDoc.metaTemplateId, status: 'PENDING', mode: 'edited', raw: res.data };
+
 }
 
 /**
@@ -131,7 +164,7 @@ async function checkTemplateStatus(metaTemplateName) {
  * outbound blast — static text, not clickable beyond its 3 quick-reply
  * buttons).
  */
-async function sendTemplateMessage(toRawNumber, metaTemplateName, language) {
+async function sendTemplateMessage(toRawNumber, metaTemplateName, language, headerImageMediaId) {
   const to = formatIndianMobile(toRawNumber);
   if (!to) return { ok: false, reason: `Invalid phone number: "${toRawNumber}"` };
 
@@ -143,6 +176,13 @@ async function sendTemplateMessage(toRawNumber, metaTemplateName, language) {
     template: {
       name: metaTemplateName,
       language: { code: language || 'en' },
+      // NEW — if the template has a header image, this specifies which
+      // actual image to display for THIS send. The header_handle used at
+      // creation time was only an example for Meta's review — this
+      // regular mediaId is what customers actually see.
+      ...(headerImageMediaId
+        ? { components: [{ type: 'header', parameters: [{ type: 'image', image: { id: headerImageMediaId } }] }] }
+        : {}),
     },
   };
 
@@ -304,4 +344,5 @@ module.exports = {
   sendTextMessage,
   uploadMedia,
   sendImageMessage,
+  uploadMediaForHeaderHandle,
 };
