@@ -368,14 +368,30 @@ exports.listReplyCustomers = async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.max(1, Math.min(50, parseInt(req.query.limit) || 15));
     const skip = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
 
     const Customer = require('../models/customerModel');
 
     const mongoose = require('mongoose');
     const companyObjectId = new mongoose.Types.ObjectId(companyId);
 
+    const matchStage = { company: companyObjectId };
+
+    // NEW — search by customer name. Resolves matching Customer _ids first,
+    // then restricts the aggregation to only those — this way search works
+    // correctly across the whole dataset, not just whatever page happens
+    // to already be loaded.
+    if (search) {
+      const matchingCustomers = await Customer.find({
+        company: companyId,
+        custName: { $regex: search, $options: 'i' },
+      }).select('_id');
+      const matchingIds = matchingCustomers.map((c) => c._id);
+      matchStage.customer = { $in: matchingIds };
+    }
+
     const grouped = await CampaignReply.aggregate([
-      { $match: { company: companyObjectId } },
+      { $match: matchStage },
       { $sort: { createdAt: -1 } },
       {
         $group: {
