@@ -75,6 +75,7 @@ async function uploadMediaForHeaderHandle(fileBuffer, mimeType) {
     {
       params: { file_length: fileBuffer.length, file_type: mimeType },
       headers: { apikey: WABA_API_KEY },
+      timeout: 15000, // FIXED: was unset — a hang here could block the whole upload request indefinitely with no error ever reaching the browser
     }
   );
   const sessionId = step1.data?.id;
@@ -83,7 +84,7 @@ async function uploadMediaForHeaderHandle(fileBuffer, mimeType) {
   const step2 = await axios.post(
     `${WABA_BASE_URL}/${sessionId}`,
     fileBuffer,
-    { headers: { apikey: WABA_API_KEY, 'Content-Type': 'application/octet-stream' } }
+    { headers: { apikey: WABA_API_KEY, 'Content-Type': 'application/octet-stream' }, timeout: 15000 }
   );
   const handle = step2.data?.h;
   if (!handle) throw new Error('Pinnacle did not return a file handle.');
