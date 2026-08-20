@@ -162,15 +162,19 @@ exports.uploadTemplateImage = async (req, res) => {
     const mediaId = await wa.uploadMedia(req.file.buffer, req.file.mimetype, req.file.originalname);
 
     let headerHandle = null;
+    let headerHandleError = null;
     try {
       headerHandle = await wa.uploadMediaForHeaderHandle(req.file.buffer, req.file.mimetype);
     } catch (err) {
-      // Non-fatal — the image still works fine as a session-only image
-      // even if the header-handle upload fails for some reason.
-      console.warn('[Campaign] Failed to get header handle for image (will still work as a session image):', err.message);
+      // FIXED: no longer silent. The image still uploads and works fine
+      // as a session-only image, but the caller now finds out clearly if
+      // it CANNOT become the template's header image, instead of it
+      // silently just never working with no explanation.
+      headerHandleError = err.response?.data?.error?.message || err.message;
+      console.warn('[Campaign] Failed to get header handle for image:', headerHandleError);
     }
 
-    res.status(200).json({ success: true, mediaId, headerHandle });
+    res.status(200).json({ success: true, mediaId, headerHandle, headerHandleError });
   } catch (err) {
     const msg = err.response?.data?.error?.message || err.message;
     res.status(500).json({ success: false, error: msg });
@@ -271,16 +275,45 @@ exports.sendCampaign = async (req, res) => {
         continue;
       }
 
-      // NEW — if this template has a header image (images[0].headerHandle
-      // was set when it was submitted), pass its regular mediaId so the
-      // actual image displays. headerHandle was only ever used for Meta's
-      // review at creation time — sends use the normal mediaId instead.
+      // FIXED — restored: if this template has a header image (its first
+      // image was successfully submitted and approved with a
+      // headerHandle), the send MUST include that image as a parameter —
+      // WhatsApp requires it for any approved header-image template and
+      // will reject the send otherwise. This was missing in the last
+      // update, which would have caused every send of such a template to
+      // fail silently.
       const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
       const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language, headerImageMediaId);
 
       if (result.ok) {
         recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
         sentCount++;
+
+        // NEW — try to send the first image immediately, right after the
+        // template. This works whenever the customer's 24-hour WhatsApp
+        // session window happens to already be open (common for repeat
+        // testing/demo numbers). Best-effort: if it fails (e.g. a
+        // genuinely new customer who's never messaged before), that's
+        // expected — the existing fallback below still sends it the
+        // moment they reply, exactly as it already worked before.
+        //
+        // If the first image IS a header image (headerHandle set,
+        // successfully approved by Meta), it was ALREADY shown to the
+        // customer as part of the template send above — skip the
+        // immediate-send attempt entirely to avoid sending it twice.
+        let firstImageAlreadySent = !!headerImageMediaId;
+        if (!firstImageAlreadySent && template.images && template.images.length > 0) {
+          const firstImg = template.images[0];
+          const immediateResult = await wa.sendImageMessage(customer.phoneNumber1, firstImg.mediaId, firstImg.caption);
+          if (immediateResult.ok) {
+            firstImageAlreadySent = true;
+            console.log(`[Campaign] First image sent immediately to ${customer.phoneNumber1} (session window was already open).`);
+          } else {
+            console.log(`[Campaign] Could not send first image immediately to ${customer.phoneNumber1} (${immediateResult.reason}) — will send it after their first reply instead, as usual.`);
+          }
+        } else if (firstImageAlreadySent) {
+          console.log(`[Campaign] First image was already shown as the template's header image for ${customer.phoneNumber1} — no separate send needed.`);
+        }
 
         // FIXED: previously used $setOnInsert, which only applied when NO
         // session existed yet for this customer+template. If this customer
@@ -311,6 +344,7 @@ exports.sendCampaign = async (req, res) => {
                 answers: [],
                 startedAt: null,
                 completedAt: null,
+                firstImageAlreadySent,
               },
             },
             { upsert: true, new: true }
@@ -561,17 +595,16 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   // start), send any EXTRA images before Question 1. Session-only
   // content — never affects Meta approval status.
   //
-  // IMPORTANT: if images[0] has a headerHandle, it was already sent
-  // together with the Initial Message itself (as the template's own
-  // header) — sending it again here would duplicate it. Only images
-  // AFTER the first one are ever sent as session messages.
+  // IMPORTANT: if the first image was already sent immediately after the
+  // template (session.firstImageAlreadySent), sending it again here
+  // would duplicate it. Only images AFTER the first one — or the first
+  // one too, if the immediate send didn't happen — are sent here.
   const isStarting = session.status === 'PENDING';
   if (isStarting) {
     const allImages = session.template.images || [];
-    const firstIsHeaderImage = allImages.length > 0 && !!allImages[0].headerHandle;
-    const sessionImages = firstIsHeaderImage ? allImages.slice(1) : allImages;
+    const sessionImages = session.firstImageAlreadySent ? allImages.slice(1) : allImages;
 
-    console.log(`[Campaign Session] Starting session for ${phone}, template "${session.template.title}" has ${sessionImages.length} extra session image(s) to send (first image ${firstIsHeaderImage ? 'was already sent with the Initial Message' : 'not set as header'}).`);
+    console.log(`[Campaign Session] Starting session for ${phone}, template "${session.template.title}" has ${sessionImages.length} image(s) to send now (first image ${session.firstImageAlreadySent ? 'was already sent immediately after the template' : 'will be sent now, since the immediate send earlier did not happen'}).`);
 
     if (sessionImages.length > 0) {
       for (const img of sessionImages) {

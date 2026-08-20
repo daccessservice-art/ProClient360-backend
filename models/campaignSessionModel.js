@@ -29,6 +29,12 @@ const campaignSessionSchema = new Schema({
   currentQuestionIndex: { type: Number, default: -1 }, // -1 = no question sent yet
   answers: { type: [answerSchema], default: [] },
 
+  // NEW — true if the first image was already sent immediately, right
+  // after the template (works when the customer's 24-hour session
+  // window happens to already be open). Prevents sending it a second
+  // time later when the session flow starts.
+  firstImageAlreadySent: { type: Boolean, default: false },
+
   startedAt: { type: Date, default: null },
   completedAt: { type: Date, default: null },
 }, { timestamps: true });
