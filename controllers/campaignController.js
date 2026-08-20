@@ -111,12 +111,6 @@ exports.updateTemplate = async (req, res) => {
 
     const bodyChanged = bodyText !== undefined && bodyText !== template.bodyText;
     const buttonsChanged = buttons !== undefined && JSON.stringify(buttons) !== JSON.stringify(template.buttons.map(b => ({ text: b.text })));
-    // NEW — the FIRST image is now part of the template itself (its
-    // header), so changing it is a real Meta-reviewable change, unlike
-    // every other image (session-only, no re-approval needed).
-    const oldHeaderHandle = template.images?.[0]?.headerHandle || null;
-    const newHeaderHandle = images !== undefined ? (images?.[0]?.headerHandle || null) : oldHeaderHandle;
-    const headerImageChanged = newHeaderHandle !== oldHeaderHandle;
 
     if (title !== undefined) template.title = title.trim();
     if (category !== undefined) template.category = category;
@@ -126,7 +120,7 @@ exports.updateTemplate = async (req, res) => {
     if (questions !== undefined) template.questions = questions;
     if (images !== undefined) template.images = images; // session images, never require re-approval
 
-    if (bodyChanged || buttonsChanged || headerImageChanged) {
+    if (bodyChanged || buttonsChanged) {
       template.status = 'DRAFT';
       template.rejectionReason = '';
     }
@@ -152,29 +146,23 @@ exports.deleteTemplate = async (req, res) => {
 };
 
 // POST /api/campaigns/templates/upload-image
-// multipart/form-data, field name "image". Returns a mediaId (for
-// sending as a session message) AND a headerHandle (for attaching as
-// the template's own header image, sent with the Initial Message).
+// multipart/form-data, field name "image". Returns a mediaId to attach
+// to a template's images array.
+//
+// REVERTED: the Resumable Upload step (for attaching an image directly
+// to the template as its header) was causing upload failures and has
+// never been confirmed working against Pinnacle's live server. Removed
+// to restore the simple, proven upload path. The "image shows early"
+// requirement is still met via the immediate-send-after-template
+// fallback in sendCampaign, which uses this same, already-working
+// mediaId — no header/Resumable Upload needed for that to work.
 exports.uploadTemplateImage = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ success: false, error: 'No image file uploaded.' });
 
     const mediaId = await wa.uploadMedia(req.file.buffer, req.file.mimetype, req.file.originalname);
 
-    let headerHandle = null;
-    let headerHandleError = null;
-    try {
-      headerHandle = await wa.uploadMediaForHeaderHandle(req.file.buffer, req.file.mimetype);
-    } catch (err) {
-      // FIXED: no longer silent. The image still uploads and works fine
-      // as a session-only image, but the caller now finds out clearly if
-      // it CANNOT become the template's header image, instead of it
-      // silently just never working with no explanation.
-      headerHandleError = err.response?.data?.error?.message || err.message;
-      console.warn('[Campaign] Failed to get header handle for image:', headerHandleError);
-    }
-
-    res.status(200).json({ success: true, mediaId, headerHandle, headerHandleError });
+    res.status(200).json({ success: true, mediaId });
   } catch (err) {
     const msg = err.response?.data?.error?.message || err.message;
     res.status(500).json({ success: false, error: msg });
@@ -275,34 +263,25 @@ exports.sendCampaign = async (req, res) => {
         continue;
       }
 
-      // FIXED — restored: if this template has a header image (its first
-      // image was successfully submitted and approved with a
-      // headerHandle), the send MUST include that image as a parameter —
-      // WhatsApp requires it for any approved header-image template and
-      // will reject the send otherwise. This was missing in the last
-      // update, which would have caused every send of such a template to
-      // fail silently.
-      const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
-      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language, headerImageMediaId);
+      // REVERTED: header-image mechanism removed (was causing upload
+      // failures, never confirmed working). Plain template send only —
+      // the immediate-send-after fallback below still shows the image
+      // early whenever the customer's session window happens to be open.
+      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language);
 
       if (result.ok) {
         recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
         sentCount++;
 
-        // NEW — try to send the first image immediately, right after the
+        // Try to send the first image immediately, right after the
         // template. This works whenever the customer's 24-hour WhatsApp
         // session window happens to already be open (common for repeat
         // testing/demo numbers). Best-effort: if it fails (e.g. a
         // genuinely new customer who's never messaged before), that's
         // expected — the existing fallback below still sends it the
         // moment they reply, exactly as it already worked before.
-        //
-        // If the first image IS a header image (headerHandle set,
-        // successfully approved by Meta), it was ALREADY shown to the
-        // customer as part of the template send above — skip the
-        // immediate-send attempt entirely to avoid sending it twice.
-        let firstImageAlreadySent = !!headerImageMediaId;
-        if (!firstImageAlreadySent && template.images && template.images.length > 0) {
+        let firstImageAlreadySent = false;
+        if (template.images && template.images.length > 0) {
           const firstImg = template.images[0];
           const immediateResult = await wa.sendImageMessage(customer.phoneNumber1, firstImg.mediaId, firstImg.caption);
           if (immediateResult.ok) {
@@ -311,8 +290,6 @@ exports.sendCampaign = async (req, res) => {
           } else {
             console.log(`[Campaign] Could not send first image immediately to ${customer.phoneNumber1} (${immediateResult.reason}) — will send it after their first reply instead, as usual.`);
           }
-        } else if (firstImageAlreadySent) {
-          console.log(`[Campaign] First image was already shown as the template's header image for ${customer.phoneNumber1} — no separate send needed.`);
         }
 
         // FIXED: previously used $setOnInsert, which only applied when NO
