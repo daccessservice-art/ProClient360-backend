@@ -308,6 +308,24 @@ exports.sendCampaign = async (req, res) => {
         const hasImages = template.images && template.images.length > 0;
         const hasQuestions = template.questions && template.questions.length > 0;
         if (hasImages || hasQuestions) {
+          // NEW — retire any other unfinished session for this SAME phone
+          // number, from a DIFFERENT template (e.g. leftover from earlier
+          // testing of a different product that was never completed).
+          // Without this, a customer with several old, never-finished
+          // conversations could have the wrong one picked up when they
+          // reply — this guarantees only ONE session is ever "active" for
+          // a given phone number at a time, so replies always continue
+          // the conversation that was JUST sent, not an unrelated old one.
+          await CampaignSession.updateMany(
+            {
+              company: companyId,
+              phone: customer.phoneNumber1,
+              template: { $ne: template._id },
+              status: { $in: ['PENDING', 'IN_PROGRESS'] },
+            },
+            { $set: { status: 'COMPLETED', completedAt: new Date() } }
+          );
+
           await CampaignSession.findOneAndUpdate(
             { company: companyId, phone: customer.phoneNumber1, template: template._id },
             {
@@ -528,6 +546,7 @@ function last10Digits(phone) {
  * not thrown, since this must never block the webhook's fast ack.
  */
 async function advanceSession(phone, listReplyId, listReplyTitle) {
+  console.log(`[Campaign Session] ###Q_DEBUG### advanceSession() called for phone=${phone}, listReplyId=${listReplyId}`);
   // NOTE: intentionally NOT filtering by company here. sendCampaign()
   // creates the session using the logged-in user's real company ID, but
   // this webhook only has DEFAULT_WHATSAPP_COMPANY_ID from .env — if
@@ -558,6 +577,7 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
     }).sort({ updatedAt: -1 }).populate('template');
   }
 
+  console.log(`[Campaign Session] ###Q_DEBUG### session found: ${!!session}, has template: ${!!session?.template}, status: ${session?.status}, questions on template: ${session?.template?.questions?.length}`);
   if (!session || !session.template) return;
 
   const questions = session.template.questions || [];
@@ -623,9 +643,12 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
 
   const nextIndex = session.currentQuestionIndex + 1;
 
+  console.log(`[Campaign Session] ###Q_DEBUG### currentQuestionIndex=${session.currentQuestionIndex}, nextIndex=${nextIndex}, total questions=${questions.length}`);
+
   if (nextIndex < questions.length) {
     // Send the next question.
     const nextQ = questions[nextIndex];
+    console.log(`[Campaign Session] ###Q_DEBUG### About to send question ${nextIndex} ("${nextQ.questionText}") to ${phone}, with ${nextQ.options?.length || 0} options.`);
     const result = await wa.sendListMessage(
       phone,
       nextQ.questionText,
@@ -633,6 +656,7 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
       'Select',
       session.template.title || 'Please choose an option'
     );
+    console.log(`[Campaign Session] ###Q_DEBUG### sendListMessage result: ok=${result.ok}, reason=${result.reason || 'N/A'}`);
     if (result.ok) {
       session.currentQuestionIndex = nextIndex;
       session.status = 'IN_PROGRESS';
