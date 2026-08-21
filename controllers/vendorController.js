@@ -360,7 +360,9 @@ exports.getVendorLink = async (req, res) => {
   try {
     const { linkId } = req.params;
 
-    const vendorLink = await VendorLink.findOne({ linkId });
+    // ✅ CHANGED: populate the company so we can send back its name/logo
+    // for the public vendor registration page (company-wise logo fix)
+    const vendorLink = await VendorLink.findOne({ linkId }).populate('company', 'name logo');
 
     if (!vendorLink) {
       return res.status(404).json({ success: false, error: "Invalid link ID" });
@@ -370,7 +372,15 @@ exports.getVendorLink = async (req, res) => {
       return res.status(404).json({ success: false, error: "Link has already been used" });
     }
 
-    res.status(200).json({ success: true, linkId });
+    res.status(200).json({
+      success: true,
+      linkId,
+      // ✅ NEW: company info so the frontend can show the correct logo per company
+      company: {
+        name: vendorLink.company?.name || '',
+        logo: vendorLink.company?.logo || null
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error fetching vendor link: " + error.message });
   }
