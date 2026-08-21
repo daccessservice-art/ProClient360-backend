@@ -6,20 +6,9 @@ const fs    = require('fs');
 const path  = require('path');
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ROBUST LOGO LOADER — tries multiple paths + URL fallback
+// SIGNATURE LOADER — unchanged, still checks local "assets" folder / SIGN_URL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const ASSET_SEARCH_PATHS = [
-  path.join(__dirname, '..', 'assets'),
-  path.join(__dirname, '..', '..', 'assets'),
-  path.join(process.cwd(), 'assets'),
-  path.join(__dirname, '..', 'public', 'assets'),
-];
-
-// ── Signature search paths: checks the same "assets" folder as the
-// company logos FIRST (most reliable, since backend can already read
-// ENTERO.png / DACCESS.png from there), then falls back to various
-// frontend build/public locations in case those are available too. ──
 const SIGNATURE_SEARCH_PATHS = [
   path.join(__dirname, '..', 'assets'),
   path.join(__dirname, '..', '..', 'assets'),
@@ -36,24 +25,6 @@ const SIGNATURE_SEARCH_PATHS = [
   path.join(process.cwd(), 'frontend', 'public', 'static', 'assets', 'img'),
 ];
 
-function findFile(filename) {
-  for (const dir of ASSET_SEARCH_PATHS) {
-    const fp = path.join(dir, filename);
-    try {
-      if (fs.existsSync(fp)) {
-        const stat = fs.statSync(fp);
-        if (stat.size > 100) {
-          console.log(`[PDF-LOGO] ✅ Found ${filename} at: ${fp} (${stat.size} bytes)`);
-          return fp;
-        }
-        console.warn(`[PDF-LOGO] ⚠️  ${fp} exists but only ${stat.size} bytes — likely corrupt, skipping`);
-      }
-    } catch (_) {}
-  }
-  console.warn(`[PDF-LOGO] ❌ ${filename} NOT found. Searched:`, ASSET_SEARCH_PATHS.map(p => path.join(p, filename)));
-  return null;
-}
-
 function findSignatureFile(filename) {
   for (const dir of SIGNATURE_SEARCH_PATHS) {
     const fp = path.join(dir, filename);
@@ -65,8 +36,6 @@ function findSignatureFile(filename) {
           return fp;
         }
         console.warn(`[PDF-SIGN] ⚠️  ${fp} exists but only ${stat.size} bytes — likely corrupt, skipping`);
-      } else {
-        console.log(`[PDF-SIGN]   … not at ${fp}`);
       }
     } catch (_) {}
   }
@@ -125,113 +94,72 @@ function downloadBuffer(url, timeout = 15000) {
   });
 }
 
-const logoCache = { entero: null, daccess: null, signature: null };
-let logoInitPromise = null;
+// ═══════════════════════════════════════════════════════════════════════════════
+// ✅ NEW: DYNAMIC COMPANY LOGO CACHE — keyed by the company's logo URL
+// (stored on Company.logo, a Firebase Storage URL). Any company — existing
+// or newly added in the future — gets its logo fetched & cached the same
+// way, with zero code changes needed when a new company signs up.
+// ═══════════════════════════════════════════════════════════════════════════════
+const companyLogoCache = new Map(); // logoUrl -> Buffer | null
 
-async function ensureLogos() {
-  if (logoCache.entero && logoCache.daccess && logoCache.signature) return;
+async function getCompanyLogoBuffer(logoUrl) {
+  if (!logoUrl) return null;
+  if (companyLogoCache.has(logoUrl)) {
+    return companyLogoCache.get(logoUrl);
+  }
+  try {
+    const buf = await downloadBuffer(logoUrl);
+    companyLogoCache.set(logoUrl, buf);
+    return buf;
+  } catch (e) {
+    console.warn('[PDF-LOGO] ❌ Failed to download company logo from', logoUrl, '-', e.message);
+    companyLogoCache.set(logoUrl, null);
+    return null;
+  }
+}
 
-  console.log('[PDF-LOGO] ── Initializing logos/signature (ensureLogos) ──');
+// ✅ NEW: builds a single "Address, City, State, Country, Pincode" string
+// from the Company model's Address sub-document, same shape used across
+// AddCompanyPopup / UpdatedCompanyPopup / companyModel.js.
+function formatCompanyAddress(address) {
+  if (!address) return '';
+  return [address.add, address.city, address.state, address.country, address.pincode]
+    .filter(Boolean)
+    .join(', ');
+}
 
-  const enteroPath = findFile('ENTERO.png');
-  if (enteroPath) logoCache.entero = readImageFile(enteroPath);
-  if (!logoCache.entero) {
-    const enteroJpg = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
-    if (enteroJpg) logoCache.entero = readImageFile(enteroJpg);
-  }
-  if (!logoCache.entero) {
-    try {
-      logoCache.entero = await downloadBuffer(
-        'https://image2url.com/r2/default/images/1771396818586-be570726-9409-4f91-97bd-dee0ec030a0b.png'
-      );
-    } catch (e) {
-      console.warn('[PDF-LOGO] ❌ Entero URL download failed:', e.message);
-    }
-  }
+const signatureCache = { signature: null };
 
-  const daccessPath = findFile('DACCESS.png');
-  if (daccessPath) logoCache.daccess = readImageFile(daccessPath);
-  if (!logoCache.daccess) {
-    const daccessJpg = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
-    if (daccessJpg) logoCache.daccess = readImageFile(daccessJpg);
-  }
-  if (!logoCache.daccess) {
-    const daccessUrl = process.env.DACCESS_LOGO_URL;
-    if (daccessUrl) {
-      try {
-        logoCache.daccess = await downloadBuffer(daccessUrl);
-      } catch (e) {
-        console.warn('[PDF-LOGO] ❌ DAccess URL download failed:', e.message);
-      }
-    }
-  }
-
-  // ── sign.png: file search (checks backend "assets" folder first), then
-  // URL fallback via SIGN_URL env var ──
-  if (!logoCache.signature) {
-    const signPath = findSignatureFile('sign.png');
-    if (signPath) logoCache.signature = readImageFile(signPath);
-  }
-  if (!logoCache.signature) {
+async function ensureSignature() {
+  if (signatureCache.signature) return;
+  const signPath = findSignatureFile('sign.png');
+  if (signPath) signatureCache.signature = readImageFile(signPath);
+  if (!signatureCache.signature) {
     const signJpg = findSignatureFile('sign.jpg') || findSignatureFile('sign.jpeg');
-    if (signJpg) logoCache.signature = readImageFile(signJpg);
+    if (signJpg) signatureCache.signature = readImageFile(signJpg);
   }
-  if (!logoCache.signature) {
+  if (!signatureCache.signature) {
     const signUrl = process.env.SIGN_URL;
     if (signUrl) {
       try {
-        logoCache.signature = await downloadBuffer(signUrl);
+        signatureCache.signature = await downloadBuffer(signUrl);
         console.log('[PDF-SIGN] ✅ Loaded signature from SIGN_URL env var');
       } catch (e) {
         console.warn('[PDF-SIGN] ❌ SIGN_URL download failed:', e.message);
       }
     }
   }
-
-  console.log('[PDF-LOGO]   Entero:', logoCache.entero ? `✅ ${logoCache.entero.length} bytes` : '❌ MISSING');
-  console.log('[PDF-LOGO]   DAccess:', logoCache.daccess ? `✅ ${logoCache.daccess.length} bytes` : '❌ MISSING');
-  console.log('[PDF-SIGN]   Signature:', logoCache.signature ? `✅ ${logoCache.signature.length} bytes` : '❌ MISSING — copy sign.png into the backend "assets" folder (same place as ENTERO.png/DACCESS.png), or set SIGN_URL env var.');
+  console.log('[PDF-SIGN]   Signature:', signatureCache.signature ? `✅ ${signatureCache.signature.length} bytes` : '❌ MISSING — copy sign.png into the backend "assets" folder, or set SIGN_URL env var.');
 }
 
 (function initSync() {
-  const ep = findFile('ENTERO.png');
-  if (ep) logoCache.entero = readImageFile(ep);
-  if (!logoCache.entero) {
-    const epJ = findFile('ENTERO.jpg') || findFile('ENTERO.jpeg');
-    if (epJ) logoCache.entero = readImageFile(epJ);
-  }
-  const dp = findFile('DACCESS.png');
-  if (dp) logoCache.daccess = readImageFile(dp);
-  if (!logoCache.daccess) {
-    const dpJ = findFile('DACCESS.jpg') || findFile('DACCESS.jpeg');
-    if (dpJ) logoCache.daccess = readImageFile(dpJ);
-  }
   const sp = findSignatureFile('sign.png');
-  if (sp) logoCache.signature = readImageFile(sp);
-  if (!logoCache.signature) {
+  if (sp) signatureCache.signature = readImageFile(sp);
+  if (!signatureCache.signature) {
     const spJ = findSignatureFile('sign.jpg') || findSignatureFile('sign.jpeg');
-    if (spJ) logoCache.signature = readImageFile(spJ);
+    if (spJ) signatureCache.signature = readImageFile(spJ);
   }
 })();
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// COMPANY CONFIGS
-// ═══════════════════════════════════════════════════════════════════════════════
-const COMPANY_CONFIGS = {
-  entero: {
-    name:          'ENTERO SYSTEMS INDIA PVT. LTD.',
-    address:       'Factory Address: Gate No: Shop No.3, Sr.No.170, Gavhane Industrial Estate, Devkar vasti, Bhosari, Pune - 411039, Maharashtra, India',
-    gstin:         '27AAJCE1335Q1Z8',
-    getLogoBuffer: () => logoCache.entero,
-  },
-  daccess: {
-    name:          'DACCESS SECURITY SYSTEMS PVT. LTD.',
-    address:       'Office No.05, 3rd Floor, Revati Arcade-II, Opposite to Kapil Malhar Society, Baner, Pune - 411045, Maharashtra, India',
-    gstin:         '27AACCD7325G1ZR',
-    getLogoBuffer: () => logoCache.daccess,
-  },
-};
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -279,50 +207,41 @@ const strokeRect = (doc, x, y, w, h, color = COLOR_BORDER, lineWidth = 0.5) => {
   doc.save().rect(x, y, w, h).lineWidth(lineWidth).stroke(color).restore();
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPER: Measure how many lines a text string will wrap to at given width/size
-// ═══════════════════════════════════════════════════════════════════════════════
-function estimateLines(doc, text, width, fontSize, font = 'Helvetica') {
-  if (!text) return 0;
-  doc.font(font).fontSize(fontSize);
-  const lineHeight = fontSize * 1.2;
-  const h = doc.heightOfString(text, { width });
-  return Math.ceil(h / lineHeight);
-}
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN CONTROLLER
 // ═══════════════════════════════════════════════════════════════════════════════
 exports.downloadPurchaseOrderPDF = async (req, res) => {
-  // Tracks whether doc.pipe(res) has started streaming. Once true, we can
-  // no longer send a JSON error response — we must instead abort the
-  // stream so the client's request actually finishes instead of hanging.
   let streamingStarted = false;
   let doc = null;
 
   try {
     const { id } = req.params;
 
-    await ensureLogos();
-
-    const printAs       = (req.query.printAs || 'daccess').toLowerCase();
-    const companyKey    = printAs === 'entero' ? 'entero' : 'daccess';
-    const companyConfig = COMPANY_CONFIGS[companyKey];
-    const LOGO_BUFFER   = companyConfig.getLogoBuffer();
+    await ensureSignature();
 
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor GSTNo phoneNumber1 email')
       .populate('project',   'name')
       .populate('createdBy', 'name email')
-      .populate('company',   'name')
+      // ✅ CHANGED: pull the full company profile (logo/GST/Address) so the
+      // PDF is generated dynamically per company — no hardcoded configs.
+      .populate('company',   'name logo GST Address')
       .lean();
 
     if (!po) {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
 
-    console.log(`[PDF-SIGN] PO ${po.orderNumber || id} → status="${po.status}" | signature buffer loaded: ${!!logoCache.signature}`);
+    // ✅ CHANGED: company details now resolved from po.company (populated
+    // above), instead of a static COMPANY_CONFIGS[printAs] lookup.
+    const companyDoc     = po.company || {};
+    const companyName    = companyDoc.name || 'N/A';
+    const companyAddress = formatCompanyAddress(companyDoc.Address);
+    const companyGstin   = companyDoc.GST || 'N/A';
+    const LOGO_BUFFER    = await getCompanyLogoBuffer(companyDoc.logo);
+
+    console.log(`[PDF-SIGN] PO ${po.orderNumber || id} → status="${po.status}" | signature buffer loaded: ${!!signatureCache.signature}`);
 
     const items      = po.items || [];
     const totalAmt   = Number(po.totalAmount) || 0;
@@ -375,11 +294,11 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       } catch (e) {
         console.error(`[PDF] ❌ doc.image() FAILED:`, e.message);
         doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
-           .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
+           .text(companyName.split(' ')[0], M, y + 12, { lineBreak: false });
       }
     } else {
       doc.font('Helvetica-Bold').fontSize(14).fillColor(COLOR_RED)
-         .text(companyConfig.name.split(' ')[0], M, y + 12, { lineBreak: false });
+         .text(companyName.split(' ')[0], M, y + 12, { lineBreak: false });
     }
 
     doc.font('Helvetica-Bold').fontSize(18).fillColor(COLOR_RED)
@@ -388,14 +307,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     y += HEADER_H;
 
     doc.font('Helvetica-Bold').fontSize(11).fillColor(COLOR_BLACK)
-       .text(companyConfig.name, M, y);
+       .text(companyName, M, y);
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(COLOR_BLACK)
-       .text(`GSTIN/UIN: ${companyConfig.gstin}`, M, y, { width: CW, align: 'right' });
+       .text(`GSTIN/UIN: ${companyGstin}`, M, y, { width: CW, align: 'right' });
 
     y += 14;
 
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-       .text(companyConfig.address, M, y, { width: CW * 0.70 });
+       .text(companyAddress, M, y, { width: CW * 0.70 });
 
     y += 20;
 
@@ -767,10 +686,6 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     // ════════════════════════════════════════════════════════════
     // 6. PAYMENT TERMS + SIGNATURE
-    // Signature-stamping code is wrapped in its own try/catch so ANY
-    // failure there (bad buffer, pdfkit internal error, etc.) can NEVER
-    // abort the whole PDF generation — it always falls back to the
-    // placeholder text and the document still completes and downloads.
     // ════════════════════════════════════════════════════════════
     const footerH = 55;
     strokeRect(doc, M, y, CW, footerH);
@@ -782,9 +697,8 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
     const sigX = M + CW * 0.62;
     doc.font('Helvetica').fontSize(8).fillColor(COLOR_DARK_GREY)
-       .text(`For, ${companyConfig.name}`, sigX, y + 8, { width: CW * 0.36 });
+       .text(`For, ${companyName}`, sigX, y + 8, { width: CW * 0.36 });
 
-    // Enlarged signature box (was 80x26) to match the bigger on-screen preview box
     const sigBoxX = sigX + 5;
     const sigBoxY = y + 16;
     const sigBoxW = 110;
@@ -795,7 +709,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     let signatureStamped = false;
     try {
       const isApproved = po.status === 'Approved';
-      const SIGNATURE_BUFFER = logoCache.signature;
+      const SIGNATURE_BUFFER = signatureCache.signature;
 
       if (isApproved && SIGNATURE_BUFFER) {
         doc.image(SIGNATURE_BUFFER, sigBoxX + 5, sigBoxY + 3, {
@@ -835,13 +749,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     console.error('Error generating Purchase Order PDF:', error.stack || error.message);
 
     if (!streamingStarted && !res.headersSent) {
-      // Nothing was sent yet — safe to respond with a normal JSON error.
       return res.status(500).json({ success: false, error: 'Error generating PDF: ' + error.message });
     }
 
-    // Streaming had already begun (headers sent) when the error hit. We
-    // can't send JSON anymore, but we MUST terminate the response or the
-    // client's request hangs forever with a spinner that never resolves.
     try {
       if (doc && typeof doc.destroy === 'function') doc.destroy();
     } catch (_) {}

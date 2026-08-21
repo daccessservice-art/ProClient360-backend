@@ -8,7 +8,7 @@ exports.getPurchaseOrder = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name');
+      .populate('company', 'name logo GST Address');
     
     if (!purchaseOrder) {
       return res.status(404).json({ success: false, error: "Purchase order not found" });
@@ -84,7 +84,7 @@ exports.showAll = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name')
+      .populate('company', 'name logo GST Address')
       .sort({ createdAt: -1 })
       .lean();
 
