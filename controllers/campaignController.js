@@ -626,9 +626,21 @@ async function advanceSession(phone, listReplyId, listReplyTitle) {
   if (nextIndex < questions.length) {
     // Send the next question.
     const nextQ = questions[nextIndex];
+
+    // NEW — spell out every option as plain, readable text within the
+    // message body itself (not just hidden behind the "Select" button).
+    // Some customers don't realize a WhatsApp list message has tappable
+    // options behind that button and just see a bare question with no
+    // visible choices — this makes the options understandable either
+    // way: tap the button, OR just read and reply with the option text.
+    const optionsList = nextQ.options
+      .map((opt, i) => `${i + 1}. ${opt.title}${opt.description ? ` — ${opt.description}` : ''}`)
+      .join('\n');
+    const readableBody = `${nextQ.questionText}\n\n${optionsList}\n\nTap "Select" below to choose, or simply reply with your answer.`;
+
     const result = await wa.sendListMessage(
       phone,
-      nextQ.questionText,
+      readableBody,
       nextQ.options,
       'Select',
       session.template.title || 'Please choose an option'
