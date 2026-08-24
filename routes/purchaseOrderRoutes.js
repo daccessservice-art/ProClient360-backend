@@ -1,6 +1,6 @@
 const express = require('express');
 const { permissionMiddleware } = require('../middlewares/auth');
-const { showAll, createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder, getPurchaseOrder, getPurchaseOrderHistory } = require('../controllers/purchaseOrderController');
+const { showAll, createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder, getPurchaseOrder, getPurchaseOrderHistory, getMyCompanyProfile } = require('../controllers/purchaseOrderController');
 const { downloadPurchaseOrderPDF } = require('../controllers/purchaseOrderPdfController');
 const upload = require('../middlewares/fileUpload');
 const { bucket } = require('../utils/firebase');
@@ -10,10 +10,15 @@ const PurchaseOrderHistory = require('../models/purchaseOrderHistoryModel');
 const router = express.Router();
 
 router.get('/', permissionMiddleware(['viewPurchaseOrder']), showAll);
+
+// ✅ NEW: must stay ABOVE '/:id' route, otherwise Express treats
+// "company-profile" as an :id value and the lookup breaks.
+router.get('/company-profile', permissionMiddleware(['viewPurchaseOrder']), getMyCompanyProfile);
+
 router.get('/:id', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrder);
 router.get('/:id/history', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrderHistory);
 
-// ✅ NEW: PDF download route
+// ✅ PDF download route
 router.get('/:id/pdf', permissionMiddleware(['viewPurchaseOrder']), downloadPurchaseOrderPDF);
 
 router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.single('file'), async (req, res) => {
@@ -22,7 +27,6 @@ router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.sin
     const poData = JSON.parse(req.body.poData);
     const user = req.user;
 
-    // Validate payment terms
     if (poData.paymentTerms) {
       const { advance, payAgainstDelivery, payAfterCompletion } = poData.paymentTerms;
       const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
@@ -46,18 +50,15 @@ router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.sin
       await fileUpload.makePublic();
       const fileUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
       
-      // Add file URL to attachments
       poData.attachments = [fileUrl];
     }
 
-    // Create purchase order
     const newPurchaseOrder = new PurchaseOrder({
       ...poData,
       company: user.company ? user.company : user._id,
       createdBy: user._id,
     });
 
-    // Save with retry logic for duplicate key errors
     let savedPO = null;
     let retryCount = 0;
     const maxRetries = 3;
@@ -111,7 +112,6 @@ router.post('/upload', permissionMiddleware(['createPurchaseOrder']), upload.sin
   }
 });
 
-// File upload route for UPDATE
 router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.single('file'), async (req, res) => {
   try {
     const { id } = req.params;
@@ -127,7 +127,6 @@ router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.
       });
     }
 
-    // Validate payment terms
     if (poData.paymentTerms) {
       const { advance, payAgainstDelivery, payAfterCompletion } = poData.paymentTerms;
       const totalPayment = Number(advance) + Number(payAgainstDelivery) + Number(payAfterCompletion);
@@ -208,7 +207,6 @@ router.put('/upload/:id', permissionMiddleware(['updatePurchaseOrder']), upload.
   }
 });
 
-// Existing routes (without file upload)
 router.post('/', permissionMiddleware(['createPurchaseOrder']), createPurchaseOrder);
 router.put('/:id', permissionMiddleware(['updatePurchaseOrder']), updatePurchaseOrder);
 router.delete('/:id', permissionMiddleware(['deletePurchaseOrder']), deletePurchaseOrder);

@@ -1,5 +1,6 @@
 const PurchaseOrder = require("../models/purchaseOrderModel");
 const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
+const Company = require("../models/companyModel"); // ✅ NEW
 const { sendPurchaseOrderApprovalMail } = require("../mailsService/purchaseOrderApprovalMail");
 
 exports.getPurchaseOrder = async (req, res) => {
@@ -8,7 +9,7 @@ exports.getPurchaseOrder = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name logo GST Address');
+      .populate('company', 'name');
     
     if (!purchaseOrder) {
       return res.status(404).json({ success: false, error: "Purchase order not found" });
@@ -84,7 +85,7 @@ exports.showAll = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name logo GST Address')
+      .populate('company', 'name')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -221,12 +222,6 @@ exports.deletePurchaseOrder = async (req, res) => {
   }
 };
 
-// ── NOTE: previously this file had TWO exports.updatePurchaseOrder
-// definitions (a leftover from an earlier edit). In JS the second one
-// silently wins at runtime, so it "worked" — but it's confusing and
-// risky to maintain. This is now the single, de-duplicated version,
-// with mailStatus tracking added so the frontend can tell the user
-// whether the approval email actually sent or failed. ──
 exports.updatePurchaseOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -289,8 +284,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       changes: { statusChanged, itemsChanged, paymentTermsChanged }
     }).save();
 
-    // ── send approval email when status transitions TO "Approved" ──
-    let mailStatus = null; // null = not applicable, true = sent, false = failed
+    let mailStatus = null;
     if (statusChanged && updatedData.status === 'Approved') {
       try {
         const populatedPO = await PurchaseOrder.findById(id)
@@ -311,7 +305,6 @@ exports.updatePurchaseOrder = async (req, res) => {
       } catch (mailErr) {
         console.error('[PO-APPROVE-MAIL] ❌ Unexpected error sending PO approval mail:', mailErr.message);
         mailStatus = false;
-        // Do not fail the request just because the email failed
       }
     }
 
@@ -319,7 +312,7 @@ exports.updatePurchaseOrder = async (req, res) => {
       success: true, 
       message: "Purchase order updated successfully", 
       updatedPurchaseOrder,
-      mailStatus // true | false | null — frontend can show a note if false
+      mailStatus
     });
   } catch (error) {
     console.error(error);
@@ -327,5 +320,25 @@ exports.updatePurchaseOrder = async (req, res) => {
       success: false, 
       error: "Error updating purchase order: " + error.message 
     });
+  }
+};
+
+// ✅ NEW: returns the logged-in user's own company profile (name + Address)
+// so forms like "Use Default Office Address" can show the correct
+// address dynamically, per company — no hardcoding.
+exports.getMyCompanyProfile = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company ? user.company : user._id;
+
+    const company = await Company.findById(companyId).select('name Address');
+
+    if (!company) {
+      return res.status(404).json({ success: false, error: "Company not found" });
+    }
+
+    res.status(200).json({ success: true, company });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching company profile: " + error.message });
   }
 };
