@@ -204,66 +204,37 @@ exports.updateCompany = async (req, res) => {
       return res.status(404).json({ message: 'Company not found' });
     }
 
+    // ✅ NEW: if a new logo (base64 data URL) was submitted from the
+    // "Update Company" form, upload it to Firebase Storage — same logic
+    // as createCompany — and replace updatedData.logo with the resulting
+    // public URL before saving. If no new logo was submitted, don't
+    // overwrite the existing logo with an empty/missing value.
+    if (updatedData.logo && typeof updatedData.logo === 'string' && updatedData.logo.startsWith('data:image')) {
+      try {
+        const fileExtension = updatedData.logo.match(/data:image\/([a-zA-Z]+);base64/);
+        const fileType = fileExtension ? fileExtension[1] : 'png';
+        const contentType = mime.lookup(fileType) || 'image/png';
 
-    // Array to hold history records for changed fields
-    // const historyRecords = [];
+        const fileName = `logos/${updatedData.name || existingCompany.name}_${Date.now()}.${fileType}`;
+        const file = bucket.file(fileName);
 
-    // // Define fields to ignore during comparison
-    // const ignoredFields = ['_id', 'createdAt', 'updatedAt', 'logo'];
+        const buffer = Buffer.from(updatedData.logo.split(',')[1], 'base64');
 
-    // // Iterate over the fields and compare changes
-    // Object.keys(updatedData).forEach((key) => {
-    //   // Skip ignored fields
-    //   if (ignoredFields.includes(key)) {
-    //     return;
-    //   }
+        await file.save(buffer, {
+          metadata: { contentType: contentType },
+        });
 
-    //   if (key === 'subDate') {
-    //     // Convert the incoming value to a Date object for comparison
-    //     const newSubDate = new Date(updatedData[key]);
-    //     const existingSubDate = new Date(existingCompany[key]);
+        await file.makePublic();
 
-    //     // Compare the two Date objects
-    //     if (existingSubDate.getTime() !== newSubDate.getTime()) {
-    //       historyRecords.push({
-    //         companyId: id,
-    //         fieldName: key,
-    //         oldValue: existingCompany[key],
-    //         newValue: updatedData[key],
-    //         changeReason: req.body.changeReason || 'Updated via company edit'
-    //       });
-    //     }
-    //   } else if (typeof updatedData[key] === 'object' && updatedData[key] !== null) {
-    //     // If it's a nested object like Address, compare its properties
-    //     Object.keys(updatedData[key]).forEach((nestedKey) => {
-    //       if (existingCompany[key] && existingCompany[key][nestedKey] !== updatedData[key][nestedKey]) {
-    //         historyRecords.push({
-    //           companyId: id,
-    //           fieldName: `${key}.${nestedKey}`, // Indicate nested field
-    //           oldValue: existingCompany[key][nestedKey],
-    //           newValue: updatedData[key][nestedKey],
-    //           changeReason: req.body.changeReason || 'Updated via company edit'
-    //         });
-    //       }
-    //     });
-    //   } else {
-    //     // For non-object fields, directly compare values
-    //     if (existingCompany[key] !== updatedData[key]) {
-    //       historyRecords.push({
-    //         companyId: id,
-    //         fieldName: key,
-    //         oldValue: existingCompany[key],
-    //         newValue: updatedData[key],
-    //         changeReason: req.body.changeReason || 'Updated via company edit'
-    //       });
-    //     }
-    //   }
-    // });
-
-    // // If there are changes, insert them into the CompanyHistory collection
-    // if (historyRecords.length > 0) {
-    //   await CompanyHistory.insertMany(historyRecords);
-    // }
+        updatedData.logo = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+        console.log('[UPDATE-COMPANY] ✅ New logo uploaded:', updatedData.logo);
+      } catch (logoErr) {
+        console.error('[UPDATE-COMPANY] ❌ Logo upload failed, keeping existing logo:', logoErr.message);
+        delete updatedData.logo;
+      }
+    } else if (!updatedData.logo) {
+      delete updatedData.logo;
+    }
 
     // Update the company record
     await Company.findByIdAndUpdate(id, updatedData, { new: true});
@@ -271,6 +242,6 @@ exports.updateCompany = async (req, res) => {
     res.status(200).json({ success:true, message: 'Company updated successfully' });
   } catch (error) {
     console.error('Error updating company:', error);
-    res.status(500).json({ error: 'Error While Updating Company: ',error: error.message });
+    res.status(500).json({ error: 'Error While Updating Company: ', message: error.message });
   }
 };

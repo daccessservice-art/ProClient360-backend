@@ -1,6 +1,6 @@
 const PurchaseOrder = require("../models/purchaseOrderModel");
 const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
-const Company = require("../models/companyModel"); // ✅ NEW
+const Company = require("../models/companyModel");
 const { sendPurchaseOrderApprovalMail } = require("../mailsService/purchaseOrderApprovalMail");
 
 exports.getPurchaseOrder = async (req, res) => {
@@ -9,8 +9,8 @@ exports.getPurchaseOrder = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name');
-    
+      .populate('company', 'name logo GST Address');
+
     if (!purchaseOrder) {
       return res.status(404).json({ success: false, error: "Purchase order not found" });
     }
@@ -85,7 +85,7 @@ exports.showAll = async (req, res) => {
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
       .populate('project', 'name')
       .populate('createdBy', 'name email')
-      .populate('company', 'name')
+      .populate('company', 'name logo GST Address')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -323,9 +323,6 @@ exports.updatePurchaseOrder = async (req, res) => {
   }
 };
 
-// ✅ NEW: returns the logged-in user's own company profile (name + Address)
-// so forms like "Use Default Office Address" can show the correct
-// address dynamically, per company — no hardcoding.
 exports.getMyCompanyProfile = async (req, res) => {
   try {
     const user = req.user;
