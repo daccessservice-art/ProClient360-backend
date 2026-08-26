@@ -756,3 +756,223 @@ exports.receiveWhatsAppReply = async (req, res) => {
     console.error('[Campaign Webhook] Error:', err);
   }
 };
+
+// ── NEW ADDITIONS BELOW — fully additive, does not modify anything above ──
+
+// GET /api/campaigns/customers-by-product?product=<search text>
+// Finds customers who have at least one Lead with a matching product
+// name (Lead.QUERY_PRODUCT_NAME), via the Lead's linked customerId.
+exports.searchCustomersByProduct = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const product = (req.query.product || '').trim();
+    if (!product) return res.status(400).json({ success: false, error: 'product search text is required.' });
+
+    const Lead = require('../models/leadsModel');
+    const Customer = require('../models/customerModel');
+
+    const matchingLeads = await Lead.find({
+      company: companyId,
+      customerId: { $ne: null },
+      QUERY_PRODUCT_NAME: { $regex: product, $options: 'i' },
+    }).select('customerId').limit(2000);
+
+    const customerIds = [...new Set(matchingLeads.map((l) => String(l.customerId)))];
+    if (customerIds.length === 0) {
+      return res.status(200).json({ success: true, customers: [] });
+    }
+
+    const customers = await Customer.find({ _id: { $in: customerIds }, company: companyId })
+      .select('custName phoneNumber1')
+      .limit(500);
+
+    res.status(200).json({ success: true, customers });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/parse-recipient-file  (multipart, field "file")
+// Parses an uploaded CSV/Excel of phone numbers (+ optional names) —
+// returns the parsed list for the user to review/select before sending.
+// Requires: npm install xlsx
+// POST /api/campaigns/parse-recipient-file  (multipart, field "file")
+// Parses an uploaded CSV/Excel of phone numbers (+ optional names) —
+// returns the parsed list for the user to review/select before sending.
+//
+// Uses exceljs (for .xlsx/.xls) and csv-parser (for .csv) — both already
+// present in this backend's dependencies, no new npm install required.
+exports.parseUploadedRecipientFile = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded.' });
+
+    const filename = req.file.originalname.toLowerCase();
+    let rows = [];
+
+    if (filename.endsWith('.csv')) {
+      const csvParser = require('csv-parser');
+      const { Readable } = require('stream');
+      rows = await new Promise((resolve, reject) => {
+        const results = [];
+        Readable.from(req.file.buffer)
+          .pipe(csvParser())
+          .on('data', (row) => results.push(row))
+          .on('end', () => resolve(results))
+          .on('error', reject);
+      });
+    } else {
+      const ExcelJS = require('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(req.file.buffer);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) throw new Error('No sheet found in this file.');
+
+      const headerValues = worksheet.getRow(1).values; // exceljs is 1-indexed; index 0 is unused
+      const headers = headerValues.slice(1).map((h) => String(h || '').trim());
+
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return; // skip header row
+        const values = row.values.slice(1);
+        const rowObj = {};
+        headers.forEach((h, i) => { rowObj[h] = values[i]; });
+        rows.push(rowObj);
+      });
+    }
+
+    // Accepts flexible column headers: any column containing "phone" or
+    // "mobile" (case-insensitive) is treated as the phone number; any
+    // column containing "name" is treated as the recipient's name.
+    const recipients = rows
+      .map((row) => {
+        const phoneKey = Object.keys(row).find((k) => /phone|mobile/i.test(k));
+        const nameKey = Object.keys(row).find((k) => /name/i.test(k));
+        const phone = phoneKey ? String(row[phoneKey] ?? '').replace(/\D/g, '') : '';
+        const name = nameKey ? String(row[nameKey] ?? '').trim() : '';
+        return { name: name || 'Unnamed', phone };
+      })
+      .filter((r) => r.phone && r.phone.length >= 10);
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid phone numbers found. Make sure your file has a column named "phone" or "mobile".' });
+    }
+
+    res.status(200).json({ success: true, recipients });
+  } catch (err) {
+    res.status(500).json({ success: false, error: `Could not read that file: ${err.message}` });
+  }
+};
+
+// POST /api/campaigns/send-to-numbers
+// Body: { templateId, recipients: [{ name, phone }] }
+// Sends a campaign directly to raw phone numbers from an uploaded file —
+// these do NOT need to exist in Customer Master. Mirrors sendCampaign's
+// logic exactly (image, session, retiring old sessions) but with
+// customerId left null throughout, since there's no Customer record.
+exports.sendCampaignToNumbers = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const { templateId, recipients } = req.body;
+
+    if (!templateId) return res.status(400).json({ success: false, error: 'templateId is required.' });
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({ success: false, error: 'No recipients provided.' });
+    }
+    if (recipients.length > 200) {
+      return res.status(400).json({ success: false, error: 'Max 200 recipients per campaign.' });
+    }
+
+    const template = await CampaignTemplate.findOne({ _id: templateId, company: companyId, status: 'APPROVED' });
+    if (!template) {
+      return res.status(400).json({ success: false, error: 'Template not found or not yet approved by Meta.' });
+    }
+
+    const logRecipients = [];
+    let sentCount = 0;
+    let skippedCount = 0;
+
+    for (const r of recipients) {
+      const name = r.name || 'Unnamed';
+      const phone = r.phone;
+
+      if (!phone) {
+        logRecipients.push({ customerId: null, name, mobile: '', status: 'skipped', reason: 'No phone number.' });
+        skippedCount++;
+        continue;
+      }
+
+      const result = await wa.sendTemplateMessage(phone, template.metaTemplateName, template.language);
+
+      if (result.ok) {
+        logRecipients.push({ customerId: null, name, mobile: phone, status: 'sent' });
+        sentCount++;
+
+        let firstImageAlreadySent = false;
+        if (template.images && template.images.length > 0) {
+          const firstImg = template.images[0];
+          const immediateResult = await wa.sendImageMessage(phone, firstImg.mediaId, firstImg.caption);
+          if (immediateResult.ok) firstImageAlreadySent = true;
+        }
+
+        const hasImages = template.images && template.images.length > 0;
+        const hasQuestions = template.questions && template.questions.length > 0;
+        if (hasImages || hasQuestions) {
+          await CampaignSession.findOneAndUpdate(
+            { company: companyId, phone, template: template._id },
+            {
+              $set: {
+                company: companyId,
+                customer: null,
+                template: template._id,
+                phone,
+                status: 'PENDING',
+                currentQuestionIndex: -1,
+                answers: [],
+                startedAt: null,
+                completedAt: null,
+                firstImageAlreadySent,
+              },
+            },
+            { upsert: true, new: true }
+          );
+
+          // Same "retire old unrelated sessions" behavior as sendCampaign,
+          // so this stays consistent whether sent from Customer Master or
+          // an uploaded file.
+          await CampaignSession.updateMany(
+            {
+              company: companyId,
+              phone,
+              template: { $ne: template._id },
+              status: { $in: ['PENDING', 'IN_PROGRESS'] },
+            },
+            { $set: { status: 'COMPLETED', completedAt: new Date() } }
+          );
+        }
+      } else {
+        logRecipients.push({ customerId: null, name, mobile: phone, status: 'skipped', reason: result.reason });
+        skippedCount++;
+      }
+
+      await new Promise((r2) => setTimeout(r2, 300));
+    }
+
+    const log = await CampaignLog.create({
+      company: companyId,
+      template: template._id,
+      templateTitle: template.title,
+      sentBy: req.user._id,
+      recipients: logRecipients,
+      sentCount,
+      skippedCount,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Campaign done: ${sentCount} sent, ${skippedCount} skipped.`,
+      log,
+    });
+  } catch (err) {
+    console.error('sendCampaignToNumbers error:', err);
+    res.status(500).json({ success: false, error: `Campaign failed: ${err.message}` });
+  }
+};

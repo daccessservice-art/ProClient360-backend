@@ -16,6 +16,18 @@ const upload = multer({
   },
 });
 
+// NEW — separate multer instance for uploading a recipient list
+// (CSV/Excel), distinct from the image-only one above.
+const uploadFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedExt = /\.(csv|xlsx|xls)$/i;
+    if (!allowedExt.test(file.originalname)) return cb(new Error('Only CSV or Excel files are allowed.'), false);
+    cb(null, true);
+  },
+});
+
 // Templates
 router.get('/templates',                  permissionMiddleware(['viewCampaign']),   ctrl.listTemplates);
 router.get('/templates/approved',         permissionMiddleware(['viewCampaign']),   ctrl.listApprovedTemplates);
@@ -31,6 +43,13 @@ router.post('/templates/upload-image', permissionMiddleware(['createCampaign']),
 // Sending
 router.post('/send', permissionMiddleware(['sendCampaign']), ctrl.sendCampaign);
 router.get('/logs',  permissionMiddleware(['viewCampaign']), ctrl.listCampaignLogs);
+
+// NEW — product-wise customer search (searches via linked Leads' product name)
+router.get('/customers-by-product', permissionMiddleware(['viewCampaign']), ctrl.searchCustomersByProduct);
+
+// NEW — upload a CSV/Excel of phone numbers, then send directly to them
+router.post('/parse-recipient-file', permissionMiddleware(['sendCampaign']), uploadFile.single('file'), ctrl.parseUploadedRecipientFile);
+router.post('/send-to-numbers', permissionMiddleware(['sendCampaign']), ctrl.sendCampaignToNumbers);
 
 // Replies — raw inbound messages/taps
 router.get('/replies', permissionMiddleware(['viewCampaign']), ctrl.listReplies);
