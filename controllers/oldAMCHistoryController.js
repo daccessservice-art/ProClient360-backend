@@ -18,6 +18,8 @@ const HEADER_MAP = {
   pincode: ['pincode', 'pin code', 'zip', 'zip code'],
   GSTNo: ['gst number', 'gst no', 'gst', 'gstin'],
   zone: ['zone', 'region'],
+  // ── NEW: Remark column aliases for import ──
+  remark: ['remark', 'remarks', 'note', 'notes', 'comment', 'comments'],
   startDate: ['start date', 'amc start date', 'contract start'],
   endDate: ['end date', 'amc end date', 'contract end', 'expiry date'],
 };
@@ -43,6 +45,12 @@ const parseDateCell = (val) => {
   if (val instanceof Date && !isNaN(val)) return val;
   const parsed = new Date(val);
   return isNaN(parsed) ? null : parsed;
+};
+
+// ── NEW: helper to safely trim + cap remark to 2000 chars ──
+const capRemark = (val) => {
+  if (val === undefined || val === null) return '';
+  return String(val).trim().slice(0, 2000);
 };
 
 // ── Import Excel/CSV — NOTHING is mandatory in the file except a usable Customer Name column. ──
@@ -123,6 +131,8 @@ exports.importOldAMCHistory = async (req, res) => {
         },
         GSTNo: get('GSTNo') ? String(get('GSTNo')).trim().toUpperCase() : '',
         zone: get('zone') ? String(get('zone')).trim() : '',
+        // ── NEW: Remark from import file (capped at 2000 chars) ──
+        remark: capRemark(get('remark')),
         startDate: parseDateCell(get('startDate')),
         endDate: parseDateCell(get('endDate')),
         importBatch,
@@ -160,11 +170,17 @@ exports.createOldAMCHistory = async (req, res) => {
       custName, customerType, email, ownedBy, industryType, customerPriority,
       customerContactPersonName1, phoneNumber1, customerContactPersonEmail1,
       customerContactPersonDesignation1, billingAddress, GSTNo, zone,
+      remark, // ── NEW ──
       startDate, endDate,
     } = req.body;
 
     if (!custName || custName.trim() === '') {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
+    }
+
+    // ── NEW: validate remark length ──
+    if (remark && String(remark).length > 2000) {
+      return res.status(400).json({ success: false, error: 'Remark cannot exceed 2000 characters' });
     }
 
     const newRecord = new OldAMCHistory({
@@ -186,6 +202,7 @@ exports.createOldAMCHistory = async (req, res) => {
       },
       GSTNo: GSTNo || '',
       zone: zone || '',
+      remark: capRemark(remark), // ── NEW ──
       startDate: startDate || null,
       endDate: endDate || null,
       importBatch: 'MANUAL',
@@ -222,6 +239,11 @@ exports.updateOldAMCHistory = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
     }
 
+    // ── NEW: validate remark length ──
+    if (updatedData.remark && String(updatedData.remark).length > 2000) {
+      return res.status(400).json({ success: false, error: 'Remark cannot exceed 2000 characters' });
+    }
+
     const updated = await OldAMCHistory.findByIdAndUpdate(
       id,
       {
@@ -229,6 +251,7 @@ exports.updateOldAMCHistory = async (req, res) => {
         email: updatedData.email ? updatedData.email.toLowerCase().trim() : '',
         customerContactPersonEmail1: updatedData.customerContactPersonEmail1
           ? updatedData.customerContactPersonEmail1.toLowerCase().trim() : '',
+        remark: capRemark(updatedData.remark), // ── NEW ──
         startDate: updatedData.startDate || null,
         endDate: updatedData.endDate || null,
       },
@@ -365,6 +388,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
       { header: 'Pincode', key: 'pincode', width: 12 },
       { header: 'GST Number', key: 'GSTNo', width: 16 },
       { header: 'Zone', key: 'zone', width: 12 },
+      { header: 'Remark', key: 'remark', width: 35 }, // ── NEW ──
       { header: 'Start Date', key: 'startDate', width: 14 },
       { header: 'End Date', key: 'endDate', width: 14 },
       { header: 'Imported On', key: 'importedOn', width: 18 },
@@ -396,6 +420,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
         pincode: r.billingAddress?.pincode || '',
         GSTNo: r.GSTNo || '',
         zone: r.zone || '',
+        remark: r.remark || '', // ── NEW ──
         startDate: r.startDate ? new Date(r.startDate).toLocaleDateString() : '',
         endDate: r.endDate ? new Date(r.endDate).toLocaleDateString() : '',
         importedOn: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
@@ -423,7 +448,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
   }
 };
 
-// ── PDF Export ──
+// ── PDF Export ── (unchanged — remark omitted here to avoid breaking the fixed table layout)
 exports.exportOldAMCHistoryPDF = async (req, res) => {
   try {
     const user = req.user;

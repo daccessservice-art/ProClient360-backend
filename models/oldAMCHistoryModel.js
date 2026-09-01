@@ -26,6 +26,9 @@ const oldAMCHistorySchema = new mongoose.Schema({
   GSTNo: { type: String, trim: true, default: '' },
   zone: { type: String, trim: true, default: '' },
 
+  // ── NEW: Remark field (max 2000 chars) ──
+  remark: { type: String, trim: true, default: '', maxlength: 2000 },
+
   startDate: { type: Date, default: null },
   endDate: { type: Date, default: null },
 
