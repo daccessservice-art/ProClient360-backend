@@ -5,6 +5,7 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
+const http = require('http'); // ✅ NEW — needed for WebSocket support (calling agent)
 
 const dotenv = require('dotenv');
 dotenv.config();
@@ -81,11 +82,20 @@ const projectTaskAgentRoutes = require('./routes/projectTaskAgentRoutes');
 
 const reportRoutes = require('./routes/reportRoutes');
 
+// ✅ NEW — AI Calling Agent (Twilio + Deepgram + Claude + ElevenLabs)
+const callingAgentRoutes = require('./routes/callingAgentRoutes');
+const { attachCallingAgentMediaStream } = require('./services/callingAgentMediaStream');
+
 
 console.log('Initializing daily Sales Manager report scheduler...');
 initializeDailySalesManagerReportScheduler();
 
 const app = express();
+
+// ✅ NEW — wrap Express in a raw HTTP server so we can attach a WebSocket
+// for live call audio. Everything else about `app` stays identical.
+const httpServer = http.createServer(app);
+attachCallingAgentMediaStream(httpServer);
 
 const PORT = process.env.PORT || 5443;
 
@@ -157,8 +167,10 @@ const startServer = async () => {
       console.error('Error in initial auto-mark:', error);
     }
 
-    app.listen(PORT, () => {
+    // ✅ CHANGED — was app.listen(...), now httpServer.listen(...)
+    httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
+      console.log(`🎙️  Calling agent webhook: /api/calling-agent/incoming-call`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -276,6 +288,11 @@ console.log('Campaign routes registered at /api/campaigns');
 // ✅ NEW — Project Task Agent routes
 app.use('/api/project-task-agent', projectTaskAgentRoutes);
 app.use('/api/reports', reportRoutes);
+
+// ✅ NEW — AI Calling Agent routes (inbound webhook + outbound trigger)
+console.log('Registering /api/calling-agent routes...');
+app.use('/api/calling-agent', callingAgentRoutes);
+console.log('Calling agent routes registered at /api/calling-agent');
 
 
 app.use((err, req, res, next) => {  
