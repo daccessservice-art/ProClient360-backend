@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const twilio = require('twilio');
 
-const Lead = require('../models/Lead');
-const CallLog = require('../models/CallLog');
+const Lead = require('../models/leadsModel');
+const CallLog = require('../models/callLogModel');
 
 const twilioClient = twilio(
   process.env.TWILIO_API_KEY_SID,
@@ -38,7 +38,7 @@ router.post('/incoming-call', (req, res) => {
 
 router.post('/make-call', async (req, res) => {
   const { to } = req.body;
-  if (!to) return res.status(400).json({ error: 'Missing "to" phone number, e.g. +917755994638' });
+  if (!to) return res.status(400).json({ error: 'Missing "to" phone number' });
   const host = req.headers.host;
   try {
     const call = await twilioClient.calls.create({
@@ -57,7 +57,7 @@ router.post('/call-customer/:customerId', async (req, res) => {
   const { customerId } = req.params;
   const host = req.headers.host;
   try {
-    const Customer = require('../models/Customer');
+    const Customer = require('../models/customerModel');
     const customer = await Customer.findById(customerId);
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
 
@@ -73,7 +73,6 @@ router.post('/call-customer/:customerId', async (req, res) => {
       }),
     });
 
-    console.log(`CRM outbound call to ${phoneNumber} — Call SID: ${call.sid}`);
     res.json({ status: 'calling', callSid: call.sid, phone: phoneNumber });
   } catch (err) {
     console.error('[CallingAgent] CRM call-customer failed:', err);
@@ -91,10 +90,7 @@ router.post('/cold-call-leads', async (req, res) => {
     const skipped = leads.length - callable.length;
 
     if (callable.length === 0) {
-      return res.json({
-        status: 'no_leads_to_call',
-        message: `No leads found with status "${status}" that have a phone number.`,
-      });
+      return res.json({ status: 'no_leads_to_call', message: `No leads found with status "${status}" that have a phone number.` });
     }
 
     res.json({
@@ -121,48 +117,28 @@ async function processLeadBatch(leads, host, delaySeconds) {
       const call = await twilioClient.calls.create({
         to: phoneNumber,
         from: process.env.TWILIO_PHONE_NUMBER,
-        twiml: buildStreamTwiml(host, {
-          leadId: String(lead._id),
-          leadName,
-          callType: 'cold-call',
-        }),
+        twiml: buildStreamTwiml(host, { leadId: String(lead._id), leadName, callType: 'cold-call' }),
       });
 
-      console.log(`Called ${leadName} (${phoneNumber}) — Call SID: ${call.sid}`);
-
       await CallLog.create({
-        lead: lead._id,
-        phoneNumber,
-        direction: 'outbound',
-        callType: 'cold-call',
-        callSid: call.sid,
-        status: 'initiated',
-        startedAt: new Date(),
+        lead: lead._id, phoneNumber, direction: 'outbound', callType: 'cold-call',
+        callSid: call.sid, status: 'initiated', startedAt: new Date(),
       }).catch(e => console.warn('CallLog save failed:', e.message));
     } catch (err) {
       console.error(`Failed to call ${leadName} (${phoneNumber}):`, err.message);
       await CallLog.create({
-        lead: lead._id,
-        phoneNumber,
-        direction: 'outbound',
-        callType: 'cold-call',
-        status: 'failed',
-        errorMessage: err.message,
-        startedAt: new Date(),
+        lead: lead._id, phoneNumber, direction: 'outbound', callType: 'cold-call',
+        status: 'failed', errorMessage: err.message, startedAt: new Date(),
       }).catch(() => {});
     }
 
     await new Promise(resolve => setTimeout(resolve, delaySeconds * 1000));
   }
-  console.log(`Batch complete — ${leads.length} lead(s) processed.`);
 }
 
 router.get('/cold-call-status', async (req, res) => {
   try {
-    const recentCalls = await CallLog.find({ callType: 'cold-call' })
-      .sort({ startedAt: -1 })
-      .limit(20)
-      .lean();
+    const recentCalls = await CallLog.find({ callType: 'cold-call' }).sort({ startedAt: -1 }).limit(20).lean();
     res.json({ recentCalls });
   } catch (err) {
     res.status(500).json({ error: err.message });
