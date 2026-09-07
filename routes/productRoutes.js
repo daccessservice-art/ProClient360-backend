@@ -11,6 +11,7 @@ const {
   bulkDeleteProducts,
   getBrandsList,
   getCategoriesList,
+  getUOMsList,
 } = require('../controllers/productController');
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.get('/', permissionMiddleware(['viewProduct']), showAll);
 router.get('/report/all', permissionMiddleware(['viewProduct']), getAllProductsForReport);
 router.get('/brands', permissionMiddleware(['viewProduct']), getBrandsList);
 router.get('/categories', permissionMiddleware(['viewProduct']), getCategoriesList);
+router.get('/uoms', permissionMiddleware(['viewProduct']), getUOMsList);
 router.get('/duplicates', permissionMiddleware(['viewProduct']), getDuplicateProducts);
 router.delete('/bulk', permissionMiddleware(['deleteProduct']), bulkDeleteProducts);
 

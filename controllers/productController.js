@@ -58,18 +58,6 @@ exports.showAll = async (req, res) => {
       .sort({ createdAt: -1, _id: -1 })
       .lean();
 
-    // ── FIX: previously returned a 404 "No products found" whenever the
-    // CURRENT page happened to be empty (e.g. you deleted the last row on
-    // the last page, or searched a page number beyond the new total).
-    // That 404 made the frontend nuke `products` to [] AND `pagination`
-    // back to all-zeros, which is what made it look like "everything got
-    // deleted" after removing just one duplicate — the pagination object
-    // collapsing made Next/Prev/page buttons disappear too.
-    //
-    // Now: only return 404 when there are truly ZERO matching documents
-    // in the whole query (not just on this page). If the page itself is
-    // out of range, still return success with the correct totals so the
-    // frontend can clamp `currentPage` to the real last page. ──
     const totalProducts = await Product.countDocuments(query);
 
     if (totalProducts === 0) {
@@ -82,7 +70,7 @@ exports.showAll = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      products, // may legitimately be [] if `page` is beyond totalPages; frontend clamps this
+      products,
       pagination: {
         currentPage: page,
         totalPages,
@@ -139,9 +127,6 @@ exports.getAllProductsForReport = async (req, res) => {
   }
 };
 
-// ── NEW: scan ALL of a company's products and return duplicate groups.
-// A duplicate group = 2+ products sharing the same productName + brandName
-// + model (trimmed, case-insensitive) within the same company. ──
 exports.getDuplicateProducts = async (req, res) => {
   try {
     const user = req.user;
@@ -213,17 +198,11 @@ exports.createProduct = async (req, res) => {
       gstEffectiveDate,
       cessPercentage,
       cessAmount,
-      forceCreateDuplicate, // ── NEW: explicit override flag from the frontend ──
+      forceCreateDuplicate,
     } = req.body;
 
     const companyId = user.company ? user.company : user._id;
 
-    // ── FIX: THIS is the actual root cause of all the duplicates you saw —
-    // there was previously no check at all, so clicking "Add" (or any retry/
-    // double-submit) with the same Product Name + Brand + Model just kept
-    // inserting new documents forever. Now we block it unless the caller
-    // explicitly confirms they want a duplicate (e.g. genuinely re-stocking
-    // an identical item under a new lot). ──
     if (productName && !forceCreateDuplicate) {
       const dupQuery = {
         company: companyId,
@@ -323,9 +302,6 @@ exports.deleteProduct = async (req, res) => {
   }
 };
 
-// ── NEW: bulk-delete endpoint so the frontend "Find Duplicates" workflow
-// can remove several duplicate _ids in one request instead of N separate
-// delete calls (which is slower and risks partial failures). ──
 exports.bulkDeleteProducts = async (req, res) => {
   try {
     const { ids } = req.body;
@@ -382,8 +358,6 @@ exports.updateProduct = async (req, res) => {
   }
 };
 
-// ── NEW: distinct brand list for this company, pulled from the DB instead
-// of localStorage, so every user/browser sees the same up-to-date list. ──
 exports.getBrandsList = async (req, res) => {
   try {
     const user = req.user;
@@ -412,7 +386,6 @@ exports.getBrandsList = async (req, res) => {
   }
 };
 
-// ── NEW: distinct product categories for this company, from the DB ──
 exports.getCategoriesList = async (req, res) => {
   try {
     const user = req.user;
@@ -437,6 +410,43 @@ exports.getCategoriesList = async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Error while fetching category list: " + error.message,
+    });
+  }
+};
+
+// ── NEW: distinct list of UOMs actually used by this company —
+// combines both baseUOM and alternateUOM fields so any unit ever
+// saved (including custom ones added via the "+" button) shows up
+// in future dropdowns automatically. No separate "add" endpoint
+// needed — it reflects real product data, so it can never end up
+// with duplicate entries. ──
+exports.getUOMsList = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+
+    const [baseUOMs, alternateUOMs] = await Promise.all([
+      Product.distinct("baseUOM", { company: companyId, baseUOM: { $exists: true, $ne: "" } }),
+      Product.distinct("alternateUOM", { company: companyId, alternateUOM: { $exists: true, $ne: "" } }),
+    ]);
+
+    const defaultUOMs = ["bags", "litre", "brass", "kilogram", "gram", "meter", "piece", "box", "carton", "nos"];
+
+    const merged = [...new Set([...defaultUOMs, ...baseUOMs, ...alternateUOMs]
+      .filter(Boolean)
+      .map((u) => u.trim())
+      .filter((u) => u.length > 0))];
+
+    merged.sort((a, b) => a.localeCompare(b));
+
+    res.status(200).json({
+      success: true,
+      uoms: merged,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error while fetching UOM list: " + error.message,
     });
   }
 };
