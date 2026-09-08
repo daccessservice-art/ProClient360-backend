@@ -2,15 +2,12 @@
 // ============================================================
 // Handles Exotel's real-time Voicebot Applet WebSocket connection.
 //
-// ⚠️ IMPORTANT — PROTOCOL VERIFICATION NEEDED:
-// This is built from Exotel's official documentation (event names:
-// connected/start/media/dtmf/stop/clear — confirmed from docs.exotel.com),
-// modeled closely on Twilio's near-identical format since Exotel's own
-// docs describe the same event structure. HOWEVER, the exact sample
-// rate and audio encoding were not 100% confirmed in documentation —
-// this defaults to 8000Hz linear PCM (common for Indian telephony) but
-// you MUST verify this against your first real test call's logs and
-// adjust EXOTEL_SAMPLE_RATE / encoding below if audio sounds distorted.
+// ✅ PROTOCOL CONFIRMED (per official Exotel docs, verified 08-09-2026):
+// - Events: connected/start/media/dtmf/stop/mark/clear — exact field
+//   structure confirmed (event, sequence_number, stream_sid, etc.)
+// - Audio: raw/slin — 16-bit, 8kHz, mono PCM, little-endian, base64-encoded
+//   (this is Deepgram's "linear16" encoding — already used below)
+// - Chunk size: 3200 bytes (3.2k / 100ms) minimum, must be multiple of 320
 // ============================================================
 
 const { WebSocketServer } = require('ws');
@@ -34,7 +31,7 @@ function attachExotelMediaStream(httpServer) {
     const dgConnection = deepgram.listen.live({
       model: 'nova-3',
       language: 'multi',
-      encoding: 'linear16', // ⚠️ VERIFY: Exotel may send mulaw or linear16 — adjust if STT accuracy is poor
+      encoding: 'linear16', // ✅ CONFIRMED — matches Exotel's raw/slin 16-bit PCM format
       sample_rate: SAMPLE_RATE,
       channels: 1,
       interim_results: true,
@@ -49,7 +46,6 @@ function attachExotelMediaStream(httpServer) {
       if (!transcript) return;
 
       if (!data.is_final && agentIsSpeaking) {
-        // Exotel's interruption event — per docs, "Clear" is used to stop playback
         exotelWs.send(JSON.stringify({ event: 'clear', stream_sid: streamSid }));
         agentIsSpeaking = false;
       }
@@ -78,15 +74,14 @@ function attachExotelMediaStream(httpServer) {
           break;
 
         case 'start':
-          // ⚠️ VERIFY exact field path against real payload — this follows
-          // the documented pattern (stream_sid at top level, call details nested under 'start')
-          streamSid = msg.stream_sid || msg.streamSid;
+          // ✅ CONFIRMED field structure per official docs
+          streamSid = msg.stream_sid;
           console.log('▶️  [ExotelAgent] Stream started:', streamSid, msg.start);
           speakToCall(process.env.CALLING_AGENT_GREETING || "Hi, how can I help you today?");
           break;
 
         case 'media':
-          // ⚠️ VERIFY payload path — expected msg.media.payload (base64 audio)
+          // ✅ CONFIRMED: msg.media.payload (base64 audio)
           if (msg.media && msg.media.payload) {
             dgConnection.send(Buffer.from(msg.media.payload, 'base64'));
           }
@@ -94,7 +89,6 @@ function attachExotelMediaStream(httpServer) {
 
         case 'dtmf':
           console.log('☎️  [ExotelAgent] DTMF received:', msg.dtmf);
-          // Handle keypad input here if needed (e.g., menu navigation)
           break;
 
         case 'stop':
@@ -164,8 +158,8 @@ notes — just natural spoken text in the appropriate script/language.`,
       agentIsSpeaking = true;
 
       try {
-        // ⚠️ VERIFY output format Exotel expects — trying linear PCM 16-bit at
-        // matching sample rate. ElevenLabs supports 'pcm_16000', 'pcm_8000' etc.
+        // ✅ CONFIRMED: ElevenLabs pcm_8000/pcm_16000 output matches Exotel's
+        // expected raw 16-bit little-endian PCM format
         const outputFormat = SAMPLE_RATE === 16000 ? 'pcm_16000' : 'pcm_8000';
 
         const ttsResponse = await fetch(
@@ -191,7 +185,7 @@ notes — just natural spoken text in the appropriate script/language.`,
         }
 
         const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
-        // Per Exotel docs: "typically 100ms PCM chunks with 3200 bytes of raw audio"
+        // Per Exotel docs: minimum 3200 bytes (100ms) per chunk
         const chunkSize = 3200;
 
         for (let i = 0; i < audioBuffer.length; i += chunkSize) {
