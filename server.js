@@ -5,7 +5,7 @@ const cors = require('cors');
 const path = require('path');
 const cron = require('node-cron');
 const mongoose = require('mongoose');
-const http = require('http'); // ✅ NEW — needed for WebSocket support (calling agent)
+const http = require('http'); // needed for WebSocket support (calling agent)
 
 const dotenv = require('dotenv');
 dotenv.config();
@@ -65,10 +65,9 @@ const accountMasterRoutes = require('./routes/accountMasterRoutes');
 
 const projectPurchaseRoutes = require('./routes/projectPurchaseRoutes');
 
-// ✅ NEW — WhatsApp Campaign module (product-wise, sends to Customer Master)
+// WhatsApp Campaign module (product-wise, sends to Customer Master)
 const campaignRoutes = require('./routes/campaignRoutes');
 
-// ✅ MISSING IMPORT ADDED HERE
 const customerTicketRoutes = require("./routes/customerTicketRoutes");
 
 const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
@@ -77,14 +76,14 @@ const callLogRoutes = require('./routes/callLogRoutes');
 
 const oldAMCHistoryRoutes = require('./routes/oldAMCHistoryRoutes');
 
-// ✅ NEW — Project Task Agent (suggest-assignees / suggest-tester / my-focus)
+// Project Task Agent (suggest-assignees / suggest-tester / my-focus)
 const projectTaskAgentRoutes = require('./routes/projectTaskAgentRoutes');
 
 const reportRoutes = require('./routes/reportRoutes');
 
-// ✅ NEW — AI Calling Agent (Twilio + Deepgram + Claude + ElevenLabs)
-const callingAgentRoutes = require('./routes/callingAgentRoutes');
-const { attachCallingAgentMediaStream } = require('./services/callingAgentMediaStream');
+// ✅ AI Calling Agent — now on Exotel (Deepgram + Claude + ElevenLabs unchanged)
+const exotelCallingRoutes = require('./routes/exotelCallingRoutes');
+const { attachExotelMediaStream } = require('./services/exotelMediaStream');
 
 
 console.log('Initializing daily Sales Manager report scheduler...');
@@ -92,10 +91,10 @@ initializeDailySalesManagerReportScheduler();
 
 const app = express();
 
-// ✅ NEW — wrap Express in a raw HTTP server so we can attach a WebSocket
+// wrap Express in a raw HTTP server so we can attach a WebSocket
 // for live call audio. Everything else about `app` stays identical.
 const httpServer = http.createServer(app);
-attachCallingAgentMediaStream(httpServer);
+attachExotelMediaStream(httpServer);
 
 const PORT = process.env.PORT || 5443;
 
@@ -123,7 +122,7 @@ const startServer = async () => {
         // Ignore error if index doesn't exist
       }
 
-      // ✅ NEW: allow duplicate vendor emails — drop old unique email indexes
+      // allow duplicate vendor emails — drop old unique email indexes
       try {
         await db.collection('vendors').dropIndex('email_1');
         console.log('✅ Dropped old unique email_1 index on vendors');
@@ -167,10 +166,9 @@ const startServer = async () => {
       console.error('Error in initial auto-mark:', error);
     }
 
-    // ✅ CHANGED — was app.listen(...), now httpServer.listen(...)
     httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
-      console.log(`🎙️  Calling agent webhook: /api/calling-agent/incoming-call`);
+      console.log(`🎙️  Exotel calling agent ready — outbound: /api/exotel-calling/make-call`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -234,7 +232,6 @@ app.use('/api/action', actionRoutes);
 
 app.use('/api/ticket', ticketRoutes);
 
-// ✅ MISSING ROUTE ADDED HERE
 app.use("/api/customer-ticket", customerTicketRoutes);
 
 app.use('/api/customer-raise-ticket', customerRaiseTicketRoutes);
@@ -259,7 +256,6 @@ console.log('Registering /api/leads routes...');
 app.use('/api/leads', leadsRoutes);
 console.log('Lead routes registered at /api/leads');
 
-// *** ACTIVITY LOG ROUTES - ADDED ***
 console.log('Registering /api/activity routes...');
 app.use('/api/activity', activityLogRoutes);
 console.log('Activity routes registered at /api/activity');
@@ -280,19 +276,17 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/projectPurchase', projectPurchaseRoutes);
 app.use('/api/old-amc-history', oldAMCHistoryRoutes);
 
-// ✅ NEW — WhatsApp Campaign module routes
 console.log('Registering /api/campaigns routes...');
 app.use('/api/campaigns', campaignRoutes);
 console.log('Campaign routes registered at /api/campaigns');
 
-// ✅ NEW — Project Task Agent routes
 app.use('/api/project-task-agent', projectTaskAgentRoutes);
 app.use('/api/reports', reportRoutes);
 
-// ✅ NEW — AI Calling Agent routes (inbound webhook + outbound trigger)
-console.log('Registering /api/calling-agent routes...');
-app.use('/api/calling-agent', callingAgentRoutes);
-console.log('Calling agent routes registered at /api/calling-agent');
+// ✅ AI Calling Agent routes — Exotel (replaces old Twilio callingAgentRoutes)
+console.log('Registering /api/exotel-calling routes...');
+app.use('/api/exotel-calling', exotelCallingRoutes);
+console.log('Exotel calling agent routes registered at /api/exotel-calling');
 
 
 app.use((err, req, res, next) => {  
