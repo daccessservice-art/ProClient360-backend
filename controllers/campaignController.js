@@ -920,14 +920,18 @@ exports.sendCampaignToNumbers = async (req, res) => {
         continue;
       }
 
-      const result = await wa.sendTemplateMessage(phone, template.metaTemplateName, template.language);
+      // FIXED — this was missing here, though already correct in
+      // sendCampaign. Same reasoning: an approved header-image template
+      // requires this parameter on every send or WhatsApp rejects it.
+      const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
+      const result = await wa.sendTemplateMessage(phone, template.metaTemplateName, template.language, headerImageMediaId);
 
       if (result.ok) {
         logRecipients.push({ customerId: null, name, mobile: phone, status: 'sent' });
         sentCount++;
 
-        let firstImageAlreadySent = false;
-        if (template.images && template.images.length > 0) {
+        let firstImageAlreadySent = !!headerImageMediaId;
+        if (!firstImageAlreadySent && template.images && template.images.length > 0) {
           const firstImg = template.images[0];
           const immediateResult = await wa.sendImageMessage(phone, firstImg.mediaId, firstImg.caption);
           if (immediateResult.ok) firstImageAlreadySent = true;
