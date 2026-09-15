@@ -1,9 +1,8 @@
 const DeliveryChallan = require("../models/deliveryChallanModel");
 const Product = require("../models/productModel");
+const Customer = require("../models/customerModel"); // ⚠️ check this path/filename matches your project
 
 // ─── Helper: deduct stock for an array of items ───────────────────────────────
-// Each item needs { brandName, modelNo, quantity }
-// deductSign = -1 to deduct, +1 to restore
 const adjustProductStock = async (items, deductSign = -1) => {
   for (const item of items) {
     if (!item.brandName || !item.modelNo || !item.quantity) continue;
@@ -15,7 +14,7 @@ const adjustProductStock = async (items, deductSign = -1) => {
 
     if (product) {
       const newQty = (product.currentStockQty || 0) + deductSign * item.quantity;
-      product.currentStockQty = Math.max(0, newQty); // never go below 0
+      product.currentStockQty = Math.max(0, newQty);
       await product.save();
     }
   }
@@ -45,7 +44,7 @@ exports.getDeliveryChallan = async (req, res) => {
   }
 };
 
-// ─── GET all DCs (paginated) ──────────────────────────────────────────────────
+// ─── GET all DCs (paginated + search) ─────────────────────────────────────────
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
@@ -55,6 +54,7 @@ exports.showAll = async (req, res) => {
 
     const { q } = req.query;
     let query = {};
+    const companyId = user.company ? user.company : user._id;
 
     if (
       q !== undefined &&
@@ -66,16 +66,26 @@ exports.showAll = async (req, res) => {
       const searchRegex = new RegExp(q, "i");
       skip = 0;
       page = 1;
+
+      // ── NEW: find customers whose name matches the search text ──
+      const matchingCustomers = await Customer.find({
+        company: companyId,
+        custName: { $regex: searchRegex }
+      }).select('_id');
+
+      const matchingCustomerIds = matchingCustomers.map(c => c._id);
+
       query = {
-        company: user.company ? user.company : user._id,
+        company: companyId,
         $or: [
           { dcNumber: { $regex: searchRegex } },
           { poNumber: { $regex: searchRegex } },
           { choice: { $regex: searchRegex } },
+          { customer: { $in: matchingCustomerIds } }, // ── NEW: search by customer name ──
         ],
       };
     } else {
-      query = { company: user.company || user._id };
+      query = { company: companyId };
     }
 
     const deliveryChallans = await DeliveryChallan.find(query)
@@ -117,7 +127,6 @@ exports.showAll = async (req, res) => {
 };
 
 // ─── CREATE DC ────────────────────────────────────────────────────────────────
-// After saving the DC, deduct the quantity from each product's currentStockQty
 exports.createDeliveryChallan = async (req, res) => {
   try {
     const user = req.user;
@@ -135,7 +144,6 @@ exports.createDeliveryChallan = async (req, res) => {
 
     await newDC.save();
 
-    // ── Deduct stock for each item ──────────────────────────────────────────
     if (dcData.items && dcData.items.length > 0) {
       await adjustProductStock(dcData.items, -1);
     }
@@ -163,7 +171,6 @@ exports.deleteDeliveryChallan = async (req, res) => {
       return res.status(404).json({ success: false, error: "Delivery challan not found" });
     }
 
-    // ── Restore stock before deletion ───────────────────────────────────────
     if (dc.items && dc.items.length > 0) {
       await adjustProductStock(dc.items, +1);
     }
@@ -180,11 +187,6 @@ exports.deleteDeliveryChallan = async (req, res) => {
 };
 
 // ─── UPDATE DC ────────────────────────────────────────────────────────────────
-// Strategy:
-//   1. Load the OLD DC to know which quantities were previously deducted
-//   2. Restore old quantities back to product stock
-//   3. Save the updated DC
-//   4. Deduct new quantities from product stock
 exports.updateDeliveryChallan = async (req, res) => {
   try {
     const { id } = req.params;
@@ -195,19 +197,16 @@ exports.updateDeliveryChallan = async (req, res) => {
       return res.status(404).json({ success: false, error: "Delivery challan not found" });
     }
 
-    // Step 1 → restore stock for OLD items
     if (existingDC.items && existingDC.items.length > 0) {
       await adjustProductStock(existingDC.items, +1);
     }
 
-    // Step 2 → save updated DC
     const updatedDC = await DeliveryChallan.findByIdAndUpdate(
       id,
       updatedData,
       { new: true, runValidators: true }
     );
 
-    // Step 3 → deduct stock for NEW items
     if (updatedData.items && updatedData.items.length > 0) {
       await adjustProductStock(updatedData.items, -1);
     }
