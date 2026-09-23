@@ -95,10 +95,7 @@ function downloadBuffer(url, timeout = 15000) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ✅ NEW: DYNAMIC COMPANY LOGO CACHE — keyed by the company's logo URL
-// (stored on Company.logo, a Firebase Storage URL). Any company — existing
-// or newly added in the future — gets its logo fetched & cached the same
-// way, with zero code changes needed when a new company signs up.
+// ✅ DYNAMIC COMPANY LOGO CACHE — keyed by the company's logo URL
 // ═══════════════════════════════════════════════════════════════════════════════
 const companyLogoCache = new Map(); // logoUrl -> Buffer | null
 
@@ -118,9 +115,6 @@ async function getCompanyLogoBuffer(logoUrl) {
   }
 }
 
-// ✅ NEW: builds a single "Address, City, State, Country, Pincode" string
-// from the Company model's Address sub-document, same shape used across
-// AddCompanyPopup / UpdatedCompanyPopup / companyModel.js.
 function formatCompanyAddress(address) {
   if (!address) return '';
   return [address.add, address.city, address.state, address.country, address.pincode]
@@ -188,6 +182,30 @@ const numberToWords = (num) => {
   return result;
 };
 
+// ✅ NEW: USD words (Million / Thousand system, Dollars & Cents)
+const numberToWordsUSD = (num) => {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven',
+    'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen',
+    'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty',
+    'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+  const convert = (n) => {
+    if (n === 0) return '';
+    if (n < 20) return ones[n] + ' ';
+    if (n < 100) return tens[Math.floor(n / 10)] + ' ' + ones[n % 10] + ' ';
+    if (n < 1000) return ones[Math.floor(n / 100)] + ' Hundred ' + convert(n % 100);
+    if (n < 1000000) return convert(Math.floor(n / 1000)) + 'Thousand ' + convert(n % 1000);
+    if (n < 1000000000) return convert(Math.floor(n / 1000000)) + 'Million ' + convert(n % 1000000);
+    return convert(Math.floor(n / 1000000000)) + 'Billion ' + convert(n % 1000000000);
+  };
+  if (!num || num === 0) return 'Zero US Dollar';
+  const dollars = Math.floor(num);
+  const cents   = Math.round((num - dollars) * 100);
+  let result    = (convert(dollars).trim() || 'Zero') + ' US Dollar';
+  if (cents > 0) result += ' and ' + convert(cents).trim() + ' Cents';
+  return result;
+};
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS & HELPERS
@@ -218,14 +236,21 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // ✅ NEW: optional USD mode — ?currency=USD&rate=88.12 (rate = INR per 1 USD).
+    // Without these params the PDF is exactly the same INR PDF as before.
+    const reqCurrency = String(req.query.currency || '').toUpperCase();
+    const reqRate     = parseFloat(req.query.rate);
+    const isUSD       = reqCurrency === 'USD' && Number.isFinite(reqRate) && reqRate > 0;
+    const CONV_RATE   = isUSD ? reqRate : 1;
+    const cv          = (n) => (Number(n) || 0) / CONV_RATE;
+    const CUR_LBL     = isUSD ? '$' : 'Rs';
+
     await ensureSignature();
 
     const po = await PurchaseOrder.findById(id)
       .populate('vendor',    'vendorName billingAddress manualAddress typeOfVendor GSTNo phoneNumber1 email')
       .populate('project',   'name')
       .populate('createdBy', 'name email')
-      // ✅ CHANGED: pull the full company profile (logo/GST/Address) so the
-      // PDF is generated dynamically per company — no hardcoded configs.
       .populate('company',   'name logo GST Address')
       .lean();
 
@@ -233,20 +258,19 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Purchase order not found' });
     }
 
-    // ✅ CHANGED: company details now resolved from po.company (populated
-    // above), instead of a static COMPANY_CONFIGS[printAs] lookup.
     const companyDoc     = po.company || {};
     const companyName    = companyDoc.name || 'N/A';
     const companyAddress = formatCompanyAddress(companyDoc.Address);
     const companyGstin   = companyDoc.GST || 'N/A';
     const LOGO_BUFFER    = await getCompanyLogoBuffer(companyDoc.logo);
 
-    console.log(`[PDF-SIGN] PO ${po.orderNumber || id} → status="${po.status}" | signature buffer loaded: ${!!signatureCache.signature}`);
+    console.log(`[PDF-SIGN] PO ${po.orderNumber || id} → status="${po.status}" | signature buffer loaded: ${!!signatureCache.signature} | currency=${isUSD ? 'USD @ ' + CONV_RATE : 'INR'}`);
 
     const items      = po.items || [];
-    const totalAmt   = Number(po.totalAmount) || 0;
-    const totalTax   = Number(po.totalTax)    || 0;
-    const grandTotal = Number(po.grandTotal)  || 0;
+    // ✅ CHANGED: amounts pass through cv() (no-op for INR)
+    const totalAmt   = cv(po.totalAmount);
+    const totalTax   = cv(po.totalTax);
+    const grandTotal = cv(po.grandTotal);
     const cgst       = totalTax / 2;
     const sgst       = totalTax / 2;
     const totalQty   = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
@@ -265,7 +289,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     }
 
     doc = new PDFDocument({ margin: 0, size: 'A4' });
-    const filename = `PO_${po.orderNumber || id}.pdf`;
+    const filename = `PO_${po.orderNumber || id}${isUSD ? '_USD' : ''}.pdf`;
 
     doc.on('error', (streamErr) => {
       console.error('[PDF] ❌ PDFDocument stream error:', streamErr.message);
@@ -384,8 +408,9 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     const invoiceFields = [
       ['Order No.',        po.orderNumber || 'N/A'],
       ['Order Date:',      po.orderDate ? new Date(po.orderDate).toLocaleDateString('en-GB').replace(/\//g, '-') : 'N/A'],
-      ['Currency:',        'INR'],
-      ['Conversion Rate:', '1.00'],
+      // ✅ CHANGED: currency + conversion rate follow the requested currency
+      ['Currency:',        isUSD ? 'USD' : 'INR'],
+      ['Conversion Rate:', CONV_RATE.toFixed(2)],
     ];
     let iy = y + 6;
     invoiceFields.forEach(([label, value]) => {
@@ -400,18 +425,18 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     // 3. ITEMS TABLE
     // ════════════════════════════════════════════════════════════
     const itemCols = [
-      { key: 'sr',       label: 'SR.',            w: 18,  align: 'center' },
-      { key: 'item',     label: 'ITEM DETAILS',   w: 128, align: 'left'   },
-      { key: 'hsn',      label: 'HSN/SAC',        w: 38,  align: 'center' },
-      { key: 'uom',      label: 'UOM',            w: 24,  align: 'center' },
-      { key: 'qty',      label: 'QTY',            w: 26,  align: 'right'  },
-      { key: 'rate',     label: 'RATE',           w: 38,  align: 'right'  },
-      { key: 'disc',     label: 'DISC.%',         w: 28,  align: 'center' },
-      { key: 'warranty', label: 'WARRANTY',       w: 40,  align: 'center' },
-      { key: 'totalAmt', label: 'TOTAL AMT.(Rs)', w: 44,  align: 'right'  },
-      { key: 'grossAmt', label: 'GROSS AMT.(Rs)', w: 48,  align: 'right'  },
-      { key: 'gst',      label: 'GST%/AMT.',      w: 38,  align: 'center' },
-      { key: 'net',      label: 'NET AMT.(Rs)',   w: 74,  align: 'right'  },
+      { key: 'sr',       label: 'SR.',                      w: 18,  align: 'center' },
+      { key: 'item',     label: 'ITEM DETAILS',             w: 128, align: 'left'   },
+      { key: 'hsn',      label: 'HSN/SAC',                  w: 38,  align: 'center' },
+      { key: 'uom',      label: 'UOM',                      w: 24,  align: 'center' },
+      { key: 'qty',      label: 'QTY',                      w: 26,  align: 'right'  },
+      { key: 'rate',     label: 'RATE',                     w: 38,  align: 'right'  },
+      { key: 'disc',     label: 'DISC.%',                   w: 28,  align: 'center' },
+      { key: 'warranty', label: 'WARRANTY',                 w: 40,  align: 'center' },
+      { key: 'totalAmt', label: `TOTAL AMT.(${CUR_LBL})`,   w: 44,  align: 'right'  },
+      { key: 'grossAmt', label: `GROSS AMT.(${CUR_LBL})`,   w: 48,  align: 'right'  },
+      { key: 'gst',      label: 'GST%/AMT.',                w: 38,  align: 'center' },
+      { key: 'net',      label: `NET AMT.(${CUR_LBL})`,     w: 74,  align: 'right'  },
     ];
 
     const rowH     = 16;
@@ -438,7 +463,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
 
       if (item) {
         const qty     = Number(item.quantity)        || 0;
-        const rate    = Number(item.price)           || 0;
+        const rate    = cv(item.price);                     // ✅ CHANGED
         const disc    = Number(item.discountPercent) || 0;
         const taxPct  = Number(item.taxPercent)      || 0;
         const lineAmt = qty * rate * (1 - disc / 100);
@@ -592,7 +617,7 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
       hx = M;
       if (item) {
         const qty     = Number(item.quantity)        || 0;
-        const rate    = Number(item.price)           || 0;
+        const rate    = cv(item.price);                     // ✅ CHANGED
         const disc    = Number(item.discountPercent) || 0;
         const taxPct  = Number(item.taxPercent)      || 0;
         const lineAmt = qty * rate * (1 - disc / 100);
@@ -667,14 +692,14 @@ exports.downloadPurchaseOrderPDF = async (req, res) => {
     doc.font('Helvetica-Bold').fontSize(8).fillColor(COLOR_BLACK)
        .text('Total Amount in Words:', M + 4, y + 4, { width: wordsW - 8, lineBreak: false });
     doc.font('Helvetica').fontSize(7.5).fillColor(COLOR_DARK_GREY)
-       .text(numberToWords(grandTotal), M + 4, y + 16, {
+       .text(isUSD ? numberToWordsUSD(grandTotal) : numberToWords(grandTotal), M + 4, y + 16, {   // ✅ CHANGED
          width: wordsW - 8, align: 'left', lineBreak: false, ellipsis: true,
        });
 
     fillRect(doc, totalBX, y, totalBW, wordRowH, COLOR_PINK);
     strokeRect(doc, totalBX, y, totalBW, wordRowH);
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
-       .text('Total Amount (Rs)', totalBX + 5, y + 9, {
+       .text(`Total Amount (${CUR_LBL})`, totalBX + 5, y + 9, {   // ✅ CHANGED
          width: totalBW * 0.58, align: 'left', lineBreak: false,
        });
     doc.font('Helvetica-Bold').fontSize(9).fillColor(COLOR_BLACK)
