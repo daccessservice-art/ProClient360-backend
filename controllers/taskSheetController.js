@@ -8,6 +8,40 @@ const { newTaskAssignedMail } = require("../mailsService/newTaskAssign");
 const { taskCompletedMail } = require("../mailsService/taskCompletedMail");
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
+// ─── NEW helper: per-employee progress on a shared task ──────────────────────
+// A task can have many employees, but taskLevel is ONE shared number.
+// This reads each employee's OWN highest logged % from the Action history
+// (actionBy + complated), so one employee finishing does NOT mark every
+// other employee on the same task as completed.
+// Returns: { [taskId]: { [employeeId]: level } }
+const buildEmployeeProgressMap = async (taskIds) => {
+  if (!taskIds || taskIds.length === 0) return {};
+
+  const rows = await Action.aggregate([
+    { $match: { task: { $in: taskIds } } },
+    {
+      $group: {
+        _id: { task: '$task', actionBy: '$actionBy' },
+        level: {
+          $max: {
+            $convert: { input: '$complated', to: 'double', onError: 0, onNull: 0 }
+          }
+        }
+      }
+    }
+  ]);
+
+  const map = {};
+  rows.forEach(r => {
+    if (!r._id?.task || !r._id?.actionBy) return;
+    const taskKey = r._id.task.toString();
+    const empKey = r._id.actionBy.toString();
+    if (!map[taskKey]) map[taskKey] = {};
+    map[taskKey][empKey] = Math.min(100, r.level || 0);
+  });
+  return map;
+};
+
 // ─── EXISTING: showAll ────────────────────────────────────────────────────────
 exports.showAll = async (req, res) => {
   try {
@@ -29,7 +63,7 @@ exports.showAll = async (req, res) => {
   }
 };
 
-// ─── EXISTING: getTaskSheet (Manager view) ─────────────────────────────────────
+// ─── UPDATED: getTaskSheet (Manager view) — now includes employeeProgress ─────
 exports.getTaskSheet = async (req, res) => {
   try {
     const user = req.user;
@@ -69,7 +103,15 @@ exports.getTaskSheet = async (req, res) => {
       return res.status(404).json({ success: false, error: "No Task Found" });
     }
 
-    res.status(200).json({ success: true, task: allTasks });
+    // ── NEW: attach each employee's own progress to every task ──
+    const progressMap = await buildEmployeeProgressMap(allTasks.map(t => t._id));
+    const tasksWithProgress = allTasks.map(t => {
+      const obj = t.toObject();
+      obj.employeeProgress = progressMap[t._id.toString()] || {};
+      return obj;
+    });
+
+    res.status(200).json({ success: true, task: tasksWithProgress });
   } catch (error) {
     res.status(500).json({ error: "Error while getting taskSheet using id: " + error.message });
   }
@@ -107,7 +149,7 @@ exports.myTask = async (req, res) => {
   }
 };
 
-// ─── NEW: getSubTasksForParent ─────────────────────────────────────────────────
+// ─── UPDATED: getSubTasksForParent — now includes employeeProgress ─────────────
 exports.getSubTasksForParent = async (req, res) => {
   try {
     const { parentId } = req.params;
@@ -122,7 +164,15 @@ exports.getSubTasksForParent = async (req, res) => {
       .populate('assignedBy', 'name')
       .sort({ startDate: 1 });
 
-    res.status(200).json({ success: true, subTasks: subTasks || [] });
+    // ── NEW: per-employee progress for sub-tasks too ──
+    const progressMap = await buildEmployeeProgressMap((subTasks || []).map(t => t._id));
+    const subTasksWithProgress = (subTasks || []).map(t => {
+      const obj = t.toObject();
+      obj.employeeProgress = progressMap[t._id.toString()] || {};
+      return obj;
+    });
+
+    res.status(200).json({ success: true, subTasks: subTasksWithProgress });
   } catch (error) {
     res.status(500).json({ error: "Error fetching sub-tasks: " + error.message });
   }
