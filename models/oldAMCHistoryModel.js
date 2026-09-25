@@ -26,11 +26,29 @@ const oldAMCHistorySchema = new mongoose.Schema({
   GSTNo: { type: String, trim: true, default: '' },
   zone: { type: String, trim: true, default: '' },
 
-  // ── NEW: Remark field (max 2000 chars) ──
+  // System field (free text, max 500 chars)
+  system: { type: String, trim: true, default: '', maxlength: 500 },
+
+  // Remark field (max 2000 chars)
   remark: { type: String, trim: true, default: '', maxlength: 2000 },
 
   startDate: { type: Date, default: null },
   endDate: { type: Date, default: null },
+
+  // In Process — when true, the red expiry blinker is replaced by a blue "In Process" blinker
+  inProcess: { type: Boolean, default: false },
+
+  // ── NEW: Next Follow-up Date — when this date arrives / passes, row blinks YELLOW ──
+  nextFollowUpDate: { type: Date, default: null },
+
+  // ── NEW: Lost — when true, record shows a grey "Lost" badge, no blinker. Remark is required. ──
+  lost: { type: Boolean, default: false },
+  lostAt: { type: Date, default: null },
+
+  // ── NEW: Sales Lead — marks this AMC as assigned to the Sales team ──
+  sentToSales: { type: Boolean, default: false },
+  sentToSalesAt: { type: Date, default: null },
+  sentToSalesByName: { type: String, default: '' },
 
   importBatch: { type: String, default: '' },
   importedBy: {

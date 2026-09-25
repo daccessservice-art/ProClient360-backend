@@ -18,11 +18,17 @@ const HEADER_MAP = {
   pincode: ['pincode', 'pin code', 'zip', 'zip code'],
   GSTNo: ['gst number', 'gst no', 'gst', 'gstin'],
   zone: ['zone', 'region'],
-  // ── NEW: Remark column aliases for import ──
+  // ── NEW: System column aliases for import ──
+  system: ['system', 'systems', 'system name', 'system type'],
   remark: ['remark', 'remarks', 'note', 'notes', 'comment', 'comments'],
   startDate: ['start date', 'amc start date', 'contract start'],
   endDate: ['end date', 'amc end date', 'contract end', 'expiry date'],
+  // ── NEW: Next Follow-up Date aliases for import ──
+  nextFollowUpDate: ['next follow up date', 'next followup date', 'next follow-up date', 'follow up date', 'followup date', 'follow-up date'],
 };
+
+const SYSTEM_MAX_LENGTH = 500; // ── NEW ──
+const REMARK_MAX_LENGTH = 2000;
 
 const normalizeHeader = (h) => (h || '').toString().trim().toLowerCase();
 
@@ -47,10 +53,16 @@ const parseDateCell = (val) => {
   return isNaN(parsed) ? null : parsed;
 };
 
-// ── NEW: helper to safely trim + cap remark to 2000 chars ──
+// safely trim + cap remark to 2000 chars
 const capRemark = (val) => {
   if (val === undefined || val === null) return '';
-  return String(val).trim().slice(0, 2000);
+  return String(val).trim().slice(0, REMARK_MAX_LENGTH);
+};
+
+// ── NEW: safely trim + cap system to 500 chars ──
+const capSystem = (val) => {
+  if (val === undefined || val === null) return '';
+  return String(val).trim().slice(0, SYSTEM_MAX_LENGTH);
 };
 
 // ── Import Excel/CSV — NOTHING is mandatory in the file except a usable Customer Name column. ──
@@ -131,10 +143,13 @@ exports.importOldAMCHistory = async (req, res) => {
         },
         GSTNo: get('GSTNo') ? String(get('GSTNo')).trim().toUpperCase() : '',
         zone: get('zone') ? String(get('zone')).trim() : '',
-        // ── NEW: Remark from import file (capped at 2000 chars) ──
+        system: capSystem(get('system')), // ── NEW ──
         remark: capRemark(get('remark')),
         startDate: parseDateCell(get('startDate')),
         endDate: parseDateCell(get('endDate')),
+        // ── NEW: follow-up date from file; if present, record is automatically In Process ──
+        nextFollowUpDate: parseDateCell(get('nextFollowUpDate')),
+        inProcess: !!parseDateCell(get('nextFollowUpDate')),
         importBatch,
         importedBy: user._id,
         importedByName: user.name || '',
@@ -170,17 +185,24 @@ exports.createOldAMCHistory = async (req, res) => {
       custName, customerType, email, ownedBy, industryType, customerPriority,
       customerContactPersonName1, phoneNumber1, customerContactPersonEmail1,
       customerContactPersonDesignation1, billingAddress, GSTNo, zone,
-      remark, // ── NEW ──
+      system, // ── NEW ──
+      remark,
       startDate, endDate,
+      inProcess,
+      nextFollowUpDate, // ── NEW ──
     } = req.body;
 
     if (!custName || custName.trim() === '') {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
     }
 
-    // ── NEW: validate remark length ──
-    if (remark && String(remark).length > 2000) {
-      return res.status(400).json({ success: false, error: 'Remark cannot exceed 2000 characters' });
+    // ── NEW: validate system length ──
+    if (system && String(system).length > SYSTEM_MAX_LENGTH) {
+      return res.status(400).json({ success: false, error: `System cannot exceed ${SYSTEM_MAX_LENGTH} characters` });
+    }
+
+    if (remark && String(remark).length > REMARK_MAX_LENGTH) {
+      return res.status(400).json({ success: false, error: `Remark cannot exceed ${REMARK_MAX_LENGTH} characters` });
     }
 
     const newRecord = new OldAMCHistory({
@@ -202,9 +224,13 @@ exports.createOldAMCHistory = async (req, res) => {
       },
       GSTNo: GSTNo || '',
       zone: zone || '',
-      remark: capRemark(remark), // ── NEW ──
+      system: capSystem(system), // ── NEW ──
+      remark: capRemark(remark),
       startDate: startDate || null,
       endDate: endDate || null,
+      // ── NEW: selecting a follow-up date automatically makes the record In Process ──
+      inProcess: inProcess === true || !!nextFollowUpDate,
+      nextFollowUpDate: nextFollowUpDate || null,
       importBatch: 'MANUAL',
       importedBy: user._id,
       importedByName: user.name || '',
@@ -229,6 +255,7 @@ exports.updateOldAMCHistory = async (req, res) => {
   try {
     const { id } = req.params;
     const updatedData = req.body;
+    const user = req.user; // ── NEW ──
 
     const existing = await OldAMCHistory.findById(id);
     if (!existing) {
@@ -239,9 +266,51 @@ exports.updateOldAMCHistory = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
     }
 
-    // ── NEW: validate remark length ──
-    if (updatedData.remark && String(updatedData.remark).length > 2000) {
-      return res.status(400).json({ success: false, error: 'Remark cannot exceed 2000 characters' });
+    // ── NEW: validate system length ──
+    if (updatedData.system && String(updatedData.system).length > SYSTEM_MAX_LENGTH) {
+      return res.status(400).json({ success: false, error: `System cannot exceed ${SYSTEM_MAX_LENGTH} characters` });
+    }
+
+    if (updatedData.remark && String(updatedData.remark).length > REMARK_MAX_LENGTH) {
+      return res.status(400).json({ success: false, error: `Remark cannot exceed ${REMARK_MAX_LENGTH} characters` });
+    }
+
+    // ── NEW: Lost rules ──
+    // - Lost requires a Remark
+    // - Lost turns In Process OFF and clears the follow-up date
+    const finalLost = typeof updatedData.lost === 'boolean' ? updatedData.lost : !!existing.lost;
+    const finalRemark = capRemark(updatedData.remark);
+    if (finalLost && !finalRemark) {
+      return res.status(400).json({ success: false, error: 'Remark is required when marking the record as Lost' });
+    }
+
+    // In Process + Next Follow-up Date rules
+    // - a follow-up date automatically turns In Process ON
+    // - turning In Process OFF clears the follow-up date
+    let finalInProcess = typeof updatedData.inProcess === 'boolean' ? updatedData.inProcess : existing.inProcess;
+    let finalFollowUp = updatedData.nextFollowUpDate !== undefined
+      ? (updatedData.nextFollowUpDate || null)
+      : existing.nextFollowUpDate;
+    if (finalLost) {
+      finalInProcess = false;
+      finalFollowUp = null;
+    } else {
+      if (finalFollowUp) finalInProcess = true;
+      if (!finalInProcess) finalFollowUp = null;
+    }
+
+    // ── NEW: Sales Lead rules — remember when & who sent it; clear when turned off ──
+    const finalSentToSales = typeof updatedData.sentToSales === 'boolean' ? updatedData.sentToSales : !!existing.sentToSales;
+    let finalSentToSalesAt = null;
+    let finalSentToSalesByName = '';
+    if (finalSentToSales) {
+      if (existing.sentToSales) {
+        finalSentToSalesAt = existing.sentToSalesAt;
+        finalSentToSalesByName = existing.sentToSalesByName;
+      } else {
+        finalSentToSalesAt = new Date();
+        finalSentToSalesByName = user?.name || '';
+      }
     }
 
     const updated = await OldAMCHistory.findByIdAndUpdate(
@@ -251,9 +320,17 @@ exports.updateOldAMCHistory = async (req, res) => {
         email: updatedData.email ? updatedData.email.toLowerCase().trim() : '',
         customerContactPersonEmail1: updatedData.customerContactPersonEmail1
           ? updatedData.customerContactPersonEmail1.toLowerCase().trim() : '',
-        remark: capRemark(updatedData.remark), // ── NEW ──
+        system: capSystem(updatedData.system), // ── NEW ──
+        remark: finalRemark,
         startDate: updatedData.startDate || null,
         endDate: updatedData.endDate || null,
+        inProcess: finalInProcess,
+        nextFollowUpDate: finalFollowUp,
+        lost: finalLost, // ── NEW ──
+        lostAt: finalLost ? (existing.lost ? existing.lostAt : new Date()) : null,
+        sentToSales: finalSentToSales,                // ── NEW ──
+        sentToSalesAt: finalSentToSalesAt,            // ── NEW ──
+        sentToSalesByName: finalSentToSalesByName,    // ── NEW ──
       },
       { new: true, runValidators: true }
     );
@@ -266,6 +343,38 @@ exports.updateOldAMCHistory = async (req, res) => {
   } catch (error) {
     console.error('Error updating old AMC history record:', error);
     res.status(500).json({ success: false, error: 'Error updating record: ' + error.message });
+  }
+};
+
+// ── NEW: Toggle "In Process" for a single record ──
+// Body: { inProcess: true | false }  (if omitted, it just flips the current value)
+exports.toggleOldAMCHistoryInProcess = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+    const { id } = req.params;
+
+    const record = await OldAMCHistory.findOne({ _id: id, company: companyId });
+    if (!record) {
+      return res.status(404).json({ success: false, error: 'Record not found' });
+    }
+
+    record.inProcess = typeof req.body?.inProcess === 'boolean'
+      ? req.body.inProcess
+      : !record.inProcess;
+    if (!record.inProcess) record.nextFollowUpDate = null;
+    if (record.inProcess) { record.lost = false; record.lostAt = null; } // ── NEW ──
+
+    await record.save();
+
+    res.status(200).json({
+      success: true,
+      message: record.inProcess ? 'Marked as In Process' : 'Removed In Process',
+      record,
+    });
+  } catch (error) {
+    console.error('Error toggling In Process:', error);
+    res.status(500).json({ success: false, error: 'Error updating In Process: ' + error.message });
   }
 };
 
@@ -291,6 +400,7 @@ exports.showAll = async (req, res) => {
           { email: { $regex: searchRegex } },
           { GSTNo: { $regex: searchRegex } },
           { phoneNumber1: { $regex: searchRegex } },
+          { system: { $regex: searchRegex } }, // ── NEW: search by System ──
         ],
       });
     }
@@ -388,9 +498,16 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
       { header: 'Pincode', key: 'pincode', width: 12 },
       { header: 'GST Number', key: 'GSTNo', width: 16 },
       { header: 'Zone', key: 'zone', width: 12 },
-      { header: 'Remark', key: 'remark', width: 35 }, // ── NEW ──
+      { header: 'System', key: 'system', width: 25 }, // ── NEW ──
+      { header: 'Remark', key: 'remark', width: 35 },
       { header: 'Start Date', key: 'startDate', width: 14 },
       { header: 'End Date', key: 'endDate', width: 14 },
+      { header: 'In Process', key: 'inProcess', width: 12 },
+      { header: 'Next Follow-up Date', key: 'nextFollowUpDate', width: 18 },
+      { header: 'Lost', key: 'lost', width: 10 },
+      { header: 'Sent To Sales', key: 'sentToSales', width: 14 },       // ── NEW ──
+      { header: 'Sent To Sales On', key: 'sentToSalesAt', width: 18 },  // ── NEW ──
+      { header: 'Sent To Sales By', key: 'sentToSalesBy', width: 20 },  // ── NEW ──
       { header: 'Imported On', key: 'importedOn', width: 18 },
     ];
 
@@ -420,9 +537,16 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
         pincode: r.billingAddress?.pincode || '',
         GSTNo: r.GSTNo || '',
         zone: r.zone || '',
-        remark: r.remark || '', // ── NEW ──
+        system: r.system || '', // ── NEW ──
+        remark: r.remark || '',
         startDate: r.startDate ? new Date(r.startDate).toLocaleDateString() : '',
         endDate: r.endDate ? new Date(r.endDate).toLocaleDateString() : '',
+        inProcess: r.inProcess ? 'Yes' : 'No',
+        nextFollowUpDate: r.nextFollowUpDate ? new Date(r.nextFollowUpDate).toLocaleDateString() : '',
+        lost: r.lost ? 'Yes' : 'No',
+        sentToSales: r.sentToSales ? 'Yes' : 'No',                                               // ── NEW ──
+        sentToSalesAt: r.sentToSalesAt ? new Date(r.sentToSalesAt).toLocaleDateString() : '',  // ── NEW ──
+        sentToSalesBy: r.sentToSalesByName || '',                                                // ── NEW ──
         importedOn: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
       });
       row.eachCell((cell) => { cell.alignment = { vertical: 'middle', wrapText: true }; });
@@ -448,7 +572,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
   }
 };
 
-// ── PDF Export ── (unchanged — remark omitted here to avoid breaking the fixed table layout)
+// ── PDF Export ── (unchanged — system/remark omitted here to avoid breaking the fixed table layout)
 exports.exportOldAMCHistoryPDF = async (req, res) => {
   try {
     const user = req.user;

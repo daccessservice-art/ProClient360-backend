@@ -10,6 +10,7 @@ const {
   exportOldAMCHistoryPDF,
   createOldAMCHistory,
   updateOldAMCHistory,
+  toggleOldAMCHistoryInProcess, // ── NEW ──
 } = require('../controllers/oldAMCHistoryController');
 
 const router = express.Router();
@@ -30,6 +31,8 @@ router.get('/export/excel', permissionMiddleware(['viewOldAMCHistory']), exportO
 router.get('/', permissionMiddleware(['viewOldAMCHistory']), showAll);
 router.post('/import', permissionMiddleware(['createOldAMCHistory']), upload.single('file'), importOldAMCHistory);
 router.post('/', permissionMiddleware(['createOldAMCHistory']), createOldAMCHistory);
+// ── NEW: In Process toggle ──
+router.patch('/:id/in-process', permissionMiddleware(['updateOldAMCHistory']), toggleOldAMCHistoryInProcess);
 router.put('/:id', permissionMiddleware(['updateOldAMCHistory']), updateOldAMCHistory);
 router.delete('/batch/:batch', permissionMiddleware(['deleteOldAMCHistory']), deleteImportBatch);
 router.delete('/:id', permissionMiddleware(['deleteOldAMCHistory']), deleteOldAMCHistory);
