@@ -10,7 +10,8 @@ const {
   exportOldAMCHistoryPDF,
   createOldAMCHistory,
   updateOldAMCHistory,
-  toggleOldAMCHistoryInProcess, // ── NEW ──
+  toggleOldAMCHistoryInProcess,
+  getProjectAMCAlerts, // ── NEW ──
 } = require('../controllers/oldAMCHistoryController');
 
 const router = express.Router();
@@ -28,10 +29,11 @@ const upload = multer({
 
 router.get('/export/pdf', permissionMiddleware(['viewOldAMCHistory']), exportOldAMCHistoryPDF);
 router.get('/export/excel', permissionMiddleware(['viewOldAMCHistory']), exportOldAMCHistoryExcel);
+// ── NEW: Completed / ending projects from Project Master that need an AMC ──
+router.get('/project-alerts', permissionMiddleware(['viewOldAMCHistory']), getProjectAMCAlerts);
 router.get('/', permissionMiddleware(['viewOldAMCHistory']), showAll);
 router.post('/import', permissionMiddleware(['createOldAMCHistory']), upload.single('file'), importOldAMCHistory);
 router.post('/', permissionMiddleware(['createOldAMCHistory']), createOldAMCHistory);
-// ── NEW: In Process toggle ──
 router.patch('/:id/in-process', permissionMiddleware(['updateOldAMCHistory']), toggleOldAMCHistoryInProcess);
 router.put('/:id', permissionMiddleware(['updateOldAMCHistory']), updateOldAMCHistory);
 router.delete('/batch/:batch', permissionMiddleware(['deleteOldAMCHistory']), deleteImportBatch);

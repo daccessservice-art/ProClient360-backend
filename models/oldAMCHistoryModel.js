@@ -38,17 +38,26 @@ const oldAMCHistorySchema = new mongoose.Schema({
   // In Process — when true, the red expiry blinker is replaced by a blue "In Process" blinker
   inProcess: { type: Boolean, default: false },
 
-  // ── NEW: Next Follow-up Date — when this date arrives / passes, row blinks YELLOW ──
+  // Next Follow-up Date — when this date arrives / passes, row blinks YELLOW
   nextFollowUpDate: { type: Date, default: null },
 
-  // ── NEW: Lost — when true, record shows a grey "Lost" badge, no blinker. Remark is required. ──
+  // Lost — when true, record shows a grey "Lost" badge, no blinker. Remark is required.
   lost: { type: Boolean, default: false },
   lostAt: { type: Date, default: null },
 
-  // ── NEW: Sales Lead — marks this AMC as assigned to the Sales team ──
+  // Sales Lead — marks this AMC as assigned to the Sales team
   sentToSales: { type: Boolean, default: false },
   sentToSalesAt: { type: Date, default: null },
   sentToSalesByName: { type: String, default: '' },
+
+  // ── NEW: Link to the Project (Project Master) this AMC record was created from.
+  // Used so the "Project AMC Alerts" panel stops showing a project once its AMC is created. ──
+  sourceProject: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Project',
+    default: null,
+  },
+  sourceProjectName: { type: String, default: '' },
 
   importBatch: { type: String, default: '' },
   importedBy: {
@@ -64,5 +73,6 @@ const oldAMCHistorySchema = new mongoose.Schema({
 oldAMCHistorySchema.index({ company: 1 });
 oldAMCHistorySchema.index({ custName: 1 });
 oldAMCHistorySchema.index({ importBatch: 1 });
+oldAMCHistorySchema.index({ sourceProject: 1 }); // ── NEW ──
 
 module.exports = mongoose.model('OldAMCHistory', oldAMCHistorySchema);

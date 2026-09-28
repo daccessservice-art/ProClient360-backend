@@ -1,6 +1,12 @@
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const OldAMCHistory = require('../models/oldAMCHistoryModel');
+// ── NEW: needed for "Project AMC Alerts" (read-only, Project Master is NOT changed) ──
+const Project = require('../models/projectModel');
+require('../models/customerModel'); // make sure Customer model is registered for populate()
+
+// ── NEW: show a project in the AMC alert list starting 2 months (60 days) before its End Date ──
+const PROJECT_AMC_ALERT_DAYS = 60;
 
 const HEADER_MAP = {
   custName: ['customer name', 'cust name', 'customername', 'name'],
@@ -18,16 +24,14 @@ const HEADER_MAP = {
   pincode: ['pincode', 'pin code', 'zip', 'zip code'],
   GSTNo: ['gst number', 'gst no', 'gst', 'gstin'],
   zone: ['zone', 'region'],
-  // ── NEW: System column aliases for import ──
   system: ['system', 'systems', 'system name', 'system type'],
   remark: ['remark', 'remarks', 'note', 'notes', 'comment', 'comments'],
   startDate: ['start date', 'amc start date', 'contract start'],
   endDate: ['end date', 'amc end date', 'contract end', 'expiry date'],
-  // ── NEW: Next Follow-up Date aliases for import ──
   nextFollowUpDate: ['next follow up date', 'next followup date', 'next follow-up date', 'follow up date', 'followup date', 'follow-up date'],
 };
 
-const SYSTEM_MAX_LENGTH = 500; // ── NEW ──
+const SYSTEM_MAX_LENGTH = 500;
 const REMARK_MAX_LENGTH = 2000;
 
 const normalizeHeader = (h) => (h || '').toString().trim().toLowerCase();
@@ -53,13 +57,11 @@ const parseDateCell = (val) => {
   return isNaN(parsed) ? null : parsed;
 };
 
-// safely trim + cap remark to 2000 chars
 const capRemark = (val) => {
   if (val === undefined || val === null) return '';
   return String(val).trim().slice(0, REMARK_MAX_LENGTH);
 };
 
-// ── NEW: safely trim + cap system to 500 chars ──
 const capSystem = (val) => {
   if (val === undefined || val === null) return '';
   return String(val).trim().slice(0, SYSTEM_MAX_LENGTH);
@@ -143,11 +145,10 @@ exports.importOldAMCHistory = async (req, res) => {
         },
         GSTNo: get('GSTNo') ? String(get('GSTNo')).trim().toUpperCase() : '',
         zone: get('zone') ? String(get('zone')).trim() : '',
-        system: capSystem(get('system')), // ── NEW ──
+        system: capSystem(get('system')),
         remark: capRemark(get('remark')),
         startDate: parseDateCell(get('startDate')),
         endDate: parseDateCell(get('endDate')),
-        // ── NEW: follow-up date from file; if present, record is automatically In Process ──
         nextFollowUpDate: parseDateCell(get('nextFollowUpDate')),
         inProcess: !!parseDateCell(get('nextFollowUpDate')),
         importBatch,
@@ -176,7 +177,7 @@ exports.importOldAMCHistory = async (req, res) => {
   }
 };
 
-// ── Manual Create (single record) ──
+// ── Manual Create (single record) — also used when creating an AMC from a Project alert ──
 exports.createOldAMCHistory = async (req, res) => {
   try {
     const user = req.user;
@@ -185,24 +186,33 @@ exports.createOldAMCHistory = async (req, res) => {
       custName, customerType, email, ownedBy, industryType, customerPriority,
       customerContactPersonName1, phoneNumber1, customerContactPersonEmail1,
       customerContactPersonDesignation1, billingAddress, GSTNo, zone,
-      system, // ── NEW ──
+      system,
       remark,
       startDate, endDate,
       inProcess,
-      nextFollowUpDate, // ── NEW ──
+      nextFollowUpDate,
+      sourceProject,      // ── NEW ──
+      sourceProjectName,  // ── NEW ──
     } = req.body;
 
     if (!custName || custName.trim() === '') {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
     }
 
-    // ── NEW: validate system length ──
     if (system && String(system).length > SYSTEM_MAX_LENGTH) {
       return res.status(400).json({ success: false, error: `System cannot exceed ${SYSTEM_MAX_LENGTH} characters` });
     }
 
     if (remark && String(remark).length > REMARK_MAX_LENGTH) {
       return res.status(400).json({ success: false, error: `Remark cannot exceed ${REMARK_MAX_LENGTH} characters` });
+    }
+
+    // ── NEW: one AMC record per project (prevents duplicates from the alert panel) ──
+    if (sourceProject) {
+      const already = await OldAMCHistory.findOne({ company: companyId, sourceProject });
+      if (already) {
+        return res.status(400).json({ success: false, error: 'An AMC record is already created for this project' });
+      }
     }
 
     const newRecord = new OldAMCHistory({
@@ -224,24 +234,25 @@ exports.createOldAMCHistory = async (req, res) => {
       },
       GSTNo: GSTNo || '',
       zone: zone || '',
-      system: capSystem(system), // ── NEW ──
+      system: capSystem(system),
       remark: capRemark(remark),
       startDate: startDate || null,
       endDate: endDate || null,
-      // ── NEW: selecting a follow-up date automatically makes the record In Process ──
       inProcess: inProcess === true || !!nextFollowUpDate,
       nextFollowUpDate: nextFollowUpDate || null,
-      importBatch: 'MANUAL',
+      sourceProject: sourceProject || null,            // ── NEW ──
+      sourceProjectName: sourceProjectName || '',      // ── NEW ──
+      importBatch: sourceProject ? 'PROJECT' : 'MANUAL',
       importedBy: user._id,
       importedByName: user.name || '',
-      sourceFileName: 'Manual Entry',
+      sourceFileName: sourceProject ? 'From Project Master' : 'Manual Entry',
     });
 
     const saved = await newRecord.save();
 
     res.status(201).json({
       success: true,
-      message: 'AMC history record added successfully',
+      message: sourceProject ? 'AMC record created from project successfully' : 'AMC history record added successfully',
       record: saved,
     });
   } catch (error) {
@@ -250,12 +261,60 @@ exports.createOldAMCHistory = async (req, res) => {
   }
 };
 
+// ── NEW: Project AMC Alerts ──
+// Returns projects from Project Master that
+//   • are Completed, OR
+//   • have End Date already passed, OR
+//   • will end within the next 60 days (2 months)
+// and do NOT yet have an AMC record created from them.
+// Project Master data is only READ here, never changed.
+exports.getProjectAMCAlerts = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const windowEnd = new Date(today);
+    windowEnd.setDate(windowEnd.getDate() + PROJECT_AMC_ALERT_DAYS);
+    windowEnd.setHours(23, 59, 59, 999);
+
+    const convertedIds = await OldAMCHistory.distinct('sourceProject', {
+      company: companyId,
+      sourceProject: { $ne: null },
+    });
+
+    const projects = await Project.find({
+      company: companyId,
+      _id: { $nin: convertedIds },
+      $or: [
+        { endDate: { $lte: windowEnd } },
+        { projectStatus: 'Completed' },
+      ],
+    })
+      .select('name custId category purchaseOrderNo projectStatus completeLevel startDate endDate Address warrantyStartDate warrantyMonths')
+      .populate('custId')
+      .sort({ endDate: 1 })
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      projects,
+      total: projects.length,
+      alertDays: PROJECT_AMC_ALERT_DAYS,
+    });
+  } catch (error) {
+    console.error('Error fetching project AMC alerts:', error);
+    res.status(500).json({ success: false, error: 'Error fetching project AMC alerts: ' + error.message });
+  }
+};
+
 // ── Manual Update (single record) ──
 exports.updateOldAMCHistory = async (req, res) => {
   try {
     const { id } = req.params;
     const updatedData = req.body;
-    const user = req.user; // ── NEW ──
+    const user = req.user;
 
     const existing = await OldAMCHistory.findById(id);
     if (!existing) {
@@ -266,7 +325,6 @@ exports.updateOldAMCHistory = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Customer Name is required' });
     }
 
-    // ── NEW: validate system length ──
     if (updatedData.system && String(updatedData.system).length > SYSTEM_MAX_LENGTH) {
       return res.status(400).json({ success: false, error: `System cannot exceed ${SYSTEM_MAX_LENGTH} characters` });
     }
@@ -275,18 +333,12 @@ exports.updateOldAMCHistory = async (req, res) => {
       return res.status(400).json({ success: false, error: `Remark cannot exceed ${REMARK_MAX_LENGTH} characters` });
     }
 
-    // ── NEW: Lost rules ──
-    // - Lost requires a Remark
-    // - Lost turns In Process OFF and clears the follow-up date
     const finalLost = typeof updatedData.lost === 'boolean' ? updatedData.lost : !!existing.lost;
     const finalRemark = capRemark(updatedData.remark);
     if (finalLost && !finalRemark) {
       return res.status(400).json({ success: false, error: 'Remark is required when marking the record as Lost' });
     }
 
-    // In Process + Next Follow-up Date rules
-    // - a follow-up date automatically turns In Process ON
-    // - turning In Process OFF clears the follow-up date
     let finalInProcess = typeof updatedData.inProcess === 'boolean' ? updatedData.inProcess : existing.inProcess;
     let finalFollowUp = updatedData.nextFollowUpDate !== undefined
       ? (updatedData.nextFollowUpDate || null)
@@ -299,7 +351,6 @@ exports.updateOldAMCHistory = async (req, res) => {
       if (!finalInProcess) finalFollowUp = null;
     }
 
-    // ── NEW: Sales Lead rules — remember when & who sent it; clear when turned off ──
     const finalSentToSales = typeof updatedData.sentToSales === 'boolean' ? updatedData.sentToSales : !!existing.sentToSales;
     let finalSentToSalesAt = null;
     let finalSentToSalesByName = '';
@@ -320,17 +371,20 @@ exports.updateOldAMCHistory = async (req, res) => {
         email: updatedData.email ? updatedData.email.toLowerCase().trim() : '',
         customerContactPersonEmail1: updatedData.customerContactPersonEmail1
           ? updatedData.customerContactPersonEmail1.toLowerCase().trim() : '',
-        system: capSystem(updatedData.system), // ── NEW ──
+        system: capSystem(updatedData.system),
         remark: finalRemark,
         startDate: updatedData.startDate || null,
         endDate: updatedData.endDate || null,
         inProcess: finalInProcess,
         nextFollowUpDate: finalFollowUp,
-        lost: finalLost, // ── NEW ──
+        lost: finalLost,
         lostAt: finalLost ? (existing.lost ? existing.lostAt : new Date()) : null,
-        sentToSales: finalSentToSales,                // ── NEW ──
-        sentToSalesAt: finalSentToSalesAt,            // ── NEW ──
-        sentToSalesByName: finalSentToSalesByName,    // ── NEW ──
+        sentToSales: finalSentToSales,
+        sentToSalesAt: finalSentToSalesAt,
+        sentToSalesByName: finalSentToSalesByName,
+        // ── NEW: never let an edit break the project link ──
+        sourceProject: existing.sourceProject || null,
+        sourceProjectName: existing.sourceProjectName || '',
       },
       { new: true, runValidators: true }
     );
@@ -346,8 +400,7 @@ exports.updateOldAMCHistory = async (req, res) => {
   }
 };
 
-// ── NEW: Toggle "In Process" for a single record ──
-// Body: { inProcess: true | false }  (if omitted, it just flips the current value)
+// ── Toggle "In Process" for a single record ──
 exports.toggleOldAMCHistoryInProcess = async (req, res) => {
   try {
     const user = req.user;
@@ -363,7 +416,7 @@ exports.toggleOldAMCHistoryInProcess = async (req, res) => {
       ? req.body.inProcess
       : !record.inProcess;
     if (!record.inProcess) record.nextFollowUpDate = null;
-    if (record.inProcess) { record.lost = false; record.lostAt = null; } // ── NEW ──
+    if (record.inProcess) { record.lost = false; record.lostAt = null; }
 
     await record.save();
 
@@ -400,7 +453,8 @@ exports.showAll = async (req, res) => {
           { email: { $regex: searchRegex } },
           { GSTNo: { $regex: searchRegex } },
           { phoneNumber1: { $regex: searchRegex } },
-          { system: { $regex: searchRegex } }, // ── NEW: search by System ──
+          { system: { $regex: searchRegex } },
+          { sourceProjectName: { $regex: searchRegex } }, // ── NEW: search by project name ──
         ],
       });
     }
@@ -498,16 +552,17 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
       { header: 'Pincode', key: 'pincode', width: 12 },
       { header: 'GST Number', key: 'GSTNo', width: 16 },
       { header: 'Zone', key: 'zone', width: 12 },
-      { header: 'System', key: 'system', width: 25 }, // ── NEW ──
+      { header: 'System', key: 'system', width: 25 },
       { header: 'Remark', key: 'remark', width: 35 },
       { header: 'Start Date', key: 'startDate', width: 14 },
       { header: 'End Date', key: 'endDate', width: 14 },
       { header: 'In Process', key: 'inProcess', width: 12 },
       { header: 'Next Follow-up Date', key: 'nextFollowUpDate', width: 18 },
       { header: 'Lost', key: 'lost', width: 10 },
-      { header: 'Sent To Sales', key: 'sentToSales', width: 14 },       // ── NEW ──
-      { header: 'Sent To Sales On', key: 'sentToSalesAt', width: 18 },  // ── NEW ──
-      { header: 'Sent To Sales By', key: 'sentToSalesBy', width: 20 },  // ── NEW ──
+      { header: 'Sent To Sales', key: 'sentToSales', width: 14 },
+      { header: 'Sent To Sales On', key: 'sentToSalesAt', width: 18 },
+      { header: 'Sent To Sales By', key: 'sentToSalesBy', width: 20 },
+      { header: 'From Project', key: 'sourceProjectName', width: 28 }, // ── NEW ──
       { header: 'Imported On', key: 'importedOn', width: 18 },
     ];
 
@@ -537,16 +592,17 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
         pincode: r.billingAddress?.pincode || '',
         GSTNo: r.GSTNo || '',
         zone: r.zone || '',
-        system: r.system || '', // ── NEW ──
+        system: r.system || '',
         remark: r.remark || '',
         startDate: r.startDate ? new Date(r.startDate).toLocaleDateString() : '',
         endDate: r.endDate ? new Date(r.endDate).toLocaleDateString() : '',
         inProcess: r.inProcess ? 'Yes' : 'No',
         nextFollowUpDate: r.nextFollowUpDate ? new Date(r.nextFollowUpDate).toLocaleDateString() : '',
         lost: r.lost ? 'Yes' : 'No',
-        sentToSales: r.sentToSales ? 'Yes' : 'No',                                               // ── NEW ──
-        sentToSalesAt: r.sentToSalesAt ? new Date(r.sentToSalesAt).toLocaleDateString() : '',  // ── NEW ──
-        sentToSalesBy: r.sentToSalesByName || '',                                                // ── NEW ──
+        sentToSales: r.sentToSales ? 'Yes' : 'No',
+        sentToSalesAt: r.sentToSalesAt ? new Date(r.sentToSalesAt).toLocaleDateString() : '',
+        sentToSalesBy: r.sentToSalesByName || '',
+        sourceProjectName: r.sourceProjectName || '', // ── NEW ──
         importedOn: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
       });
       row.eachCell((cell) => { cell.alignment = { vertical: 'middle', wrapText: true }; });
@@ -572,7 +628,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
   }
 };
 
-// ── PDF Export ── (unchanged — system/remark omitted here to avoid breaking the fixed table layout)
+// ── PDF Export ── (unchanged)
 exports.exportOldAMCHistoryPDF = async (req, res) => {
   try {
     const user = req.user;
