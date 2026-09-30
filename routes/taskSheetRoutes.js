@@ -10,6 +10,14 @@ router.get('/', permissionMiddleware(['viewTaskSheet']), taskSheetController.sho
 // ─── /my/:projectId  MUST be above /:id ──────────────────────────────────────
 router.get('/my/:projectId', isEmployee, taskSheetController.myTask);
 
+// ─── ✅ NEW: Senior exports Excel of sub-tasks given to juniors + own tasks ──
+// (MUST be above /:id)
+router.get('/my-team-report/:projectId', isEmployee, taskSheetController.exportMyTeamReport);
+
+// ─── ✅ NEW: My tasks overdue / due today per project (My Projects blinkers) ──
+// (MUST be above /:id)
+router.get('/my-due-status', isEmployee, taskSheetController.getMyDueStatus);
+
 // ─── Tester's own testing queue — MUST be above /:id too ─────────────────────
 router.get('/tester/my-tasks', isEmployee, taskSheetController.getTesterTasks);
 
@@ -26,13 +34,13 @@ router.get('/subtasks/:parentId', isLoggedIn, taskSheetController.getSubTasksFor
 // (also lets the developer pick their own tester if Manager didn't assign one)
 router.post('/:id/submit-for-testing', isEmployee, taskSheetController.submitForTesting);
 
-// ─── NEW: Tester updates their in-progress testing % (no final verdict yet) ──
+// ─── Tester updates their in-progress testing % (no final verdict yet) ───────
 router.put('/:id/test-progress', isEmployee, taskSheetController.updateTestProgress);
 
 // ─── Tester marks Pass / reports a Bug on a task ──────────────────────────────
 router.post('/:id/test-result', isEmployee, taskSheetController.submitTestResult);
 
-// ─── Manager (re)assigns a tester on an existing task ─────────────────────────
+// ─── Manager (re)assigns tester(s) on an existing task ────────────────────────
 router.put('/:id/assign-tester', permissionMiddleware(['updateTaskSheet']), taskSheetController.assignTester);
 
 // ─── Get single task sheet (isLoggedIn so project employees can access) ───────

@@ -232,8 +232,9 @@ const buildEmployeeReport = (emp, ctx) => {
     .sort((a, b) => b.daysOverdue - a.daysOverdue);
 
   // 🧪 Testing this employee finished this week (as tester)
+  // ✅ UPDATED — credit goes to the tester who gave the verdict (multi-tester)
   const testsDone = testedTasks
-    .filter(t => idStr(t.assignedTester) === id)
+    .filter(t => idStr(t.testedBy || t.assignedTester) === id)
     .map(t => ({ task: t, result: t.qaStatus === 'passed' ? 'Passed' : t.qaStatus === 'bug_found' ? 'Bug reported' : t.qaStatus }));
 
   // 👥 Sub-tasks this employee (as senior) gave to juniors
@@ -491,7 +492,11 @@ const sendWeeklyWorkReport = async (isScheduledRun = false) => {
         // Testing these employees finished this week (as tester)
         const testedTasks = await TaskSheet.find({
           company: companyId,
-          assignedTester: { $in: empIds },
+          $or: [
+            { testedBy: { $in: empIds } },
+            { assignedTester: { $in: empIds } },
+            { assignedTesters: { $in: empIds } },
+          ],
           testEndDate: { $gte: start, $lte: end },
         })
           .populate('taskName', 'name')

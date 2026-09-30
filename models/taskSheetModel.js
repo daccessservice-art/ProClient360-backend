@@ -44,9 +44,23 @@ const taskSheetSchema = new Schema({
   // ──────────────────────────────────────────────────────────────────────────
 
   // ─── TESTER / QA AGILE WORKFLOW ────────────────────────────────────────────
-  // Manager can assign a tester up front. If left empty, the developer picks
-  // the tester themselves when they submit their finished work for testing.
+  // Manager can assign one or MANY testers up front. If left empty, the
+  // developer picks the tester themselves when they submit for testing.
+  // ANY ONE of the testers can Pass / Report Bug.
+  //
+  // assignedTester  → first tester (kept so old data + old screens still work)
+  // assignedTesters → ✅ NEW — all testers on this task
   assignedTester: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Employee',
+    default: null
+  },
+  assignedTesters: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Employee'
+  }],
+  // ✅ NEW — which tester actually gave the final Pass / Bug verdict
+  testedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Employee',
     default: null
@@ -61,10 +75,7 @@ const taskSheetSchema = new Schema({
     enum: ['none', 'pending_test', 'testing', 'bug_found', 'passed'],
     default: 'none'
   },
-  // ── NEW: automatic testing timestamps — set by the server, never typed
-  // in by hand. testStartDate is stamped the moment the developer submits
-  // for testing (or the tester opens/starts it); testEndDate is stamped
-  // the moment the tester gives a final Pass or Fail verdict. ──
+  // Automatic testing timestamps — set by the server, never typed in by hand.
   testStartDate: {
     type: Date,
     default: null
@@ -73,9 +84,8 @@ const taskSheetSchema = new Schema({
     type: Date,
     default: null
   },
-  // ── NEW: tester's own in-progress completion percentage (0-100),
-  // separate from the developer's taskLevel — e.g. "I've tested 90% of
-  // this so far." Reset to 0 each time a new testing round starts. ──
+  // Tester's own in-progress completion percentage (0-100), separate from
+  // the developer's taskLevel. Reset to 0 each time a new testing round starts.
   testProgress: {
     type: Number,
     min: 0,

@@ -1,28 +1,54 @@
 const transporter = require("./emailTransporter");
 const Employee = require('../models/employeeModel');
 const Task = require('../models/taskModel');
-const {formatDate} = require('../utils/formatDate');
+const { formatDate } = require('../utils/formatDate');
 
+/**
+ * newTaskAssignedMail  (UPDATED — safe + clear logs)
+ *
+ * Fixes:
+ *  - Everything is inside try/catch, so a DB error can never become an
+ *    "unhandled promise rejection" (the controller calls this without await).
+ *  - Clear log when the employee is not found or has NO email address
+ *    (before, the mail silently failed with "No recipients defined").
+ *  - Works whether taskName is an id OR an already-populated object
+ *    (tester "bug found" flow passes a populated task).
+ *  - Returns a Promise<boolean> so callers can await it if they want.
+ *  - Same mail design as before.
+ */
 exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
-    const emp = await Employee.findById(employee).select('name email');
-    const task = await Task.findById(taskSheetData.taskName).select('name');
-    
-    console.log(emp);
-    console.log(task);
-    console.log(projectName, employee);
-    
     try {
-        let mailOptions = {
+        const empId = employee?._id || employee;
+        const emp = await Employee.findById(empId).select('name email');
+
+        if (!emp) {
+            console.error(`❌ Task mail NOT sent — employee not found (${empId})`);
+            return false;
+        }
+        if (!emp.email || !emp.email.includes('@')) {
+            console.error(`❌ Task mail NOT sent — employee "${emp.name}" has no valid email in Employee Master`);
+            return false;
+        }
+
+        // taskName can be an ObjectId or a populated { _id, name }
+        let taskNameText = taskSheetData?.taskName?.name || null;
+        if (!taskNameText && taskSheetData?.taskName) {
+            const taskId = taskSheetData.taskName._id || taskSheetData.taskName;
+            const task = await Task.findById(taskId).select('name');
+            taskNameText = task?.name || null;
+        }
+
+        const mailOptions = {
             from: `ProClient360 <${process.env.EMAIL}>`,
-            to: emp?.email,
+            to: emp.email,
             subject: `New Task Assigned`,
-            html:`<html>
+            html: `<html>
             <body>
                 <table width="100%" cellpadding="0" cellspacing="0" bgcolor="#f5f5f5" style="padding:20px;font-family:Arial,sans-serif;">
                 <tr>
                 <td align="center">
                 <table width="600" cellpadding="0" cellspacing="0" bgcolor="#ffffff" style="border-radius:8px;overflow:hidden;">
-                    
+
                     <!-- Header -->
                     <tr>
                     <td align="center" style="padding:20px;background-color:#fcf9f9;border-bottom:1px solid #ece8e8;">
@@ -41,23 +67,23 @@ exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
                         <table width="100%" cellpadding="8" cellspacing="0" style="border:1px solid #e2e8f0;background:#f8fafc;margin-top:10px;">
                         <tr>
                             <td style="font-weight:bold;width:35%;">Project Name:</td>
-                            <td>${projectName}</td>
+                            <td>${projectName || 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="font-weight:bold;">Task Name:</td>
-                            <td>${task?.name || 'N/A'}</td>
+                            <td>${taskNameText || 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="font-weight:bold;">Start Date:</td>
-                            <td>${formatDate(taskSheetData.startDate)}</td>
+                            <td>${taskSheetData?.startDate ? formatDate(taskSheetData.startDate) : 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="font-weight:bold;">End Date:</td>
-                            <td>${formatDate(taskSheetData.endDate)}</td>
+                            <td>${taskSheetData?.endDate ? formatDate(taskSheetData.endDate) : 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="font-weight:bold;">Remark:</td>
-                            <td>${taskSheetData.remark || 'N/A'}</td>
+                            <td>${taskSheetData?.remark || 'N/A'}</td>
                         </tr>
                         </table>
 
@@ -74,7 +100,7 @@ exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
                     <!-- Footer -->
                     <tr>
                     <td align="center" bgcolor="#f9fafb" style="padding:15px;font-size:12px;color:#666;">
-                        © 2025 ProClient360. All rights reserved.
+                        © ${new Date().getFullYear()} ProClient360. All rights reserved.
                     </td>
                     </tr>
 
@@ -82,22 +108,23 @@ exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
                 </td>
             </tr>
             </table>
-
-
             </body>
         </html>`
         };
 
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                console.log("Error sending email: ", error);
-                return false;
-            } else {
-                console.log("Email sent: ", info.response);
-                return true;
-            }
+        return await new Promise((resolve) => {
+            transporter.sendMail(mailOptions, (error, info) => {
+                if (error) {
+                    console.error(`❌ Task mail FAILED to ${emp.email}:`, error.message);
+                    resolve(false);
+                } else {
+                    console.log(`✅ Task mail sent to ${emp.name} <${emp.email}>:`, info.response);
+                    resolve(true);
+                }
+            });
         });
     } catch (err) {
-        console.log("Error in sendMail: ", err);
+        console.error("❌ Error in newTaskAssignedMail:", err.message);
+        return false;
     }
 };
