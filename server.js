@@ -14,7 +14,7 @@ const { initializeDailyLeadReportScheduler } = require('./mailsService/dailyLead
 const { initCallUnansweredMailScheduler } = require('./mailsService/callUnansweredMailService');
 const { initializeDailyTaskSheetReportScheduler } = require('./mailsService/dailyTaskSheetReport');
 const { initializeDailySalesManagerReportScheduler } = require('./mailsService/dailySalesManagerReport');
-// ✅ NEW — Weekly Work Report (IT / AI / Design) every Friday 6:30 PM IST
+// ✅ Weekly Work Report (IT / AI / Design) every Friday 6:30 PM IST
 const { initializeWeeklyWorkReportScheduler, sendWeeklyWorkReport } = require('./mailsService/weeklyWorkReport');
 
 
@@ -77,6 +77,9 @@ const customerRaiseTicketRoutes = require('./routes/customerRaiseTicketRoutes');
 const callLogRoutes = require('./routes/callLogRoutes');
 
 const oldAMCHistoryRoutes = require('./routes/oldAMCHistoryRoutes');
+
+// ✅ NEW — AMC Call Log (call customer regarding AMC + remark + call history)
+const amcCallLogRoutes = require('./routes/amcCallLogRoutes');
 
 // Project Task Agent (suggest-assignees / suggest-tester / my-focus)
 const projectTaskAgentRoutes = require('./routes/projectTaskAgentRoutes');
@@ -149,11 +152,11 @@ const startServer = async () => {
     console.log('Initializing daily task sheet report scheduler...');
     initializeDailyTaskSheetReportScheduler();        
 
-    // ✅ NEW — Weekly Work Report (Friday 6:30 PM IST)
+    // ✅ Weekly Work Report (Friday 6:30 PM IST)
     console.log('Initializing weekly work report scheduler...');
     initializeWeeklyWorkReportScheduler();
 
-    // ✅ NEW — one-time TEST send on server start.
+    // ✅ one-time TEST send on server start.
     // Set WEEKLY_REPORT_TEST_ON_START=true in .env, restart once, check mails,
     // then REMOVE it (otherwise every restart sends the report again).
     if (process.env.WEEKLY_REPORT_TEST_ON_START === 'true') {
@@ -289,6 +292,11 @@ app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/projectPurchase', projectPurchaseRoutes);
 app.use('/api/old-amc-history', oldAMCHistoryRoutes);
+
+// ✅ NEW — AMC Call Log routes
+console.log('Registering /api/amc-call-log routes...');
+app.use('/api/amc-call-log', amcCallLogRoutes);
+console.log('AMC Call Log routes registered at /api/amc-call-log');
 
 console.log('Registering /api/campaigns routes...');
 app.use('/api/campaigns', campaignRoutes);
