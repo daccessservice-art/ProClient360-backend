@@ -1,20 +1,18 @@
 const transporter = require("./emailTransporter");
 const Employee = require('../models/employeeModel');
 const Task = require('../models/taskModel');
+const Project = require('../models/projectModel');
+require('../models/customerModel'); // makes sure Customer model is registered for populate
 const { formatDate } = require('../utils/formatDate');
 
 /**
- * newTaskAssignedMail  (UPDATED — safe + clear logs)
+ * newTaskAssignedMail  (UPDATED — Project Name + Customer Name)
  *
- * Fixes:
- *  - Everything is inside try/catch, so a DB error can never become an
- *    "unhandled promise rejection" (the controller calls this without await).
- *  - Clear log when the employee is not found or has NO email address
- *    (before, the mail silently failed with "No recipients defined").
- *  - Works whether taskName is an id OR an already-populated object
- *    (tester "bug found" flow passes a populated task).
- *  - Returns a Promise<boolean> so callers can await it if they want.
- *  - Same mail design as before.
+ * - Shows Project Name and Customer Name in the mail.
+ * - Project / customer are read from the database using the task's project id,
+ *   so it works from every place that calls this function
+ *   (create, sub-task, assign tester, bug found) with NO controller change.
+ * - Everything is inside try/catch, so errors never crash the server.
  */
 exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
     try {
@@ -36,6 +34,26 @@ exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
             const taskId = taskSheetData.taskName._id || taskSheetData.taskName;
             const task = await Task.findById(taskId).select('name');
             taskNameText = task?.name || null;
+        }
+
+        // ── Project Name + Customer Name ──
+        // taskSheetData.project can be an ObjectId or a populated { _id, name }
+        let projectNameText = projectName || null;
+        let customerNameText = null;
+
+        const projectId = taskSheetData?.project?._id || taskSheetData?.project;
+        if (projectId) {
+            try {
+                const proj = await Project.findById(projectId)
+                    .select('name custId')
+                    .populate('custId', 'custName');
+                if (proj) {
+                    if (!projectNameText) projectNameText = proj.name || null;
+                    customerNameText = proj.custId?.custName || null;
+                }
+            } catch (projErr) {
+                console.error("⚠️ Could not load project/customer for task mail:", projErr.message);
+            }
         }
 
         const mailOptions = {
@@ -66,8 +84,12 @@ exports.newTaskAssignedMail = async (employee, taskSheetData, projectName) => {
 
                         <table width="100%" cellpadding="8" cellspacing="0" style="border:1px solid #e2e8f0;background:#f8fafc;margin-top:10px;">
                         <tr>
-                            <td style="font-weight:bold;width:35%;">Project Name:</td>
-                            <td>${projectName || 'N/A'}</td>
+                            <td style="font-weight:bold;width:35%;">Customer Name:</td>
+                            <td>${customerNameText || 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-weight:bold;">Project Name:</td>
+                            <td>${projectNameText || 'N/A'}</td>
                         </tr>
                         <tr>
                             <td style="font-weight:bold;">Task Name:</td>

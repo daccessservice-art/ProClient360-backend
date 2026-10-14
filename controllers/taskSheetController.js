@@ -1119,12 +1119,9 @@ exports.exportMyTeamReport = async (req, res) => {
   }
 };
 
-// ─── NEW: getMyDueStatus ───────────────────────────────────────────────────────
-// For the logged-in employee's "My Projects" page blinkers.
-// Returns, per project, how many of MY open tasks are overdue / due today.
-// Uses India date (Asia/Kolkata) so "today" matches what the user sees.
+// ─── UPDATED: getMyDueStatus ───────────────────────────────────────────────────
+// Per project: my overdue / due today tasks + openCount / totalCount of MY tasks.
 // A task is "open" for me if MY OWN progress < 100 and tester hasn't passed it.
-// → { success, projects: { [projectId]: { overdue, dueToday, overdueTasks[], dueTodayTasks[] } } }
 exports.getMyDueStatus = async (req, res) => {
   try {
     const user = req.user;
@@ -1145,19 +1142,34 @@ exports.getMyDueStatus = async (req, res) => {
 
     const projects = {};
     tasks.forEach(t => {
-      if (!t.project || !t.endDate) return;
+      if (!t.project) return;
+
+      const pid = t.project.toString();
+      if (!projects[pid]) {
+        projects[pid] = {
+          overdue: 0, dueToday: 0,
+          overdueTasks: [], dueTodayTasks: [],
+          openCount: 0, totalCount: 0,
+        };
+      }
+      projects[pid].totalCount++;
+
+      // completed by tester → not open
       if (t.qaStatus === 'passed') return;
 
       const own = Number(progressMap[t._id.toString()]?.[userId] || 0);
       const count = Array.isArray(t.employees) ? t.employees.length : 0;
       const level = count <= 1 ? Math.max(own, t.taskLevel || 0) : own;
+
+      // completed by me → not open
       if (level >= 100) return;
 
-      const due = toISTDay(t.endDate);
-      const pid = t.project.toString();
-      if (!projects[pid]) projects[pid] = { overdue: 0, dueToday: 0, overdueTasks: [], dueTodayTasks: [] };
+      projects[pid].openCount++;
 
+      if (!t.endDate) return;
+      const due = toISTDay(t.endDate);
       const label = (t.taskName?.name || 'Task') + (t.subtaskName ? ` › ${t.subtaskName}` : '');
+
       if (due < today) {
         projects[pid].overdue++;
         projects[pid].overdueTasks.push(label);

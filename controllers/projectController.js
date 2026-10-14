@@ -181,6 +181,7 @@ exports.create = async (req, res) => {
       category,
       startDate,
       endDate,
+      actualCompletionDate, // ✅ NEW
       advancePay,
       payAgainstDelivery,
       payAfterCompletion,
@@ -261,6 +262,8 @@ exports.create = async (req, res) => {
       category,
       startDate: new Date(startDate),
       endDate: new Date(endDate),
+      // ✅ NEW: actual completion date (optional)
+      actualCompletionDate: actualCompletionDate ? new Date(actualCompletionDate) : null,
       advancePay,
       payAgainstDelivery,
       payAfterCompletion,
@@ -415,7 +418,7 @@ exports.updateProject = async (req, res) => {
   const user = req.user;
   const {
     name, custId, Address, completeLevel, purchaseOrderNo, projectStatus,
-    purchaseOrderDate, purchaseOrderValue, category, startDate, endDate,
+    purchaseOrderDate, purchaseOrderValue, category, startDate, endDate, actualCompletionDate, // ✅ NEW
     advancePay, payAgainstDelivery, payAfterCompletion, remark, POCopy,
     retention, retentionDays, // ─── NEW FIELD
     completionCertificate, warrantyCertificate, warrantyStartDate, warrantyMonths
@@ -450,6 +453,7 @@ exports.updateProject = async (req, res) => {
       category: originalData.category,
       startDate: originalData.startDate,
       endDate: originalData.endDate,
+      actualCompletionDate: originalData.actualCompletionDate, // ✅ NEW
       advancePay: originalData.advancePay,
       payAgainstDelivery: originalData.payAgainstDelivery,
       payAfterCompletion: originalData.payAfterCompletion,
@@ -497,6 +501,16 @@ exports.updateProject = async (req, res) => {
     if (endDate) {
       const end = new Date(endDate);
       if (!isNaN(end.getTime())) updateData.endDate = end;
+    }
+
+    // ✅ NEW: actual completion date (empty value clears it)
+    if (actualCompletionDate !== undefined) {
+      if (actualCompletionDate === "" || actualCompletionDate === null) {
+        updateData.actualCompletionDate = null;
+      } else {
+        const actualDate = new Date(actualCompletionDate);
+        if (!isNaN(actualDate.getTime())) updateData.actualCompletionDate = actualDate;
+      }
     }
 
     // ── File uploads ───────────────────────────────────────────────────────────
@@ -572,6 +586,7 @@ exports.updateProject = async (req, res) => {
       category: updatedProjectDoc.category,
       startDate: updatedProjectDoc.startDate,
       endDate: updatedProjectDoc.endDate,
+      actualCompletionDate: updatedProjectDoc.actualCompletionDate, // ✅ NEW
       advancePay: updatedProjectDoc.advancePay,
       payAgainstDelivery: updatedProjectDoc.payAgainstDelivery,
       payAfterCompletion: updatedProjectDoc.payAfterCompletion,

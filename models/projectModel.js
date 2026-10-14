@@ -123,6 +123,11 @@ const projectSchema = new mongoose.Schema({
         type: Date,
         required: [true, 'End date is required'],
     },
+    // ✅ NEW: actual date when the project was really completed
+    actualCompletionDate: {
+        type: Date,
+        default: null,
+    },
     advancePay: {
         type: Number,
         required: [true, 'Advance payment percentage is required'],
