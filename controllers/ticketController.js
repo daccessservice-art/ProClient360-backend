@@ -11,6 +11,7 @@ exports.showAll = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     let skip = (page - 1) * limit;
     const {q} = req.query;
+    const filter = String(req.query.filter || '').toLowerCase();
 
     const searchRegex = new RegExp(q, 'i');
 
@@ -33,6 +34,13 @@ exports.showAll = async (req, res) => {
         company: user.company ? user.company : user._id,
         service: null,
       };
+    }
+
+    // quick filters by source: daccess = own tickets, smartgate = external support API (EXT-xx)
+    if (filter === 'daccess') {
+      query.uniqueTicketId = { $not: /^EXT-/ };
+    } else if (filter === 'smartgate') {
+      query.uniqueTicketId = /^EXT-/;
     }
 
     const tickets = await Ticket.find(query)

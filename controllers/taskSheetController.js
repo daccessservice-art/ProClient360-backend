@@ -7,40 +7,11 @@ const Employee = require('../models/employeeModel');
 const { newTaskAssignedMail } = require("../mailsService/newTaskAssign");
 const { taskCompletedMail } = require("../mailsService/taskCompletedMail");
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
-
-// ─── NEW helper: per-employee progress on a shared task ──────────────────────
-// A task can have many employees, but taskLevel is ONE shared number.
-// This reads each employee's OWN highest logged % from the Action history
-// (actionBy + complated), so one employee finishing does NOT mark every
-// other employee on the same task as completed.
-// Returns: { [taskId]: { [employeeId]: level } }
-const buildEmployeeProgressMap = async (taskIds) => {
-  if (!taskIds || taskIds.length === 0) return {};
-
-  const rows = await Action.aggregate([
-    { $match: { task: { $in: taskIds } } },
-    {
-      $group: {
-        _id: { task: '$task', actionBy: '$actionBy' },
-        level: {
-          $max: {
-            $convert: { input: '$complated', to: 'double', onError: 0, onNull: 0 }
-          }
-        }
-      }
-    }
-  ]);
-
-  const map = {};
-  rows.forEach(r => {
-    if (!r._id?.task || !r._id?.actionBy) return;
-    const taskKey = r._id.task.toString();
-    const empKey = r._id.actionBy.toString();
-    if (!map[taskKey]) map[taskKey] = {};
-    map[taskKey][empKey] = Math.min(100, r.level || 0);
-  });
-  return map;
-};
+const {
+  buildEmployeeProgressMap,
+  toISTDay,
+  isTaskOpenForEmployee,
+} = require('../helpers/taskProgressHelper');
 
 // ─── NEW helpers: multiple testers ───────────────────────────────────────────
 // A task can now have MANY testers (assignedTesters). The old single
@@ -1121,7 +1092,10 @@ exports.exportMyTeamReport = async (req, res) => {
 
 // ─── UPDATED: getMyDueStatus ───────────────────────────────────────────────────
 // Per project: my overdue / due today tasks + openCount / totalCount of MY tasks.
-// A task is "open" for me if MY OWN progress < 100 and tester hasn't passed it.
+// Never counts as open/overdue when:
+//   - the PROJECT is completed (status Completed / actual completion date / 100%)
+//   - the tester passed the task, or it is currently with the tester
+//   - I finished my own part (or the task was closed directly)
 exports.getMyDueStatus = async (req, res) => {
   try {
     const user = req.user;
@@ -1131,20 +1105,19 @@ exports.getMyDueStatus = async (req, res) => {
     if (user.company) query.company = user.company;
 
     const tasks = await TaskSheet.find(query)
-      .select('project taskName subtaskName endDate taskLevel qaStatus employees')
+      .select('project taskName subtaskName endDate taskLevel taskStatus qaStatus employees')
       .populate('taskName', 'name')
+      .populate('project', 'projectStatus actualCompletionDate completeLevel')
       .lean();
 
     const progressMap = await buildEmployeeProgressMap(tasks.map(t => t._id));
-
-    const toISTDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
     const today = toISTDay(new Date());
 
     const projects = {};
     tasks.forEach(t => {
       if (!t.project) return;
 
-      const pid = t.project.toString();
+      const pid = (t.project._id || t.project).toString();
       if (!projects[pid]) {
         projects[pid] = {
           overdue: 0, dueToday: 0,
@@ -1154,15 +1127,8 @@ exports.getMyDueStatus = async (req, res) => {
       }
       projects[pid].totalCount++;
 
-      // completed by tester → not open
-      if (t.qaStatus === 'passed') return;
-
-      const own = Number(progressMap[t._id.toString()]?.[userId] || 0);
-      const count = Array.isArray(t.employees) ? t.employees.length : 0;
-      const level = count <= 1 ? Math.max(own, t.taskLevel || 0) : own;
-
-      // completed by me → not open
-      if (level >= 100) return;
+      // completed project / passed / with tester / my part done → not open
+      if (!isTaskOpenForEmployee(t, userId, progressMap)) return;
 
       projects[pid].openCount++;
 

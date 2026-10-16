@@ -17,7 +17,8 @@ const { initializeDailySalesManagerReportScheduler } = require('./mailsService/d
 // ✅ Weekly Work Report (IT / AI / Design) every Friday 6:30 PM IST
 const { initializeWeeklyWorkReportScheduler, sendWeeklyWorkReport } = require('./mailsService/weeklyWorkReport');
 
-
+// ✅ NEW: External ticket sync
+const { syncExternalTickets } = require('./services/externalTicketSync');
 
 const { autoMarkStaleLeads } = require('./scripts/autoMarkStaleLeads');
 
@@ -183,6 +184,11 @@ const startServer = async () => {
       console.error('Error in initial auto-mark:', error);
     }
 
+    // ✅ NEW: External ticket sync (every minute)
+    console.log('Initializing external ticket sync...');
+    cron.schedule('* * * * *', () => syncExternalTickets());
+    syncExternalTickets();
+
     httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`🎙️  Exotel calling agent ready — outbound: /api/exotel-calling/make-call`);
@@ -248,6 +254,9 @@ app.use('/api/department',departmentRoutes);
 app.use('/api/action', actionRoutes);
 
 app.use('/api/ticket', ticketRoutes);
+
+// ✅ NEW (eye button route): full details of external tickets
+app.use('/api/external-ticket', require('./routes/externalTicketRoutes'));
 
 app.use("/api/customer-ticket", customerTicketRoutes);
 

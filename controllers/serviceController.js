@@ -103,7 +103,8 @@ exports.create = async (req, res) => {
     const user = req.user;
     const { serviceType, ticket, priority, allotmentDate, allotTo, workMode, status } = req.body;
 
-    const ticketData = await Ticket.findById(ticket);
+    const ticketData = await Ticket.findById(ticket).select('_id');
+    if (!ticketData) return res.status(404).json({ success: false, error: "Ticket not found" });
     if (!allotTo) return res.status(400).json({ success: false, error: "Allot To field is required" });
 
     const service = new Service({
@@ -112,8 +113,8 @@ exports.create = async (req, res) => {
     });
 
     await service.save();
-    ticketData.service = service._id;
-    await ticketData.save();
+    // updateOne, not save(): imported (EXT-) tickets are stored without full validation
+    await Ticket.updateOne({ _id: ticketData._id }, { $set: { service: service._id } });
     ticketProcessMail(service._id);
 
     res.status(200).json({ success: true, message: "Service Assigned Successfully." });
@@ -172,7 +173,9 @@ exports.myServices = async (req, res) => {
       .sort({ allotmentDate: -1 })
       .lean();
 
-    const filteredServices = services.filter((s) => s.ticket && s.ticket.client);
+    // keep tickets without a customer (SmartGate / EXT- tickets); only drop non-matches when searching by customer name
+    const searching = q && q.trim() !== "" && q.toLowerCase() !== "null" && q.toLowerCase() !== "undefined";
+    const filteredServices = services.filter((s) => s.ticket && (!searching || s.ticket.client));
 
     if (filteredServices.length <= 0) {
       return res.status(404).json({
