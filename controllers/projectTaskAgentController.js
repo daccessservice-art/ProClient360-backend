@@ -33,6 +33,17 @@ const { admin } = require('../utils/firebase');
 const OPEN_TASK_STATUSES = ['upcoming', 'inprocess', 'stuck'];
 const PRIORITY_WEIGHT = { high: 3, medium: 2, low: 1 };
 
+// ✅ NEW — a task is "done" (never open / never overdue) when:
+//   - its own status is completed, or its completion is 100%, or the tester passed it
+//   - or its whole PROJECT is Completed
+const isTaskDoneOrProjectCompleted = (task) => {
+  if (String(task.project?.projectStatus || '').toLowerCase() === 'completed') return true;
+  if (task.taskStatus === 'completed') return true;
+  if (task.qaStatus === 'passed') return true;
+  if ((task.taskLevel || 0) >= 100) return true;
+  return false;
+};
+
 const EDITABLE_FIELDS = ['remark', 'taskStatus', 'taskLevel', 'startDate', 'endDate'];
 const TASK_STATUS_VALUES = ['stuck', 'inprocess', 'completed', 'upcoming'];
 const ACTION_STATUS_VALUES = ['inprocess', 'stuck', 'completed'];
@@ -150,17 +161,20 @@ exports.suggestNextFocus = async (req, res) => {
   try {
     const user = req.user;
 
-    const openTasks = await TaskSheet.find({
+    const openTasksRaw = await TaskSheet.find({
       employees: user._id,
       taskStatus: { $in: OPEN_TASK_STATUSES },
     })
       .populate({
         path: 'project',
-        select: 'name custId',
+        select: 'name custId projectStatus',
         populate: { path: 'custId', select: 'custName' },
       })
       .populate('taskName', 'name')
       .lean();
+
+    // ✅ NEW — ignore completed tasks and tasks of completed projects
+    const openTasks = openTasksRaw.filter(t => !isTaskDoneOrProjectCompleted(t));
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -388,14 +402,17 @@ exports.chatWithAgent = async (req, res) => {
     //    ANSWERING questions ("how many have I completed"), never for
     //    matching a tool call.
     const allTasks = await TaskSheet.find({ employees: user._id })
-      .populate('project', 'name')
+      .populate('project', 'name projectStatus')
       .populate('taskName', 'name')
       .sort({ updatedAt: -1 })
       .limit(50)
       .lean();
 
-    const openTasks = allTasks.filter(t => OPEN_TASK_STATUSES.includes(t.taskStatus));
-    const completedTasks = allTasks.filter(t => t.taskStatus === 'completed');
+    // ✅ UPDATED — open = not done and project not completed
+    const openTasks = allTasks.filter(
+      t => OPEN_TASK_STATUSES.includes(t.taskStatus) && !isTaskDoneOrProjectCompleted(t)
+    );
+    const completedTasks = allTasks.filter(t => isTaskDoneOrProjectCompleted(t));
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -404,7 +421,7 @@ exports.chatWithAgent = async (req, res) => {
       const end = new Date(t.endDate);
       end.setHours(0, 0, 0, 0);
       const daysOverdue = Math.round((today - end) / (1000 * 60 * 60 * 24));
-      const overdueNote = t.taskStatus === 'completed'
+      const overdueNote = isTaskDoneOrProjectCompleted(t)
         ? 'completed'
         : daysOverdue > 0 ? `${daysOverdue} day(s) overdue` : daysOverdue === 0 ? 'due today' : 'not yet due';
 

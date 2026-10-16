@@ -1091,11 +1091,8 @@ exports.exportMyTeamReport = async (req, res) => {
 };
 
 // ─── UPDATED: getMyDueStatus ───────────────────────────────────────────────────
-// Per project: my overdue / due today tasks + openCount / totalCount of MY tasks.
-// Never counts as open/overdue when:
-//   - the PROJECT is completed (status Completed / actual completion date / 100%)
-//   - the tester passed the task, or it is currently with the tester
-//   - I finished my own part (or the task was closed directly)
+// Completed tasks and Completed projects are NEVER counted as open / overdue.
+// Returns: projects{} (per project), summary{} and recommended{} for the top panel.
 exports.getMyDueStatus = async (req, res) => {
   try {
     const user = req.user;
@@ -1105,17 +1102,30 @@ exports.getMyDueStatus = async (req, res) => {
     if (user.company) query.company = user.company;
 
     const tasks = await TaskSheet.find(query)
-      .select('project taskName subtaskName endDate taskLevel taskStatus qaStatus employees')
+      .select('project taskName subtaskName endDate taskLevel taskStatus qaStatus employees priority')
       .populate('taskName', 'name')
-      .populate('project', 'projectStatus actualCompletionDate completeLevel')
+      .populate({
+        path: 'project',
+        select: 'name projectStatus custId',
+        populate: { path: 'custId', select: 'custName' }
+      })
       .lean();
 
     const progressMap = await buildEmployeeProgressMap(tasks.map(t => t._id));
+
+    const toISTDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
     const today = toISTDay(new Date());
+    const dayDiff = (dueDay) => Math.round((Date.parse(today) - Date.parse(dueDay)) / 864e5); // >0 = overdue
 
     const projects = {};
+    const summary = { overdueCount: 0, dueTodayCount: 0, totalOpen: 0 };
+    let recommended = null;
+
     tasks.forEach(t => {
       if (!t.project) return;
+
+      // ✅ project already completed → ignore all its tasks
+      if (String(t.project.projectStatus || '').toLowerCase() === 'completed') return;
 
       const pid = (t.project._id || t.project).toString();
       if (!projects[pid]) {
@@ -1127,25 +1137,46 @@ exports.getMyDueStatus = async (req, res) => {
       }
       projects[pid].totalCount++;
 
-      // completed project / passed / with tester / my part done → not open
-      if (!isTaskOpenForEmployee(t, userId, progressMap)) return;
+      // ✅ task completed → never open, never overdue
+      const own = Number(progressMap[t._id.toString()]?.[userId] || 0);
+      const isDone =
+        t.qaStatus === 'passed' ||
+        t.taskStatus === 'completed' ||
+        (t.taskLevel || 0) >= 100 ||
+        own >= 100;
+      if (isDone) return;
 
       projects[pid].openCount++;
+      summary.totalOpen++;
 
       if (!t.endDate) return;
       const due = toISTDay(t.endDate);
+      const diff = dayDiff(due);
       const label = (t.taskName?.name || 'Task') + (t.subtaskName ? ` › ${t.subtaskName}` : '');
 
-      if (due < today) {
+      if (diff > 0) {
         projects[pid].overdue++;
         projects[pid].overdueTasks.push(label);
-      } else if (due === today) {
+        summary.overdueCount++;
+      } else if (diff === 0) {
         projects[pid].dueToday++;
         projects[pid].dueTodayTasks.push(label);
+        summary.dueTodayCount++;
+      }
+
+      // most urgent open task = the most overdue one
+      if (!recommended || diff > recommended.daysOverdue) {
+        recommended = {
+          taskName: label,
+          projectName: t.project.name || 'Project',
+          customerName: t.project.custId?.custName || '',
+          daysOverdue: diff,
+          priority: t.priority || 'medium',
+        };
       }
     });
 
-    res.status(200).json({ success: true, projects });
+    res.status(200).json({ success: true, projects, summary, recommended });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error fetching due status: " + error.message });
   }
