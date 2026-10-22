@@ -753,11 +753,23 @@ exports.receiveWhatsAppReply = async (req, res) => {
           isButtonClick,
         });
 
-        // NEW — drive the question flow forward.
+                // NEW (Invitation Campaign) — a tap on an invitation button gets
+        // that button's own auto-reply, and must NOT start a product
+        // questionnaire. Everything else continues exactly as before.
+        let invitationHandled = false;
         try {
-          await advanceSession(from, listReplyId, listReplyTitle);
-        } catch (sessErr) {
-          console.error('[Campaign Session] advanceSession error:', sessErr);
+          invitationHandled = await require('./invitationCampaignController').handleInvitationButtonTap(msg, companyId);
+        } catch (invErr) {
+          console.error('[Invitation] hook error:', invErr);
+        }
+
+        // NEW — drive the question flow forward.
+        if (!invitationHandled) {
+          try {
+            await advanceSession(from, listReplyId, listReplyTitle);
+          } catch (sessErr) {
+            console.error('[Campaign Session] advanceSession error:', sessErr);
+          }
         }
 
         console.log(

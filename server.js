@@ -70,6 +70,9 @@ const projectPurchaseRoutes = require('./routes/projectPurchaseRoutes');
 
 // WhatsApp Campaign module (product-wise, sends to Customer Master)
 const campaignRoutes = require('./routes/campaignRoutes');
+// ✅ NEW — Invitation Campaign (DAccess event / meeting invitations)
+const invitationCampaignRoutes = require('./routes/invitationCampaignRoutes');
+const enteroCampaignRoutes = require('./routes/enteroCampaignRoutes');
 
 const customerTicketRoutes = require("./routes/customerTicketRoutes");
 
@@ -310,6 +313,10 @@ console.log('AMC Call Log routes registered at /api/amc-call-log');
 console.log('Registering /api/campaigns routes...');
 app.use('/api/campaigns', campaignRoutes);
 console.log('Campaign routes registered at /api/campaigns');
+app.use('/api/invitation-campaigns', invitationCampaignRoutes);
+console.log('Invitation campaign routes registered at /api/invitation-campaigns');
+app.use('/api/entero-campaigns', enteroCampaignRoutes);
+console.log('Entero campaign routes registered at /api/entero-campaigns');
 
 app.use('/api/project-task-agent', projectTaskAgentRoutes);
 app.use('/api/reports', reportRoutes);
