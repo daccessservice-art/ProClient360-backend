@@ -1,0 +1,1048 @@
+// controllers/enteroCampaignController.js
+//
+// ENTERO SYSTEMS INDIA PVT LTD — separate WhatsApp campaign module.
+// Same logic as campaignController.js (DAccess), but:
+//   • every query is locked to Entero's company ID (69735b8fdfb17d65849a52f4)
+//   • uses separate Entero* collections (templates / logs / replies / sessions)
+//   • sends through Entero's own WABA number (ENTERO_* env vars)
+// The DAccess campaign module is NOT modified at all.
+
+const ENTERO_COMPANY_ID = process.env.ENTERO_COMPANY_ID || '69735b8fdfb17d65849a52f4';
+
+
+const CampaignTemplate = require('../models/enteroCampaignTemplateModel');
+const CampaignLog = require('../models/enteroCampaignLogModel');
+const CampaignReply = require('../models/enteroCampaignReplyModel');
+const CampaignSession = require('../models/enteroCampaignSessionModel');
+const wa = require('../services/enteroCampaignWhatsAppService');
+
+// ── Templates ──────────────────────────────────────────────────────
+
+// GET /api/campaigns/templates
+exports.listTemplates = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const templates = await CampaignTemplate.find({ company: companyId }).sort({ createdAt: -1 });
+    res.status(200).json({ success: true, templates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET /api/campaigns/templates/approved
+exports.listApprovedTemplates = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const templates = await CampaignTemplate.find({ company: companyId, status: 'APPROVED' })
+      .select('title metaTemplateName language questions')
+      .sort({ title: 1 });
+    res.status(200).json({ success: true, templates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/templates
+// Body may include:
+//   buttons:   [{ text: "CALL ME" }]                          — max 3
+//   questions: [{ questionText, options: [{title, description}] }] — max 10
+exports.createTemplate = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const { title, category, language, bodyText, buttons, questions, images } = req.body;
+
+    if (!title || !title.trim()) return res.status(400).json({ success: false, error: 'Product name (title) is required.' });
+    if (!bodyText || !bodyText.trim()) return res.status(400).json({ success: false, error: 'bodyText is required.' });
+    if (buttons && buttons.length > 3) {
+      return res.status(400).json({ success: false, error: 'Maximum 3 quick-reply buttons allowed.' });
+    }
+    if (questions && questions.length > 10) {
+      return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
+    }
+    if (images && images.length > 5) {
+      return res.status(400).json({ success: false, error: 'Maximum 5 images allowed.' });
+    }
+
+    const template = await CampaignTemplate.create({
+      company: companyId,
+      title: title.trim(),
+      metaTemplateName: wa.slugify(title),
+      category: category || 'MARKETING',
+      language: language || 'en',
+      bodyText,
+      buttons: buttons || [],
+      questions: questions || [],
+      images: images || [],
+      status: 'DRAFT',
+      createdBy: req.user._id,
+    });
+
+    res.status(201).json({ success: true, message: 'Template saved as draft.', template });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ success: false, error: 'A template with a similar product name already exists.' });
+    }
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// PUT /api/campaigns/templates/:id
+exports.updateTemplate = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const { title, category, language, bodyText, buttons, questions, images } = req.body;
+
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    if (buttons && buttons.length > 3) {
+      return res.status(400).json({ success: false, error: 'Maximum 3 quick-reply buttons allowed.' });
+    }
+    if (questions && questions.length > 10) {
+      return res.status(400).json({ success: false, error: 'Maximum 10 questions allowed.' });
+    }
+    if (images && images.length > 5) {
+      return res.status(400).json({ success: false, error: 'Maximum 5 images allowed.' });
+    }
+
+    const bodyChanged = bodyText !== undefined && bodyText !== template.bodyText;
+    const buttonsChanged = buttons !== undefined && JSON.stringify(buttons) !== JSON.stringify(template.buttons.map(b => ({ text: b.text })));
+    // RE-ADDED (Step 2) — the first image is part of the template itself
+    // once it has a headerHandle, so changing it is a genuine
+    // Meta-reviewable change, unlike every other image (session-only).
+    const oldHeaderHandle = template.images?.[0]?.headerHandle || null;
+    const newHeaderHandle = images !== undefined ? (images?.[0]?.headerHandle || null) : oldHeaderHandle;
+    const headerImageChanged = newHeaderHandle !== oldHeaderHandle;
+
+    if (title !== undefined) template.title = title.trim();
+    if (category !== undefined) template.category = category;
+    if (language !== undefined) template.language = language;
+    if (bodyText !== undefined) template.bodyText = bodyText;
+    if (buttons !== undefined) template.buttons = buttons;
+    if (questions !== undefined) template.questions = questions;
+    if (images !== undefined) template.images = images; // additional images beyond the first are session-only, never require re-approval
+
+    if (bodyChanged || buttonsChanged || headerImageChanged) {
+      template.status = 'DRAFT';
+      template.rejectionReason = '';
+    }
+
+    await template.save();
+    res.status(200).json({ success: true, message: 'Template updated.', template });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// DELETE /api/campaigns/templates/:id
+exports.deleteTemplate = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const template = await CampaignTemplate.findOneAndDelete({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+    res.status(200).json({ success: true, message: 'Template deleted.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/templates/upload-image
+// multipart/form-data, field name "image". Returns a mediaId to attach
+// to a template's images array.
+//
+// REVERTED: the Resumable Upload step (for attaching an image directly
+// to the template as its header) was causing upload failures and has
+// never been confirmed working against Pinnacle's live server. Removed
+// to restore the simple, proven upload path. The "image shows early"
+// requirement is still met via the immediate-send-after-template
+// fallback in sendCampaign, which uses this same, already-working
+// mediaId — no header/Resumable Upload needed for that to work.
+exports.uploadTemplateImage = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No image file uploaded.' });
+
+    const mediaId = await wa.uploadMedia(req.file.buffer, req.file.mimetype, req.file.originalname);
+
+    // RE-ADDED (Step 2 of careful rebuild) — the Resumable Upload
+    // mechanism was confirmed working in isolation via
+    // scripts/testHeaderHandleUpload.js before re-integrating this.
+    let headerHandle = null;
+    let headerHandleError = null;
+    try {
+      headerHandle = await wa.uploadMediaForHeaderHandle(req.file.buffer, req.file.mimetype);
+    } catch (err) {
+      headerHandleError = err.response?.data?.error?.message || err.message;
+      console.warn('[Entero Campaign] Failed to get header handle for image:', headerHandleError);
+    }
+
+    res.status(200).json({ success: true, mediaId, headerHandle, headerHandleError });
+  } catch (err) {
+    const msg = err.response?.data?.error?.message || err.message;
+    res.status(500).json({ success: false, error: msg });
+  }
+};
+
+// POST /api/campaigns/templates/:id/submit
+exports.submitTemplate = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    // FIXED: previously this ALWAYS called Meta, even when the template
+    // was already APPROVED and only images/questions had been added —
+    // neither of which Meta reviews at all. Re-submitting identical
+    // body/buttons content that's already approved is pointless and was
+    // triggering an "Invalid parameter" rejection. Since createTemplate/
+    // updateTemplate already reset status back to DRAFT whenever body or
+    // buttons genuinely change, an APPROVED status here means nothing
+    // Meta-relevant changed — skip the call entirely.
+    if (template.status === 'APPROVED') {
+      return res.status(200).json({
+        success: true,
+        message: 'No changes requiring Meta review — template is already approved. Images/questions are saved and active immediately.',
+        template,
+      });
+    }
+
+    const result = await wa.submitTemplateToMeta(template);
+    template.status = result.status || 'PENDING';
+    template.rejectionReason = '';
+    if (result.id && !template.metaTemplateId) template.metaTemplateId = result.id; // only set once, on first create
+    await template.save();
+
+    const message = result.mode === 'edited'
+      ? 'Changes submitted to Meta — back under review.'
+      : 'Submitted to Meta for review.';
+
+    res.status(200).json({ success: true, message, template });
+  } catch (err) {
+    const msg = err.response?.data?.error?.message || err.message;
+    res.status(500).json({ success: false, error: msg });
+  }
+};
+
+// POST /api/campaigns/templates/:id/sync-status
+exports.syncTemplateStatus = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const template = await CampaignTemplate.findOne({ _id: req.params.id, company: companyId });
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found.' });
+
+    const status = await wa.checkTemplateStatus(template.metaTemplateName);
+    if (status) template.status = status;
+    await template.save();
+
+    res.status(200).json({ success: true, template });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Sending (targets Customer Master) ─────────────────────────────
+
+// POST /api/campaigns/send
+exports.sendCampaign = async (req, res) => {
+  try {
+    const Customer = require('../models/customerModel');
+    const companyId = ENTERO_COMPANY_ID;
+    const { templateId, customerIds } = req.body;
+
+    if (!templateId) return res.status(400).json({ success: false, error: 'templateId is required.' });
+    if (!Array.isArray(customerIds) || customerIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'No customers selected.' });
+    }
+    if (customerIds.length > 200) {
+      return res.status(400).json({ success: false, error: 'Max 200 customers per campaign.' });
+    }
+
+    const template = await CampaignTemplate.findOne({ _id: templateId, company: companyId, status: 'APPROVED' });
+    if (!template) {
+      return res.status(400).json({ success: false, error: 'Template not found or not yet approved by Meta.' });
+    }
+
+    const customers = await Customer.find({ _id: { $in: customerIds }, company: companyId });
+
+    const recipients = [];
+    let sentCount = 0;
+    let skippedCount = 0;
+
+    for (const customer of customers) {
+      const name = customer.custName || 'Unnamed customer';
+
+      if (!customer.phoneNumber1) {
+        recipients.push({ customerId: customer._id, name, mobile: '', status: 'skipped', reason: 'No phone number on file.' });
+        skippedCount++;
+        continue;
+      }
+
+      // RE-ADDED (Step 2, careful rebuild) — if this template's first
+      // image has a headerHandle (successfully submitted+approved with
+      // Meta), it MUST be passed here — WhatsApp requires the actual
+      // image for any approved header-image template and REJECTS the
+      // send entirely without it. Omitting this exact parameter was the
+      // regression bug from the earlier attempt today — re-verifying
+      // it's present this time.
+      const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
+      const result = await wa.sendTemplateMessage(customer.phoneNumber1, template.metaTemplateName, template.language, headerImageMediaId);
+
+      if (result.ok) {
+        recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'sent' });
+        sentCount++;
+
+        // If the first image IS the template's header image, it was
+        // ALREADY shown as part of the send above — never attempt to
+        // send it again as a separate message (avoids duplication).
+        // Only attempt the immediate-send fallback when there's no
+        // header image, so a customer with an open session window still
+        // sees it right away even before the header-image route is
+        // fully approved for this template.
+        let firstImageAlreadySent = !!headerImageMediaId;
+        if (!firstImageAlreadySent && template.images && template.images.length > 0) {
+          const firstImg = template.images[0];
+          const immediateResult = await wa.sendImageMessage(customer.phoneNumber1, firstImg.mediaId, firstImg.caption);
+          if (immediateResult.ok) {
+            firstImageAlreadySent = true;
+            console.log(`[Entero Campaign] First image sent immediately to ${customer.phoneNumber1} (session window was already open).`);
+          } else {
+            console.log(`[Entero Campaign] Could not send first image immediately to ${customer.phoneNumber1} (${immediateResult.reason}) — will send it after their first reply instead, as usual.`);
+          }
+        } else if (firstImageAlreadySent) {
+          console.log(`[Entero Campaign] First image was shown as the template's own header image for ${customer.phoneNumber1} — no separate send needed.`);
+        }
+
+        // FIXED: previously used $setOnInsert, which only applied when NO
+        // session existed yet for this customer+template. If this customer
+        // was ever sent this same product before (even in an old test),
+        // clicking "Send Campaign" again silently did nothing to their
+        // existing session — it could already be COMPLETED or mid-way
+        // through questions, meaning images and Question 1 would never
+        // fire again for them. Every send now genuinely restarts the
+        // conversation from scratch for that customer, as the person
+        // clicking "Send" would reasonably expect.
+        // FIXED: previously only created a session when the template had
+        // QUESTIONS — meaning an image-only template (no questions) never
+        // got a session at all, so advanceSession would never find
+        // anything to act on and images would silently never send.
+        const hasImages = template.images && template.images.length > 0;
+        const hasQuestions = template.questions && template.questions.length > 0;
+        if (hasImages || hasQuestions) {
+          // NEW — retire any other unfinished session for this SAME phone
+          // number, from a DIFFERENT template (e.g. leftover from earlier
+          // testing of a different product that was never completed).
+          // Without this, a customer with several old, never-finished
+          // conversations could have the wrong one picked up when they
+          // reply — this guarantees only ONE session is ever "active" for
+          // a given phone number at a time, so replies always continue
+          // the conversation that was JUST sent, not an unrelated old one.
+          await CampaignSession.updateMany(
+            {
+              company: companyId,
+              phone: customer.phoneNumber1,
+              template: { $ne: template._id },
+              status: { $in: ['PENDING', 'IN_PROGRESS'] },
+            },
+            { $set: { status: 'COMPLETED', completedAt: new Date() } }
+          );
+
+          await CampaignSession.findOneAndUpdate(
+            { company: companyId, phone: customer.phoneNumber1, template: template._id },
+            {
+              $set: {
+                company: companyId,
+                customer: customer._id,
+                template: template._id,
+                phone: customer.phoneNumber1,
+                status: 'PENDING',
+                currentQuestionIndex: -1,
+                answers: [],
+                startedAt: null,
+                completedAt: null,
+                firstImageAlreadySent,
+              },
+            },
+            { upsert: true, new: true }
+          );
+        }
+      } else {
+        recipients.push({ customerId: customer._id, name, mobile: customer.phoneNumber1, status: 'skipped', reason: result.reason });
+        skippedCount++;
+      }
+
+      await new Promise((r) => setTimeout(r, 300)); // gentle pacing to avoid rate limits
+    }
+
+    const log = await CampaignLog.create({
+      company: companyId,
+      template: template._id,
+      templateTitle: template.title,
+      sentBy: req.user._id,
+      recipients,
+      sentCount,
+      skippedCount,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Campaign done: ${sentCount} sent, ${skippedCount} skipped.`,
+      log,
+    });
+  } catch (err) {
+    console.error('[Entero] sendCampaign error:', err);
+    res.status(500).json({ success: false, error: `Campaign failed: ${err.message}` });
+  }
+};
+
+// GET /api/campaigns/logs
+exports.listCampaignLogs = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const logs = await CampaignLog.find({ company: companyId })
+      .populate('sentBy', 'name email')
+      .sort({ createdAt: -1 })
+      .limit(50);
+    res.status(200).json({ success: true, logs });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Replies (raw inbound messages, text or button/list taps) ─────
+
+// GET /api/campaigns/replies
+// GET /api/campaigns/replies?customerId=<id>
+exports.listReplies = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const { customerId } = req.query;
+
+    const query = { company: companyId };
+    if (customerId) query.customer = customerId;
+
+    const replies = await CampaignReply.find(query)
+      .populate('customer', 'custName phoneNumber1')
+      .sort({ createdAt: -1 })
+      .limit(200);
+
+    res.status(200).json({ success: true, replies });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET /api/campaigns/replies/customers?page=&limit=
+// NEW — inbox-style view: one row per customer (grouped), showing their
+// most recent message, a total reply count, and whether their last
+// message was a typed reply or a tapped button. Paginated so this stays
+// fast and readable even with hundreds of replies across many customers.
+exports.listReplyCustomers = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, Math.min(50, parseInt(req.query.limit) || 15));
+    const skip = (page - 1) * limit;
+    const search = (req.query.search || '').trim();
+
+    const Customer = require('../models/customerModel');
+
+    const mongoose = require('mongoose');
+    const companyObjectId = new mongoose.Types.ObjectId(companyId);
+
+    const matchStage = { company: companyObjectId };
+
+    // NEW — search by customer name. Resolves matching Customer _ids first,
+    // then restricts the aggregation to only those — this way search works
+    // correctly across the whole dataset, not just whatever page happens
+    // to already be loaded.
+    if (search) {
+      const matchingCustomers = await Customer.find({
+        company: companyId,
+        custName: { $regex: search, $options: 'i' },
+      }).select('_id');
+      const matchingIds = matchingCustomers.map((c) => c._id);
+      matchStage.customer = { $in: matchingIds };
+    }
+
+    const grouped = await CampaignReply.aggregate([
+      { $match: matchStage },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: { $ifNull: ['$customer', '$phone'] },
+          customer: { $first: '$customer' },
+          phone: { $first: '$phone' },
+          lastMessage: { $first: '$message' },
+          lastIsButtonClick: { $first: '$isButtonClick' },
+          lastAt: { $first: '$createdAt' },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { lastAt: -1 } },
+      {
+        $facet: {
+          rows: [{ $skip: skip }, { $limit: limit }],
+          totalCount: [{ $count: 'total' }],
+        },
+      },
+    ]);
+
+    const rows = grouped[0]?.rows || [];
+    const total = grouped[0]?.totalCount[0]?.total || 0;
+
+    // Fill in real customer names for rows that have a linked customer.
+    const customerIds = rows.filter((r) => r.customer).map((r) => r.customer);
+    const customers = customerIds.length
+      ? await Customer.find({ _id: { $in: customerIds } }).select('custName phoneNumber1')
+      : [];
+    const customerMap = new Map(customers.map((c) => [String(c._id), c]));
+
+    const items = rows.map((r) => {
+      const cust = r.customer ? customerMap.get(String(r.customer)) : null;
+      return {
+        customerId: r.customer || null,
+        custName: cust?.custName || null,
+        phone: cust?.phoneNumber1 || r.phone,
+        lastMessage: r.lastMessage,
+        lastIsButtonClick: r.lastIsButtonClick,
+        lastAt: r.lastAt,
+        count: r.count,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      items,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit) || 1,
+        totalItems: total,
+        limit,
+        hasNextPage: skip + rows.length < total,
+        hasPrevPage: page > 1,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Sessions (structured Q&A answers) ─────────────────────────────
+
+// GET /api/campaigns/sessions
+// GET /api/campaigns/sessions?customerId=<id>
+// This is the NEW structured view — the actual filled-in answers from
+// the tap-through questionnaire, as opposed to raw free-text replies.
+exports.listSessions = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const { customerId } = req.query;
+
+    const query = { company: companyId };
+    if (customerId) query.customer = customerId;
+
+    const sessions = await CampaignSession.find(query)
+      .populate('customer', 'custName phoneNumber1')
+      .populate('template', 'title')
+      .sort({ updatedAt: -1 })
+      .limit(200);
+
+    res.status(200).json({ success: true, sessions });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// ── Inbound webhook — this is the engine that drives the question flow ──
+
+function last10Digits(phone) {
+  if (!phone) return null;
+  return String(phone).replace(/\D/g, '').slice(-10);
+}
+
+/**
+ * Advances (or starts) a customer's question session in response to any
+ * inbound event. Returns nothing — fire-and-forget, errors are logged
+ * not thrown, since this must never block the webhook's fast ack.
+ */
+async function advanceSession(phone, listReplyId, listReplyTitle) {
+  console.log(`[Entero Session] ###Q_DEBUG### advanceSession() called for phone=${phone}, listReplyId=${listReplyId}`);
+  // NOTE: intentionally NOT filtering by company here. sendCampaign()
+  // creates the session using the logged-in user's real company ID, but
+  // this webhook only has ENTERO_COMPANY_ID — if
+  // those two values aren't byte-for-byte identical, filtering by
+  // company here would silently find nothing and Question 1 would never
+  // fire, no matter how many times the customer replies. Since one WABA
+  // phone number webhook effectively belongs to one company in this
+  // architecture anyway, matching on phone + status is safe and removes
+  // that fragile dependency entirely.
+  // FIXED: previously this searched PENDING and IN_PROGRESS together and
+  // just took whichever was most recently touched. If a customer has been
+  // sent multiple different products (common during testing — same test
+  // number, many campaigns), that could pick a brand-new PENDING session
+  // from an unrelated campaign instead of the conversation the customer
+  // is actually mid-way through, silently losing their answer. An
+  // IN_PROGRESS session — an active back-and-forth already happening —
+  // always takes priority; only fall back to PENDING (starting fresh)
+  // if nothing is currently in progress.
+  // FIXED (Entero) — WhatsApp sends the reply's number as "91XXXXXXXXXX",
+  // but sessions are saved with the number exactly as stored in Customer
+  // Master / the uploaded file (often just "XXXXXXXXXX"). Match on the
+  // last 10 digits so the questionnaire starts no matter which format.
+  const last10 = String(phone || '').replace(/\D/g, '').slice(-10);
+  if (!last10) return;
+  const phoneMatch = { $regex: `${last10}$` };
+
+  let session = await CampaignSession.findOne({
+    phone: phoneMatch,
+    status: 'IN_PROGRESS',
+  }).sort({ updatedAt: -1 }).populate('template');
+
+  if (!session) {
+    session = await CampaignSession.findOne({
+      phone: phoneMatch,
+      status: 'PENDING',
+    }).sort({ updatedAt: -1 }).populate('template');
+  }
+
+  console.log(`[Entero Session] ###Q_DEBUG### session found: ${!!session}, has template: ${!!session?.template}, status: ${session?.status}, questions on template: ${session?.template?.questions?.length}`);
+  if (!session || !session.template) return;
+
+  const questions = session.template.questions || [];
+
+  // FIXED: images used to be completely blocked whenever a template had
+  // zero questions, because the old code returned early BEFORE reaching
+  // the image-sending block below. Images must send on their own,
+  // independent of whether any questions exist — moved this check to
+  // happen only for the question-advancing logic further down, not here.
+
+  // NEW — first time this session becomes active (still PENDING, about to
+  // start), send any EXTRA images before Question 1. Session-only
+  // content — never affects Meta approval status.
+  //
+  // IMPORTANT: if the first image was already sent immediately after the
+  // template (session.firstImageAlreadySent), sending it again here
+  // would duplicate it. Only images AFTER the first one — or the first
+  // one too, if the immediate send didn't happen — are sent here.
+  const isStarting = session.status === 'PENDING';
+  if (isStarting) {
+    const allImages = session.template.images || [];
+    const sessionImages = session.firstImageAlreadySent ? allImages.slice(1) : allImages;
+
+    console.log(`[Entero Session] Starting session for ${phone}, template "${session.template.title}" has ${sessionImages.length} image(s) to send now (first image ${session.firstImageAlreadySent ? 'was already sent immediately after the template' : 'will be sent now, since the immediate send earlier did not happen'}).`);
+
+    if (sessionImages.length > 0) {
+      for (const img of sessionImages) {
+        const imgResult = await wa.sendImageMessage(phone, img.mediaId, img.caption);
+        if (imgResult.ok) {
+          console.log(`[Entero Session] Image sent successfully to ${phone}, mediaId: ${img.mediaId}`);
+        } else {
+          console.error(`[Entero Session] Failed to send image to ${phone}:`, imgResult.reason);
+        }
+      }
+    }
+  }
+
+  // Only questions need at least one to proceed — images above already
+  // sent regardless. If there are no questions, mark the session done
+  // right after the images (if any) go out.
+  if (questions.length === 0) {
+    if (isStarting) {
+      session.status = 'COMPLETED';
+      session.completedAt = new Date();
+      await session.save();
+    }
+    return;
+  }
+
+  // If this inbound event is a tap on the CURRENT question's list, record it.
+  if (session.status === 'IN_PROGRESS' && listReplyId != null) {
+    const current = questions[session.currentQuestionIndex];
+    if (current) {
+      const optIndex = parseInt(String(listReplyId).replace('opt_', ''), 10);
+      const chosen = current.options[optIndex];
+      session.answers.push({
+        questionText: current.questionText,
+        answerTitle: listReplyTitle || chosen?.title || '',
+        answerDescription: chosen?.description || '',
+      });
+    }
+  }
+
+  const nextIndex = session.currentQuestionIndex + 1;
+
+  console.log(`[Entero Session] ###Q_DEBUG### currentQuestionIndex=${session.currentQuestionIndex}, nextIndex=${nextIndex}, total questions=${questions.length}`);
+
+  if (nextIndex < questions.length) {
+    // Send the next question.
+    const nextQ = questions[nextIndex];
+    console.log(`[Entero Session] ###Q_DEBUG### About to send question ${nextIndex} ("${nextQ.questionText}") to ${phone}, with ${nextQ.options?.length || 0} options.`);
+    const result = await wa.sendListMessage(
+      phone,
+      nextQ.questionText,
+      nextQ.options,
+      'Select',
+      session.template.title || 'Please choose an option'
+    );
+    console.log(`[Entero Session] ###Q_DEBUG### sendListMessage result: ok=${result.ok}, reason=${result.reason || 'N/A'}`);
+    if (result.ok) {
+      session.currentQuestionIndex = nextIndex;
+      session.status = 'IN_PROGRESS';
+      if (!session.startedAt) session.startedAt = new Date();
+    } else {
+      console.error(`[Entero Session] Failed to send question ${nextIndex} to ${phone}:`, result.reason);
+    }
+  } else {
+    // All questions answered.
+    session.status = 'COMPLETED';
+    session.completedAt = new Date();
+    await wa.sendTextMessage(phone, 'Thank you! We\'ve got your details and our team will reach out shortly.');
+  }
+
+  await session.save();
+}
+
+exports.receiveWhatsAppReply = async (req, res) => {
+  res.sendStatus(200); // ack fast — Meta/Pinnacle retries if you don't respond quickly
+
+  try {
+    const Customer = require('../models/customerModel');
+    const value = req.body?.entry?.[0]?.changes?.[0]?.value;
+    const incomingMessages = value?.messages;
+
+    if (incomingMessages && incomingMessages.length > 0) {
+      const companyId = ENTERO_COMPANY_ID;
+      if (!companyId) {
+        console.warn('[Entero Webhook] ENTERO_COMPANY_ID not set — cannot match customers.');
+        return;
+      }
+
+      for (const msg of incomingMessages) {
+        const from = msg.from;
+        const target = last10Digits(from);
+        if (!target) continue;
+
+        // Detect the exact event type Meta sends.
+        let text;
+        let isButtonClick = false;
+        let listReplyId = null;
+        let listReplyTitle = null;
+
+        if (msg.type === 'button' && msg.button?.text) {
+          // Tap on a template's quick-reply button.
+          text = msg.button.text;
+          isButtonClick = true;
+        } else if (msg.type === 'interactive' && msg.interactive?.list_reply) {
+          // Tap on a List Message row — this is what the question flow uses.
+          text = msg.interactive.list_reply.title;
+          isButtonClick = true;
+          listReplyId = msg.interactive.list_reply.id;
+          listReplyTitle = msg.interactive.list_reply.title;
+        } else if (msg.type === 'interactive' && msg.interactive?.button_reply) {
+          text = msg.interactive.button_reply.title;
+          isButtonClick = true;
+        } else {
+          text = msg.text?.body || `[${msg.type} message]`;
+        }
+
+        const customers = await Customer.find({
+          company: companyId,
+          phoneNumber1: { $regex: `${target}$` },
+        }).limit(1);
+        const customer = customers[0] || null;
+
+        // Always log the raw event, same as before.
+        await CampaignReply.create({
+          company: companyId,
+          customer: customer ? customer._id : null,
+          phone: from,
+          message: text,
+          messageId: msg.id || '',
+          isButtonClick,
+        });
+
+        // NEW — drive the question flow forward.
+        try {
+          await advanceSession(from, listReplyId, listReplyTitle);
+        } catch (sessErr) {
+          console.error('[Entero Session] advanceSession error:', sessErr);
+        }
+
+        console.log(
+          customer
+            ? `[Entero Webhook] ${isButtonClick ? 'Click' : 'Reply'} stored, matched customer ${customer._id}`
+            : `[Entero Webhook] ${isButtonClick ? 'Click' : 'Reply'} stored, no matching customer for ${from}`
+        );
+      }
+    }
+
+    const statuses = value?.statuses;
+    if (statuses) {
+      statuses.forEach((s) => console.log(`[Entero Webhook] Status: ${s.recipient_id} -> ${s.status}`));
+    }
+  } catch (err) {
+    console.error('[Entero Webhook] Error:', err);
+  }
+};
+
+// ── NEW ADDITIONS BELOW — fully additive, does not modify anything above ──
+
+// GET /api/campaigns/customers-by-product?product=<search text>
+// Finds customers who have at least one Lead with a matching product
+// name (Lead.QUERY_PRODUCT_NAME), via the Lead's linked customerId.
+exports.searchCustomersByProduct = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const product = (req.query.product || '').trim();
+    if (!product) return res.status(400).json({ success: false, error: 'product search text is required.' });
+
+    const Lead = require('../models/leadsModel');
+    const Customer = require('../models/customerModel');
+
+    const matchingLeads = await Lead.find({
+      company: companyId,
+      customerId: { $ne: null },
+      QUERY_PRODUCT_NAME: { $regex: product, $options: 'i' },
+    }).select('customerId').limit(2000);
+
+    const customerIds = [...new Set(matchingLeads.map((l) => String(l.customerId)))];
+    if (customerIds.length === 0) {
+      return res.status(200).json({ success: true, customers: [] });
+    }
+
+    const customers = await Customer.find({ _id: { $in: customerIds }, company: companyId })
+      .select('custName phoneNumber1')
+      .limit(500);
+
+    res.status(200).json({ success: true, customers });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// POST /api/campaigns/parse-recipient-file  (multipart, field "file")
+// Parses an uploaded CSV/Excel of phone numbers (+ optional names) —
+// returns the parsed list for the user to review/select before sending.
+// Requires: npm install xlsx
+// POST /api/campaigns/parse-recipient-file  (multipart, field "file")
+// Parses an uploaded CSV/Excel of phone numbers (+ optional names) —
+// returns the parsed list for the user to review/select before sending.
+//
+// Uses exceljs (for .xlsx/.xls) and csv-parser (for .csv) — both already
+// present in this backend's dependencies, no new npm install required.
+exports.parseUploadedRecipientFile = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded.' });
+
+    const filename = req.file.originalname.toLowerCase();
+    let rows = [];
+
+    if (filename.endsWith('.csv')) {
+      const csvParser = require('csv-parser');
+      const { Readable } = require('stream');
+      rows = await new Promise((resolve, reject) => {
+        const results = [];
+        Readable.from(req.file.buffer)
+          .pipe(csvParser())
+          .on('data', (row) => results.push(row))
+          .on('end', () => resolve(results))
+          .on('error', reject);
+      });
+    } else {
+      const ExcelJS = require('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(req.file.buffer);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) throw new Error('No sheet found in this file.');
+
+      const headerValues = worksheet.getRow(1).values; // exceljs is 1-indexed; index 0 is unused
+      const headers = headerValues.slice(1).map((h) => String(h || '').trim());
+
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return; // skip header row
+        const values = row.values.slice(1);
+        const rowObj = {};
+        headers.forEach((h, i) => { rowObj[h] = values[i]; });
+        rows.push(rowObj);
+      });
+    }
+
+    // Accepts flexible column headers: any column containing "phone" or
+    // "mobile" (case-insensitive) is treated as the phone number; any
+    // column containing "name" is treated as the recipient's name.
+    const recipients = rows
+      .map((row) => {
+        const phoneKey = Object.keys(row).find((k) => /phone|mobile/i.test(k));
+        const nameKey = Object.keys(row).find((k) => /name/i.test(k));
+        const phone = phoneKey ? String(row[phoneKey] ?? '').replace(/\D/g, '') : '';
+        const name = nameKey ? String(row[nameKey] ?? '').trim() : '';
+        return { name: name || 'Unnamed', phone };
+      })
+      .filter((r) => r.phone && r.phone.length >= 10);
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid phone numbers found. Make sure your file has a column named "phone" or "mobile".' });
+    }
+
+    res.status(200).json({ success: true, recipients });
+  } catch (err) {
+    res.status(500).json({ success: false, error: `Could not read that file: ${err.message}` });
+  }
+};
+
+// POST /api/campaigns/send-to-numbers
+// Body: { templateId, recipients: [{ name, phone }] }
+// Sends a campaign directly to raw phone numbers from an uploaded file —
+// these do NOT need to exist in Customer Master. Mirrors sendCampaign's
+// logic exactly (image, session, retiring old sessions) but with
+// customerId left null throughout, since there's no Customer record.
+exports.sendCampaignToNumbers = async (req, res) => {
+  try {
+    const companyId = ENTERO_COMPANY_ID;
+    const { templateId, recipients } = req.body;
+
+    if (!templateId) return res.status(400).json({ success: false, error: 'templateId is required.' });
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({ success: false, error: 'No recipients provided.' });
+    }
+    if (recipients.length > 200) {
+      return res.status(400).json({ success: false, error: 'Max 200 recipients per campaign.' });
+    }
+
+    const template = await CampaignTemplate.findOne({ _id: templateId, company: companyId, status: 'APPROVED' });
+    if (!template) {
+      return res.status(400).json({ success: false, error: 'Template not found or not yet approved by Meta.' });
+    }
+
+    const logRecipients = [];
+    let sentCount = 0;
+    let skippedCount = 0;
+
+    for (const r of recipients) {
+      const name = r.name || 'Unnamed';
+      const phone = r.phone;
+
+      if (!phone) {
+        logRecipients.push({ customerId: null, name, mobile: '', status: 'skipped', reason: 'No phone number.' });
+        skippedCount++;
+        continue;
+      }
+
+      // FIXED — this was missing here, though already correct in
+      // sendCampaign. Same reasoning: an approved header-image template
+      // requires this parameter on every send or WhatsApp rejects it.
+      const headerImageMediaId = template.images?.[0]?.headerHandle ? template.images[0].mediaId : undefined;
+      const result = await wa.sendTemplateMessage(phone, template.metaTemplateName, template.language, headerImageMediaId);
+
+      if (result.ok) {
+        logRecipients.push({ customerId: null, name, mobile: phone, status: 'sent' });
+        sentCount++;
+
+        let firstImageAlreadySent = !!headerImageMediaId;
+        if (!firstImageAlreadySent && template.images && template.images.length > 0) {
+          const firstImg = template.images[0];
+          const immediateResult = await wa.sendImageMessage(phone, firstImg.mediaId, firstImg.caption);
+          if (immediateResult.ok) firstImageAlreadySent = true;
+        }
+
+        const hasImages = template.images && template.images.length > 0;
+        const hasQuestions = template.questions && template.questions.length > 0;
+        if (hasImages || hasQuestions) {
+          await CampaignSession.findOneAndUpdate(
+            { company: companyId, phone, template: template._id },
+            {
+              $set: {
+                company: companyId,
+                customer: null,
+                template: template._id,
+                phone,
+                status: 'PENDING',
+                currentQuestionIndex: -1,
+                answers: [],
+                startedAt: null,
+                completedAt: null,
+                firstImageAlreadySent,
+              },
+            },
+            { upsert: true, new: true }
+          );
+
+          // Same "retire old unrelated sessions" behavior as sendCampaign,
+          // so this stays consistent whether sent from Customer Master or
+          // an uploaded file.
+          await CampaignSession.updateMany(
+            {
+              company: companyId,
+              phone,
+              template: { $ne: template._id },
+              status: { $in: ['PENDING', 'IN_PROGRESS'] },
+            },
+            { $set: { status: 'COMPLETED', completedAt: new Date() } }
+          );
+        }
+      } else {
+        logRecipients.push({ customerId: null, name, mobile: phone, status: 'skipped', reason: result.reason });
+        skippedCount++;
+      }
+
+      await new Promise((r2) => setTimeout(r2, 300));
+    }
+
+    const log = await CampaignLog.create({
+      company: companyId,
+      template: template._id,
+      templateTitle: template.title,
+      sentBy: req.user._id,
+      recipients: logRecipients,
+      sentCount,
+      skippedCount,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Campaign done: ${sentCount} sent, ${skippedCount} skipped.`,
+      log,
+    });
+  } catch (err) {
+    console.error('[Entero] sendCampaignToNumbers error:', err);
+    res.status(500).json({ success: false, error: `Campaign failed: ${err.message}` });
+  }
+};
+// ── ENTERO ONLY — Entero's own Customer Master list for the Send popup ──
+// GET /api/entero-campaigns/customers?page=&limit=&search=
+// Always returns ENTERO's customers, whoever is logged in, so the Send
+// popup never shows (or tries to send to) DAccess customers.
+exports.listEnteroCustomers = async (req, res) => {
+  try {
+    const Customer = require('../models/customerModel');
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, Math.min(10000, parseInt(req.query.limit) || 40));
+    const search = (req.query.search || '').trim();
+
+    const query = { company: ENTERO_COMPANY_ID };
+    if (search) {
+      const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      query.$or = [
+        { custName: { $regex: safe, $options: 'i' } },
+        { email: { $regex: safe, $options: 'i' } },
+        { GSTNo: { $regex: safe, $options: 'i' } },
+        { phoneNumber1: { $regex: safe, $options: 'i' } },
+      ];
+    }
+
+    const total = await Customer.countDocuments(query);
+    const customers = await Customer.find(query)
+      .select('custName phoneNumber1 isChecked email')
+      .sort({ custName: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+    res.status(200).json({
+      success: true,
+      customers,
+      pagination: { currentPage: page, totalPages, totalItems: total, hasNextPage: page < totalPages, hasPrevPage: page > 1 },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};

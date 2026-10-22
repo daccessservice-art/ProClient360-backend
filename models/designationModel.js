@@ -186,6 +186,13 @@ const designationSchema = new mongoose.Schema({
             'updateCampaign',
             'deleteCampaign',
             'sendCampaign',
+
+            // ✅ NEW — Entero Systems WhatsApp Campaign
+            'createEnteroCampaign',
+            'viewEnteroCampaign',
+            'updateEnteroCampaign',
+            'deleteEnteroCampaign',
+            'sendEnteroCampaign',
         ],
     }]
 
