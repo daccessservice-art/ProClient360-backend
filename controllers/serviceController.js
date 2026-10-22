@@ -5,6 +5,10 @@ const {ticketProcessMail} = require('../mailsService/ticketProcessMail');
 const ServiceAction = require("../models/serviceActionModel");
 const {Types} = require("mongoose");
 
+// ✅ Ticket fields sent with every service (contact person fields added)
+const TICKET_SELECT =
+  "details product date client contactPerson contactPersonEmail contactNumber Address source uniqueTicketId";
+
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
@@ -52,7 +56,7 @@ exports.showAll = async (req, res) => {
       .populate("allotTo", "name")
       .populate({
         path: "ticket",
-        select: "details product date client",
+        select: TICKET_SELECT, // ✅ now includes contactPerson, contactPersonEmail, contactNumber
         populate: { path: "client", select: "custName" },
       })
       .sort({ allotmentDate: -1 })
@@ -89,7 +93,6 @@ exports.update = async (req, res) => {
     const updatedData = { serviceType, priority, allotmentDate, allotTo, workMode, status };
 
     const service = await Service.findByIdAndUpdate(id, updatedData, { new: true, runValidators: false });
-    await service.save();
 
     if (!service) return res.status(404).json({ success: false, error: "Service not found..." });
     res.status(200).json({ success: true, message: "Service Updated Successfully" });
@@ -158,7 +161,7 @@ exports.myServices = async (req, res) => {
 
     let populateOptions = {
       path: "ticket",
-      select: "details product date client contactPerson contactNumber Address",
+      select: TICKET_SELECT, // ✅ email added here too
       populate: { path: "client", select: "custName" },
     };
 
