@@ -2,6 +2,14 @@ const { Types } = require('mongoose');
 const Lead = require('../models/leadsModel');
 const Employee = require('../models/employeeModel');
 const { logLeadCreation, logLeadUpdate, logLeadDeletion, logLeadAssignment, logStatusChange, logCallAttempt } = require('../middlewares/activityLogger');
+// ✅ NEW: Sales lead notifications (web bell + mobile FCM push)
+const {
+  notifyLeadAssigned,
+  notifyLeadReassigned,
+  notifyLeadsTransferred,
+  notifySurveyAssigned,
+  notifySurveySubmitted,
+} = require('../services/leadNotificationService');
 
 // ══════════════════════════════════════════════════════════════
 //  HELPER: Get Current Financial Year Start Date
@@ -496,6 +504,7 @@ exports.assignLead = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Lead not found.' });
 
     const oldAssignedTo = lead.assignedTo;
+    const oldFeasibility = lead.feasibility; // ✅ NEW: to know first-time assign vs reassign
 
     if (
       feasibility === 'feasible' ||
@@ -558,6 +567,15 @@ exports.assignLead = async (req, res) => {
     if (assignedTo && String(oldAssignedTo) !== String(assignedTo)) {
       const assignedEmployee = await Employee.findById(assignedTo);
       await logLeadAssignment(lead, assignedEmployee, user, req);
+
+      // ✅ NEW: notify the sales employee who received the lead
+      //    first assignment (from marketing) → "lead_assigned"
+      //    already had an owner              → "lead_reassigned"
+      if (oldFeasibility === 'feasible') {
+        notifyLeadReassigned(lead, assignedTo, user, remark || req.body.feasibleReason);
+      } else if (lead.feasibility === 'feasible') {
+        notifyLeadAssigned(lead, assignedTo, user);
+      }
     }
 
     const savedLead = await Lead.findById(lead._id)
@@ -705,6 +723,15 @@ exports.createLead = async (req, res) => {
     await lead.save();
     await logLeadCreation(lead, user, req);
 
+    // ✅ NEW: notify sales employee when a lead is created & assigned to someone else
+    //    (self-assigned leads are skipped inside the service)
+    if (lead.assignedTo && lead.feasibility === 'feasible') {
+      notifyLeadAssigned(lead, lead.assignedTo, user);
+    }
+    if (lead.assignedSurveyEngineer) {
+      notifySurveyAssigned(lead, lead.assignedSurveyEngineer, user);
+    }
+
     const populatedLead = await Lead.findById(lead._id)
       .populate('assignedTo', 'name email')
       .populate('assignedBy', 'name email')
@@ -764,6 +791,22 @@ exports.updateLead = async (req, res) => {
 
     await lead.save();
     await logLeadUpdate(oldLeadData, updateData, user, req);
+
+    // ✅ NEW: notify newly assigned survey engineer
+    if (
+      updateData.assignedSurveyEngineer &&
+      String(oldLeadData.assignedSurveyEngineer || '') !== String(updateData.assignedSurveyEngineer)
+    ) {
+      notifySurveyAssigned(lead, updateData.assignedSurveyEngineer, user);
+    }
+
+    // ✅ NEW: notify sales employee if owner changed via generic update
+    if (
+      updateData.assignedTo &&
+      String(oldLeadData.assignedTo || '') !== String(updateData.assignedTo)
+    ) {
+      notifyLeadReassigned(lead, updateData.assignedTo, user);
+    }
 
     if (updateData.STATUS && oldLeadData.STATUS !== updateData.STATUS) {
       await logStatusChange(lead, oldLeadData.STATUS, updateData.STATUS, user, req);
@@ -886,6 +929,11 @@ exports.transferOwnership = async (req, res) => {
       },
     });
 
+    // ✅ NEW: notify new owner
+    if (result.modifiedCount > 0) {
+      notifyLeadsTransferred(result.modifiedCount, toEmployeeId, user);
+    }
+
     res.status(200).json({
       success: true,
       message: `Successfully transferred ${result.modifiedCount} lead${result.modifiedCount !== 1 ? 's' : ''} to the new owner.`,
@@ -978,6 +1026,11 @@ exports.submitSurveyReport = async (req, res) => {
       });
     } catch (mailErr) {
       console.error('⚠️ Survey report mail failed (non-blocking):', mailErr.message);
+    }
+
+    // ✅ NEW: tell the lead owner (sales employee) the survey is done / cancelled
+    if (lead.assignedTo) {
+      notifySurveySubmitted(lead, lead.assignedTo, user, status);
     }
 
     res.status(200).json({
