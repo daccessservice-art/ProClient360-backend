@@ -4,6 +4,8 @@ const Customer = require("../models/customerModel"); // ← for customer name se
 const {ticketProcessMail} = require('../mailsService/ticketProcessMail');
 const ServiceAction = require("../models/serviceActionModel");
 const {Types} = require("mongoose");
+// ✅ NEW: service engineer notifications (web bell + mobile push)
+const { notifyServiceAssigned, notifyServiceReassigned } = require("../services/serviceNotificationService");
 
 // ✅ Ticket fields sent with every service (contact person fields added)
 const TICKET_SELECT =
@@ -92,9 +94,18 @@ exports.update = async (req, res) => {
     const { serviceType, priority, allotmentDate, allotTo, workMode, status } = req.body;
     const updatedData = { serviceType, priority, allotmentDate, allotTo, workMode, status };
 
+    // ✅ NEW: keep old engineers list to detect newly added engineers
+    const oldService = await Service.findById(id).select("allotTo").lean();
+
     const service = await Service.findByIdAndUpdate(id, updatedData, { new: true, runValidators: false });
 
     if (!service) return res.status(404).json({ success: false, error: "Service not found..." });
+
+    // ✅ NEW: notify only engineers who were newly allotted
+    if (allotTo) {
+      notifyServiceReassigned(service, oldService?.allotTo || [], allotTo, req.user);
+    }
+
     res.status(200).json({ success: true, message: "Service Updated Successfully" });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error while Updating the Service : " + error.message });
@@ -119,6 +130,9 @@ exports.create = async (req, res) => {
     // updateOne, not save(): imported (EXT-) tickets are stored without full validation
     await Ticket.updateOne({ _id: ticketData._id }, { $set: { service: service._id } });
     ticketProcessMail(service._id);
+
+    // ✅ NEW: notify every allotted service engineer
+    notifyServiceAssigned(service, user);
 
     res.status(200).json({ success: true, message: "Service Assigned Successfully." });
   } catch (error) {
@@ -194,5 +208,41 @@ exports.myServices = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error while fetching the employee Services : " + error.message });
+  }
+};
+
+// ════════════════════════════════════════════════════════════════════
+// ✅ NEW  GET /api/service/myService/:id
+//   One service allotted to the logged-in engineer.
+//   Used when engineer taps a notification (web + mobile app).
+// ════════════════════════════════════════════════════════════════════
+exports.myServiceById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: "Invalid service id" });
+    }
+
+    const service = await Service.findOne({ _id: id, allotTo: req.user._id })
+      .populate("allotTo", "name")
+      .populate({
+        path: "ticket",
+        select: TICKET_SELECT,
+        populate: { path: "client", select: "custName" },
+      })
+      .lean();
+
+    if (!service) {
+      return res.status(404).json({ success: false, error: "Service not found or not assigned to you." });
+    }
+
+    const actions = await ServiceAction.find({ service: id })
+      .populate("actionBy", "name")
+      .sort({ startTime: -1 })
+      .lean();
+
+    res.status(200).json({ success: true, service, actions });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error while fetching the Service : " + error.message });
   }
 };

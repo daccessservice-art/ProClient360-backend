@@ -8,6 +8,8 @@ const NOTIFICATION_TYPES = [
     'lead_transferred',   // bulk ownership transfer
     'survey_assigned',    // survey engineer assigned on a lead
     'survey_submitted',   // survey report submitted -> lead owner informed
+    'service_assigned',   // ✅ NEW: ticket assigned to service engineer
+    'service_reassigned', // ✅ NEW: service re-allotted to another engineer
 ];
 
 const nofiticationSchema = new mongoose.Schema({
@@ -41,6 +43,17 @@ const nofiticationSchema = new mongoose.Schema({
     leadId:{
         type:mongoose.Schema.Types.ObjectId,
         ref: 'lead',
+        default:null,
+    },
+    // ✅ NEW: related service + ticket (for service notifications)
+    serviceId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref: 'Service',
+        default:null,
+    },
+    ticketId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref: 'Ticket',
         default:null,
     },
     sender:{

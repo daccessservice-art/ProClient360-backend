@@ -8,6 +8,9 @@ router.get('/', permissionMiddleware(['viewService']), serviceController.showAll
 
 router.get('/myService',isLoggedIn, serviceController.myServices);
 
+// ✅ NEW: single service of logged-in engineer (notification tap / mobile app)
+router.get('/myService/:id', isLoggedIn, serviceController.myServiceById);
+
 router.post('/',permissionMiddleware(["createService"]) ,serviceController.create);
 
 router.put('/:id',permissionMiddleware(["updateService"]), serviceController.update);
