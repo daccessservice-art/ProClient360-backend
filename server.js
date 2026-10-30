@@ -90,6 +90,9 @@ const projectTaskAgentRoutes = require('./routes/projectTaskAgentRoutes');
 
 const reportRoutes = require('./routes/reportRoutes');
 
+// ✅ NEW — Sales Target (HR sets targets, sales dashboard shows PO achievement + incentive)
+const salesTargetRoutes = require('./routes/salesTargetRoutes');
+
 // ✅ AI Calling Agent — now on Exotel (Deepgram + Claude + ElevenLabs unchanged)
 const exotelCallingRoutes = require('./routes/exotelCallingRoutes');
 const { attachExotelMediaStream } = require('./services/exotelMediaStream');
@@ -320,6 +323,9 @@ console.log('Entero campaign routes registered at /api/entero-campaigns');
 
 app.use('/api/project-task-agent', projectTaskAgentRoutes);
 app.use('/api/reports', reportRoutes);
+
+// ✅ NEW — Sales Target routes
+app.use('/api/sales-target', salesTargetRoutes);
 
 // ✅ AI Calling Agent routes — Exotel (replaces old Twilio callingAgentRoutes)
 console.log('Registering /api/exotel-calling routes...');
