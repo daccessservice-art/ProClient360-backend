@@ -42,6 +42,10 @@ const webhookRoutes = require('./routes/webhooksRoutes');
 
 const leadsRoutes = require('./routes/leadRoutes');
 
+// ✅ NEW — LANDING PAGES (DAccess / CafeLive / WorkBridge)
+const landingPagePublicRoutes = require('./routes/landingPagePublicRoutes');
+const landingPageLeadRoutes   = require('./routes/landingPageLeadRoutes');
+
 const amcRoutes = require('./routes/amcRoutes');
 
 const inventoryRoutes = require('./routes/inventoryRoutes');
@@ -205,6 +209,16 @@ const startServer = async () => {
   }
 };
 
+// ✅ NEW — LANDING PAGES: PUBLIC submit API (must be BEFORE global cors)
+// Open CORS because landing pages are on other domains; protected by x-api-key + allowed domain/IP
+app.set('trust proxy', 1);
+app.use(
+  '/api/public/landing-leads',
+  cors({ origin: '*', methods: 'POST,OPTIONS', allowedHeaders: ['Content-Type', 'x-api-key'] }),
+  express.json({ limit: '20kb' }),
+  landingPagePublicRoutes
+);
+
 app.use(cors({
   origin: ["https://pms-front-qvyb.onrender.com", "http://localhost:3000", "https://proclient360.com"],
   credentials: true,
@@ -287,6 +301,10 @@ app.use('/api/webhook', webhookRoutes);
 console.log('Registering /api/leads routes...');
 app.use('/api/leads', leadsRoutes);
 console.log('Lead routes registered at /api/leads');
+
+// ✅ NEW — LANDING PAGES: CRM side (login required)
+app.use('/api/landing-leads', landingPageLeadRoutes);
+console.log('Landing page lead routes registered at /api/landing-leads');
 
 console.log('Registering /api/activity routes...');
 app.use('/api/activity', activityLogRoutes);
