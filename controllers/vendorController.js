@@ -43,59 +43,65 @@ exports.showAll = async (req, res) => {
   try {
     const user = req.user;
 
-    let page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    let skip = (page - 1) * limit;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit) || 10, 1);
+    const skip = (page - 1) * limit;
 
-    const { q } = req.query;
+    const { q, type, link } = req.query;
 
-    let query = {};
-    if (
-      q !== undefined &&
-      q !== null &&
-      q.trim() !== "" &&
-      q.trim().toLowerCase() !== "null" &&
-      q.trim().toLowerCase() !== "undefined"
-    ) {
-      const searchRegex = new RegExp(q, "i");
-      skip = 0;
-      page = 1;
-      query = {
-        company: user.company ? user.company : user._id,
-        $or: [
-          { vendorName: { $regex: searchRegex } },
-          { email: { $regex: searchRegex } },
-          { GSTNo: { $regex: searchRegex } },
-          { phoneNumber1: { $regex: searchRegex } },
-          { typeOfVendor: { $regex: searchRegex } },
-          { materialCategory: { $regex: searchRegex } },
-          { customMaterialCategory: { $regex: searchRegex } },
-          { vendorProducts: { $regex: searchRegex } },
-        ],
-      };
-    } else {
-      query = {
-        company: user.company || user._id,
-      };
+    const isValidParam = (v) =>
+      v !== undefined &&
+      v !== null &&
+      String(v).trim() !== "" &&
+      !["null", "undefined"].includes(String(v).trim().toLowerCase());
+
+    const query = {
+      company: user.company ? user.company : user._id,
+    };
+
+    // ✅ NEW: filter by vendor type (card click)
+    if (isValidParam(type)) {
+      query.typeOfVendor = String(type).trim();
     }
 
-    const vendors = await Vendor.find(query)
-      .skip(skip)
-      .limit(limit)
-      .populate("createdBy", "name email")
-      .populate("company", "name")
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (vendors.length === 0) {
-      return res.status(404).json({ success: false, error: "No vendors found" });
+    // ✅ NEW: link-registered filter done on server (pagination stays correct)
+    if (link === "true") {
+      query.registeredFromLink = true;
     }
 
-    const totalVendors = await Vendor.countDocuments(query);
+    // ✅ FIXED: search (incl. Vendor Products / Services), regex-safe
+    if (isValidParam(q)) {
+      const escaped = String(q).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const searchRegex = new RegExp(escaped, "i");
+      query.$or = [
+        { vendorName: { $regex: searchRegex } },
+        { email: { $regex: searchRegex } },
+        { GSTNo: { $regex: searchRegex } },
+        { phoneNumber1: { $regex: searchRegex } },
+        { phoneNumber2: { $regex: searchRegex } },
+        { typeOfVendor: { $regex: searchRegex } },
+        { customVendorType: { $regex: searchRegex } },
+        { materialCategory: { $regex: searchRegex } },
+        { customMaterialCategory: { $regex: searchRegex } },
+        { brandsWorkWith: { $regex: searchRegex } },
+        { vendorProducts: { $regex: searchRegex } },
+      ];
+    }
+
+    const [vendors, totalVendors] = await Promise.all([
+      Vendor.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("createdBy", "name email")
+        .populate("company", "name")
+        .lean(),
+      Vendor.countDocuments(query),
+    ]);
+
     const totalPages = Math.ceil(totalVendors / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
 
+    // ✅ FIXED: always 200 (empty list instead of 404) so the grid clears properly
     res.status(200).json({
       success: true,
       vendors,
@@ -104,8 +110,8 @@ exports.showAll = async (req, res) => {
         totalPages,
         totalVendors,
         limit,
-        hasNextPage,
-        hasPrevPage,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
       },
     });
   } catch (error) {
