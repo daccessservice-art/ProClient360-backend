@@ -1,3 +1,4 @@
+const { applyMyProgress } = require('../helpers/myTaskProgress');
 const TaskSheet = require("../models/taskSheetModel");
 const jwt = require("jsonwebtoken");
 const Action = require("../models/actionModel");
@@ -110,34 +111,28 @@ exports.getTaskSheet = async (req, res) => {
   }
 };
 
-// ─── EXISTING: myTask ──────────────────────────────────────────────────────────
+// ─── UPDATED: myTask — each employee gets HIS OWN level/status ────────────────
 exports.myTask = async (req, res) => {
   try {
     const user = req.user;
     const { projectId } = req.params;
 
-    const query = {
-      employees: user._id,
-      project: projectId
-    };
+    const query = { employees: user._id, project: projectId };
+    if (user.company) query.company = user.company;
 
-    if (user.company) {
-      query.company = user.company;
-    }
-
-    const task = await TaskSheet.find(query)
+    const raw = await TaskSheet.find(query)
       .populate('taskName', 'name')
       .populate('assignedBy', 'name')
       .populate('assignedTester', 'name')
-      .populate('assignedTesters', 'name') // ✅ NEW
-      .populate('parentTaskId', 'taskName subtaskName taskLevel');
+      .populate('assignedTesters', 'name')
+      .populate('parentTaskId', 'taskName subtaskName taskLevel')
+      .sort({ createdAt: -1 }) // latest first
+      .lean();
 
-    res.status(200).json({
-      task: task || [],
-      success: true,
-      totalRecord: task ? task.length : 0,
-    });
+    const task = await applyMyProgress(raw, user._id);
+    task.forEach(t => { t.myUserId = user._id.toString(); });
 
+    res.status(200).json({ task, success: true, totalRecord: task.length });
   } catch (error) {
     res.status(500).json({ error: "Error in myTask controller: " + error.message });
   }
@@ -1090,18 +1085,15 @@ exports.exportMyTeamReport = async (req, res) => {
   }
 };
 
-// ─── UPDATED: getMyDueStatus ───────────────────────────────────────────────────
-// Completed tasks and Completed projects are NEVER counted as open / overdue.
-// Returns: projects{} (per project), summary{} and recommended{} for the top panel.
+// ─── UPDATED: getMyDueStatus — done / overdue is decided per employee ─────────
 exports.getMyDueStatus = async (req, res) => {
   try {
     const user = req.user;
-    const userId = user._id.toString();
 
     const query = { employees: user._id };
     if (user.company) query.company = user.company;
 
-    const tasks = await TaskSheet.find(query)
+    const raw = await TaskSheet.find(query)
       .select('project taskName subtaskName endDate taskLevel taskStatus qaStatus employees priority')
       .populate('taskName', 'name')
       .populate({
@@ -1111,11 +1103,12 @@ exports.getMyDueStatus = async (req, res) => {
       })
       .lean();
 
-    const progressMap = await buildEmployeeProgressMap(tasks.map(t => t._id));
+    // taskLevel / taskStatus below are THIS employee's own values
+    const tasks = await applyMyProgress(raw, user._id);
 
-    const toISTDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+    const toISTDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const today = toISTDay(new Date());
-    const dayDiff = (dueDay) => Math.round((Date.parse(today) - Date.parse(dueDay)) / 864e5); // >0 = overdue
+    const dayDiff = (dueDay) => Math.round((Date.parse(today) - Date.parse(dueDay)) / 864e5);
 
     const projects = {};
     const summary = { overdueCount: 0, dueTodayCount: 0, totalOpen: 0 };
@@ -1123,35 +1116,22 @@ exports.getMyDueStatus = async (req, res) => {
 
     tasks.forEach(t => {
       if (!t.project) return;
-
-      // ✅ project already completed → ignore all its tasks
       if (String(t.project.projectStatus || '').toLowerCase() === 'completed') return;
 
       const pid = (t.project._id || t.project).toString();
       if (!projects[pid]) {
-        projects[pid] = {
-          overdue: 0, dueToday: 0,
-          overdueTasks: [], dueTodayTasks: [],
-          openCount: 0, totalCount: 0,
-        };
+        projects[pid] = { overdue: 0, dueToday: 0, overdueTasks: [], dueTodayTasks: [], openCount: 0, totalCount: 0 };
       }
       projects[pid].totalCount++;
 
-      // ✅ task completed → never open, never overdue
-      const own = Number(progressMap[t._id.toString()]?.[userId] || 0);
-      const isDone =
-        t.qaStatus === 'passed' ||
-        t.taskStatus === 'completed' ||
-        (t.taskLevel || 0) >= 100 ||
-        own >= 100;
-      if (isDone) return;
+      // ✅ done = MY OWN level is 100 (other employees do not matter)
+      if ((t.taskLevel || 0) >= 100) return;
 
       projects[pid].openCount++;
       summary.totalOpen++;
 
       if (!t.endDate) return;
-      const due = toISTDay(t.endDate);
-      const diff = dayDiff(due);
+      const diff = dayDiff(toISTDay(t.endDate));
       const label = (t.taskName?.name || 'Task') + (t.subtaskName ? ` › ${t.subtaskName}` : '');
 
       if (diff > 0) {
@@ -1164,7 +1144,6 @@ exports.getMyDueStatus = async (req, res) => {
         summary.dueTodayCount++;
       }
 
-      // most urgent open task = the most overdue one
       if (!recommended || diff > recommended.daysOverdue) {
         recommended = {
           taskName: label,

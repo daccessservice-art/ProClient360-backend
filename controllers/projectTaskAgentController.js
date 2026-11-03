@@ -1,3 +1,4 @@
+const { applyMyProgress, syncSharedTaskProgress } = require('../helpers/myTaskProgress');
 const axios = require('axios');
 const TaskSheet = require('../models/taskSheetModel');
 const Employee = require('../models/employeeModel');
@@ -8,34 +9,18 @@ const { admin } = require('../utils/firebase');
 
 // ─────────────────────────────────────────────────────────────────────────
 // PROJECT TASK AGENT — SECURITY MODEL
-//
-//   User (voice/text)
-//        ↓
-//   Claude API — READ-ONLY access to the user's own task data.
-//        Can only call a whitelisted tool; never touches the DB itself.
-//        ↓
-//   Server-side validation — every value re-checked independently,
-//        the model's claims are never trusted.
-//        ↓
-//   Ownership check — task.employees must include req.user._id.
-//        ↓
-//   Field whitelist — ONLY remark / taskStatus / taskLevel / startDate /
-//        endDate (field_update), or a new Action log entry (action_log).
-//        NO delete capability exists anywhere in this module. NO ability
-//        to reassign people, change projects, or touch other users' tasks.
-//        ↓
-//   Human clicks "Apply" — nothing is ever written automatically.
-//        ↓
-//   Database write — scoped, validated, ownership-checked, and logged to
-//        AgentAuditLog for full accountability.
+//   User (voice/text) -> Claude API (read-only, whitelisted tools)
+//   -> server-side validation -> ownership check -> field whitelist
+//   -> human clicks "Apply" -> scoped DB write + AgentAuditLog.
+//   NO delete capability. NO reassigning people. NO other users' tasks.
 // ─────────────────────────────────────────────────────────────────────────
 
 const OPEN_TASK_STATUSES = ['upcoming', 'inprocess', 'stuck'];
 const PRIORITY_WEIGHT = { high: 3, medium: 2, low: 1 };
 
-// ✅ NEW — a task is "done" (never open / never overdue) when:
-//   - its own status is completed, or its completion is 100%, or the tester passed it
-//   - or its whole PROJECT is Completed
+// A task is "done" for THIS user when his own level is 100 / tester passed /
+// project completed. (taskLevel & taskStatus here are already per-employee —
+// see applyMyProgress.)
 const isTaskDoneOrProjectCompleted = (task) => {
   if (String(task.project?.projectStatus || '').toLowerCase() === 'completed') return true;
   if (task.taskStatus === 'completed') return true;
@@ -58,9 +43,6 @@ exports.suggestAssignees = async (req, res) => {
       .map(s => s.trim())
       .filter(Boolean);
 
-    // Never suggest the person doing the assigning to themselves — this
-    // endpoint is used for "assign this to someone else," so self-suggestion
-    // never makes sense here, regardless of what the frontend passes.
     if (!excludeIds.includes(user._id.toString())) {
       excludeIds.push(user._id.toString());
     }
@@ -111,6 +93,7 @@ exports.suggestAssignees = async (req, res) => {
 };
 
 // ─── GET /api/project-task-agent/suggest-tester ─────────────────────────────
+// ✅ UPDATED: counts ALL testers of a task (assignedTesters), not only the first
 exports.suggestTester = async (req, res) => {
   try {
     const user = req.user;
@@ -124,17 +107,19 @@ exports.suggestTester = async (req, res) => {
     const openTestItems = await TaskSheet.find({
       company: companyId,
       qaStatus: { $in: ['pending_test', 'testing'] },
-      assignedTester: { $ne: null },
-    }).select('assignedTester').lean();
+    }).select('assignedTester assignedTesters').lean();
 
     const loadByTester = new Map();
     employees.forEach(e => loadByTester.set(e._id.toString(), 0));
 
     openTestItems.forEach(task => {
-      const key = task.assignedTester?.toString();
-      if (key && loadByTester.has(key)) {
-        loadByTester.set(key, loadByTester.get(key) + 1);
-      }
+      const ids = new Set([
+        ...(task.assignedTesters || []).map(x => x.toString()),
+        task.assignedTester ? task.assignedTester.toString() : null,
+      ].filter(Boolean));
+      ids.forEach(key => {
+        if (loadByTester.has(key)) loadByTester.set(key, loadByTester.get(key) + 1);
+      });
     });
 
     const suggestions = employees
@@ -157,14 +142,12 @@ exports.suggestTester = async (req, res) => {
 };
 
 // ─── GET /api/project-task-agent/my-focus ───────────────────────────────────
+// ✅ UPDATED: uses MY OWN level/status (other employees' work does not matter)
 exports.suggestNextFocus = async (req, res) => {
   try {
     const user = req.user;
 
-    const openTasksRaw = await TaskSheet.find({
-      employees: user._id,
-      taskStatus: { $in: OPEN_TASK_STATUSES },
-    })
+    const rawTasks = await TaskSheet.find({ employees: user._id })
       .populate({
         path: 'project',
         select: 'name custId projectStatus',
@@ -173,8 +156,10 @@ exports.suggestNextFocus = async (req, res) => {
       .populate('taskName', 'name')
       .lean();
 
-    // ✅ NEW — ignore completed tasks and tasks of completed projects
-    const openTasks = openTasksRaw.filter(t => !isTaskDoneOrProjectCompleted(t));
+    const myTasks = await applyMyProgress(rawTasks, user._id);
+    const openTasks = myTasks.filter(
+      t => OPEN_TASK_STATUSES.includes(t.taskStatus) && !isTaskDoneOrProjectCompleted(t)
+    );
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -192,9 +177,6 @@ exports.suggestNextFocus = async (req, res) => {
 
       return {
         taskId: task._id,
-        // Distinguish "project exists but has no name" from "task has no
-        // project linked at all" — the second case is the real data
-        // problem worth investigating in that task's record directly.
         projectName: task.project ? (task.project.name || 'Unnamed Project') : 'No project linked',
         customerName: task.project?.custId?.custName || null,
         taskName: task.taskName?.name || 'Task',
@@ -272,9 +254,7 @@ const notifyAssignerOnStatusChange = async (taskStatus, currentStatus, tasksheet
   }
 };
 
-// ─── Audit logging helper — failures here NEVER block the actual update.
-// Losing an audit entry is bad; losing the user's real work because the
-// audit write hiccuped would be worse. ──────────────────────────────────
+// ─── Audit logging helper — failures NEVER block the real update ──────────
 const logAgentAction = async ({ user, actionType, taskId, details }) => {
   try {
     await AgentAuditLog.create({
@@ -394,21 +374,15 @@ exports.chatWithAgent = async (req, res) => {
       return res.status(500).json({ success: false, error: "AI agent is not configured yet. Add ANTHROPIC_API_KEY to your backend .env file." });
     }
 
-    // Two separate sets, on purpose:
-    //  - openTasks: what the write-tools (propose_task_update /
-    //    propose_log_work) are allowed to touch — editing a completed
-    //    task doesn't make sense for those actions.
-    //  - allTasks: everything, including completed — used only for
-    //    ANSWERING questions ("how many have I completed"), never for
-    //    matching a tool call.
-    const allTasks = await TaskSheet.find({ employees: user._id })
+    // ✅ UPDATED — level/status below are MY OWN (per-employee)
+    const allTasksRaw = await TaskSheet.find({ employees: user._id })
       .populate('project', 'name projectStatus')
       .populate('taskName', 'name')
       .sort({ updatedAt: -1 })
       .limit(50)
       .lean();
+    const allTasks = await applyMyProgress(allTasksRaw, user._id);
 
-    // ✅ UPDATED — open = not done and project not completed
     const openTasks = allTasks.filter(
       t => OPEN_TASK_STATUSES.includes(t.taskStatus) && !isTaskDoneOrProjectCompleted(t)
     );
@@ -451,6 +425,7 @@ Formatting:
 Rules:
 - Answer using ONLY the task data below. Never invent task names, dates, or numbers.
 - Keep replies short: 2-4 sentences, suitable to be read aloud.
+- The level/status shown for each task is ${user.name || 'this user'}'s OWN progress (other employees on the same task are not counted).
 - You can answer questions about BOTH open and completed tasks using the data below (e.g. "how many have I completed").
 - If asked WHY a task is late, stuck, or not completed, reason from the signals actually present in its data — QA status, bug round count, and its last remark are the real evidence. If none of that explains it, say the data doesn't show a clear reason rather than inventing one.
 - When it fits naturally, offer one brief, practical suggestion — but only when grounded in the visible data, not generic advice.
@@ -475,10 +450,6 @@ ${completedLines || 'None yet.'}
       {
         model: 'claude-opus-5',
         max_tokens: 400,
-        // Opus 5 defaults to "high" reasoning effort, which costs more and
-        // isn't needed for a grounded, constrained lookup/tool-call task
-        // like this one — "low" keeps it fast and cheap while still
-        // capable enough for picking the right tool and summarizing data.
         output_config: { effort: 'low' },
         system: systemPrompt,
         tools: TOOLS,
@@ -513,6 +484,12 @@ ${completedLines || 'None yet.'}
       if (!matchedTask) {
         return res.status(200).json({ success: true, type: 'text', reply: `I couldn't find an open task matching "${taskDescription}". Could you name it more specifically?` });
       }
+
+      // ✅ shared task with many employees: level/status come from each person's logged work
+      if ((field === 'taskLevel' || field === 'taskStatus') && (matchedTask.employees || []).length > 1) {
+        return res.status(200).json({ success: true, type: 'text', reply: "This task is shared with other employees, so progress is tracked from each person's work log. Tell me what you did and the percentage, and I'll log it for you." });
+      }
+
       const validation = validateProposedFieldValue(field, newValue);
       if (!validation.ok) {
         return res.status(200).json({ success: true, type: 'text', reply: validation.error });
@@ -543,6 +520,7 @@ ${completedLines || 'None yet.'}
         return res.status(200).json({ success: true, type: 'text', reply: `I couldn't find an open task matching "${taskDescription}". Could you name it more specifically?` });
       }
 
+      // matchedTask.taskLevel is MY OWN level
       const validation = validateProposedActionLog(action, taskStatus, taskLevel, remark, matchedTask.taskLevel);
       if (!validation.ok) {
         return res.status(200).json({ success: true, type: 'text', reply: validation.error });
@@ -592,6 +570,11 @@ exports.applyAgentUpdate = async (req, res) => {
       return res.status(403).json({ success: false, error: "You can only update your own tasks" });
     }
 
+    // ✅ shared task: never change the shared level/status directly
+    if ((field === 'taskLevel' || field === 'taskStatus') && task.employees.length > 1) {
+      return res.status(400).json({ success: false, error: "This task is shared with other employees. Please log your work instead — progress is tracked per employee." });
+    }
+
     const validation = validateProposedFieldValue(field, String(newValue));
     if (!validation.ok) return res.status(400).json({ success: false, error: validation.error });
 
@@ -599,7 +582,6 @@ exports.applyAgentUpdate = async (req, res) => {
     task[field] = validation.value;
     await task.save();
 
-    // ✅ Audit trail — recorded after the write succeeds, never blocks it
     await logAgentAction({
       user,
       actionType: 'field_update',
@@ -641,12 +623,21 @@ exports.applyAgentActionLog = async (req, res) => {
     if (!tasksheet.employees.some(emp => (emp._id || emp).toString() === user._id.toString())) {
       return res.status(403).json({ success: false, error: "You can only log work on your own tasks" });
     }
+    if (tasksheet.qaStatus === 'pending_test' || tasksheet.qaStatus === 'testing') {
+      return res.status(400).json({ success: false, error: "This task is with the tester. You can't log new work until it's reviewed." });
+    }
 
-    const validation = validateProposedActionLog(action, taskStatus, taskLevel, remark, tasksheet.taskLevel);
+    // ✅ my own current level (not the shared one)
+    const [mine] = await applyMyProgress([tasksheet], user._id);
+    if ((mine.taskLevel || 0) >= 100) {
+      return res.status(400).json({ success: false, error: "You have already completed this task" });
+    }
+
+    const validation = validateProposedActionLog(action, taskStatus, taskLevel, remark, mine.taskLevel);
     if (!validation.ok) return res.status(400).json({ success: false, error: validation.error });
 
-    const currentStatus = tasksheet.taskStatus;
-    const previousLevel = tasksheet.taskLevel;
+    const currentStatus = mine.taskStatus;
+    const previousLevel = mine.taskLevel;
     const now = new Date();
 
     const newAction = new Action({
@@ -661,19 +652,22 @@ exports.applyAgentActionLog = async (req, res) => {
     });
     await newAction.save();
 
-    if (validation.taskStatus === 'completed') {
+    if (tasksheet.employees.length > 1) {
+      // many employees: shared task is completed only when EVERYONE is done
+      await syncSharedTaskProgress(taskId);
+    } else if (validation.taskStatus === 'completed') {
       tasksheet.taskStatus = 'completed';
       tasksheet.taskLevel = 100;
       if (!tasksheet.actualEndDate) tasksheet.actualEndDate = now;
+      await tasksheet.save({ validateBeforeSave: false });
     } else {
       tasksheet.taskLevel = validation.taskLevel;
       tasksheet.taskStatus = validation.taskStatus;
+      await tasksheet.save({ validateBeforeSave: false });
     }
-    await tasksheet.save({ validateBeforeSave: false });
 
     await notifyAssignerOnStatusChange(validation.taskStatus, currentStatus, tasksheet, user._id);
 
-    // ✅ Audit trail
     await logAgentAction({
       user,
       actionType: 'action_log',
@@ -704,11 +698,7 @@ exports.applyAgentActionLog = async (req, res) => {
   }
 };
 
-// ─── NEW: GET /api/project-task-agent/audit-log ─────────────────────────────
-// Manager-facing view of everything the Agent has ever changed. A regular
-// employee only sees changes made under THEIR OWN account; someone with
-// 'viewTaskSheet' permission (or the company account) sees the whole
-// company's Agent activity.
+// ─── GET /api/project-task-agent/audit-log ──────────────────────────────────
 exports.getAgentAuditLog = async (req, res) => {
   try {
     const user = req.user;
@@ -724,7 +714,7 @@ exports.getAgentAuditLog = async (req, res) => {
         const employeeDoc = await Employee.findById(user._id).populate('designation');
         const hasPermission = employeeDoc?.designation?.permissions?.includes('viewTaskSheet');
         if (!hasPermission) {
-          query.performedBy = user._id; // only their own Agent-applied changes
+          query.performedBy = user._id;
         }
       } catch (err) {
         query.performedBy = user._id;
