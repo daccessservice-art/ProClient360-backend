@@ -6,7 +6,7 @@ const Project = require('../models/projectModel');
 require('../models/customerModel'); // make sure Customer model is registered for populate()
 
 // ── NEW: show a project in the AMC alert list starting 2 months (60 days) before its End Date ──
-const PROJECT_AMC_ALERT_DAYS = 60;
+const PROJECT_AMC_ALERT_DAYS = 30;
 
 const HEADER_MAP = {
   custName: ['customer name', 'cust name', 'customername', 'name'],
@@ -261,13 +261,6 @@ exports.createOldAMCHistory = async (req, res) => {
   }
 };
 
-// ── NEW: Project AMC Alerts ──
-// Returns projects from Project Master that
-//   • are Completed, OR
-//   • have End Date already passed, OR
-//   • will end within the next 60 days (2 months)
-// and do NOT yet have an AMC record created from them.
-// Project Master data is only READ here, never changed.
 exports.getProjectAMCAlerts = async (req, res) => {
   try {
     const user = req.user;
@@ -275,6 +268,11 @@ exports.getProjectAMCAlerts = async (req, res) => {
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
+    const windowStart = new Date(today);
+    windowStart.setDate(windowStart.getDate() - PROJECT_AMC_ALERT_DAYS);
+    windowStart.setHours(0, 0, 0, 0);
+
     const windowEnd = new Date(today);
     windowEnd.setDate(windowEnd.getDate() + PROJECT_AMC_ALERT_DAYS);
     windowEnd.setHours(23, 59, 59, 999);
@@ -284,12 +282,23 @@ exports.getProjectAMCAlerts = async (req, res) => {
       sourceProject: { $ne: null },
     });
 
-    const projects = await Project.find({
+    const computeWarrantyEnd = (p) => {
+      if (!p.warrantyStartDate || !p.warrantyMonths) return null;
+      const d = new Date(p.warrantyStartDate);
+      if (isNaN(d.getTime())) return null;
+      d.setMonth(d.getMonth() + Number(p.warrantyMonths));
+      return d;
+    };
+
+    const candidates = await Project.find({
       company: companyId,
       _id: { $nin: convertedIds },
       $or: [
-        { endDate: { $lte: windowEnd } },
-        { projectStatus: 'Completed' },
+        { endDate: { $gte: windowStart, $lte: windowEnd } },
+        {
+          warrantyStartDate: { $exists: true, $ne: null, $type: 'date' },
+          warrantyMonths: { $exists: true, $gt: 0 },
+        },
       ],
     })
       .select('name custId category purchaseOrderNo projectStatus completeLevel startDate endDate Address warrantyStartDate warrantyMonths')
@@ -297,17 +306,34 @@ exports.getProjectAMCAlerts = async (req, res) => {
       .sort({ endDate: 1 })
       .lean();
 
+    const projects = candidates.filter((p) => {
+      if (p.endDate) {
+        const end = new Date(p.endDate);
+        if (!isNaN(end.getTime()) && end >= windowStart && end <= windowEnd) {
+          return true;
+        }
+      }
+      const wEnd = computeWarrantyEnd(p);
+      if (wEnd && wEnd >= windowStart && wEnd <= windowEnd) {
+        return true;
+      }
+      return false;
+    });
+
     res.status(200).json({
       success: true,
       projects,
       total: projects.length,
       alertDays: PROJECT_AMC_ALERT_DAYS,
+      windowStart,
+      windowEnd,
     });
   } catch (error) {
     console.error('Error fetching project AMC alerts:', error);
     res.status(500).json({ success: false, error: 'Error fetching project AMC alerts: ' + error.message });
   }
 };
+
 
 // ── Manual Update (single record) ──
 exports.updateOldAMCHistory = async (req, res) => {
