@@ -54,6 +54,8 @@ router.post('/send-to-numbers', permissionMiddleware(['sendCampaign']), ctrl.sen
 // Replies — raw inbound messages/taps
 router.get('/replies', permissionMiddleware(['viewCampaign']), ctrl.listReplies);
 router.get('/replies/customers', permissionMiddleware(['viewCampaign']), ctrl.listReplyCustomers);
+// ✅ NEW — chat for one phone number (Unknown customer cards)
+router.get('/replies/by-phone', permissionMiddleware(['viewCampaign']), ctrl.listRepliesByPhone);
 
 // ✅ NEW — Feasible (Marketing / Sales) / Not Feasible from a reply
 router.get('/replies/decisions', permissionMiddleware(['viewCampaign']), ctrl.listReplyDecisions);

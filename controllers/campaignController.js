@@ -1155,3 +1155,37 @@ exports.listReplyDecisions = async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 };
+
+// ══════════════════════════════════════════════════════════════════
+// ✅ NEW — full chat for ONE phone number (used for "Unknown customer"
+//    cards that are not linked to Customer Master). Returns the raw
+//    replies + any tap-through questionnaire answers for that number.
+// GET /api/campaigns/replies/by-phone?phone=<number>
+// ══════════════════════════════════════════════════════════════════
+exports.listRepliesByPhone = async (req, res) => {
+  try {
+    const companyId = req.user.company || req.user._id;
+    const mobile = last10Digits(req.query.phone);
+    if (!mobile || mobile.length !== 10) {
+      return res.status(400).json({ success: false, error: 'A valid phone number is required.' });
+    }
+
+    const phoneMatch = { $regex: `${mobile}$` };
+
+    const [replies, sessions] = await Promise.all([
+      CampaignReply.find({ company: companyId, phone: phoneMatch })
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean(),
+      CampaignSession.find({ phone: phoneMatch })
+        .populate('template', 'title')
+        .sort({ updatedAt: -1 })
+        .limit(50)
+        .lean(),
+    ]);
+
+    res.status(200).json({ success: true, replies, sessions });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
