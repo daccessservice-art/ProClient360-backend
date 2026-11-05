@@ -55,6 +55,10 @@ router.post('/send-to-numbers', permissionMiddleware(['sendCampaign']), ctrl.sen
 router.get('/replies', permissionMiddleware(['viewCampaign']), ctrl.listReplies);
 router.get('/replies/customers', permissionMiddleware(['viewCampaign']), ctrl.listReplyCustomers);
 
+// ✅ NEW — Feasible (Marketing / Sales) / Not Feasible from a reply
+router.get('/replies/decisions', permissionMiddleware(['viewCampaign']), ctrl.listReplyDecisions);
+router.post('/replies/decision', permissionMiddleware(['viewCampaign']), ctrl.decideReply);
+
 // Sessions — NEW: structured Q&A from the tap-through questionnaire
 router.get('/sessions', permissionMiddleware(['viewCampaign']), ctrl.listSessions);
 

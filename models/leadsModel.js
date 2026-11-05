@@ -53,7 +53,7 @@ const leadSchema = new Schema({
     ref: 'Customer',
     default: null
   },
-  
+
   // ✅ NEW FIELDS ADDED
   customerPriority: {
     type: String,
@@ -224,6 +224,13 @@ const leadSchema = new Schema({
     type: Date,
     default: null
   },
+
+  // ✅ NEW — true for leads created from a WhatsApp Campaign reply
+  isCampaignLead: {
+    type: Boolean,
+    default: false,
+  },
+
   callUnansweredMailSent: {
     type: Boolean,
     default: false,

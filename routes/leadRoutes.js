@@ -216,6 +216,53 @@ router.put('/transfer-ownership', permissionMiddleware(['updateLead']), leadCont
 router.put('/submit-enquiry/:id', isLoggedIn,                          leadController.submiEnquiry);
 router.put('/meeting-log/:id',    isLoggedIn,                          leadController.saveMeetingLog);
 
+// ✅ NEW — WhatsApp campaign lead: marketing / sales user fills the
+//    missing details after calling the customer
+router.put('/campaign-lead-details/:id', isLoggedIn, async (req, res) => {
+  try {
+    const user = req.user;
+    const { id } = req.params;
+
+    if (!Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, error: 'Invalid lead ID.' });
+
+    const lead = await Lead.findOne({ _id: id, company: user.company || user._id });
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found.' });
+    if (!lead.isCampaignLead)
+      return res.status(400).json({ success: false, error: 'Only WhatsApp campaign leads can be edited here.' });
+    if (lead.STATUS === 'Won' || lead.STATUS === 'Lost')
+      return res.status(400).json({ success: false, error: `Cannot edit a "${lead.STATUS}" lead.` });
+
+    const allowed = [
+      'SENDER_NAME', 'SENDER_COMPANY', 'SENDER_EMAIL', 'SENDER_MOBILE',
+      'SUBJECT', 'QUERY_PRODUCT_NAME', 'QUERY_MESSAGE',
+      'SENDER_ADDRESS', 'SENDER_CITY', 'SENDER_STATE', 'SENDER_PINCODE', 'SENDER_COUNTRY_ISO',
+    ];
+
+    for (const key of allowed) {
+      if (req.body[key] === undefined) continue;
+      let val = String(req.body[key] ?? '').trim();
+
+      if (key === 'SENDER_MOBILE') {
+        val = val.replace(/\D/g, '');
+        if (val.length !== 10)
+          return res.status(400).json({ success: false, error: 'Mobile number must be 10 digits.' });
+      }
+      if (key === 'SENDER_NAME' && !val)
+        return res.status(400).json({ success: false, error: 'Contact name cannot be empty.' });
+      if (key === 'SENDER_PINCODE' && val && !/^\d{6}$/.test(val))
+        return res.status(400).json({ success: false, error: 'Pincode must be 6 digits.' });
+
+      lead[key] = val;
+    }
+
+    await lead.save();
+    res.status(200).json({ success: true, message: 'Lead details updated.', data: lead });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ✅ Survey report upload — BEFORE /:id
 router.put('/survey-report/:id', isLoggedIn, handleSurveyUpload, leadController.submitSurveyReport);
 

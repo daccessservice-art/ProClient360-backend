@@ -1012,3 +1012,146 @@ exports.sendCampaignToNumbers = async (req, res) => {
     res.status(500).json({ success: false, error: `Campaign failed: ${err.message}` });
   }
 };
+// ══════════════════════════════════════════════════════════════════
+// ✅ NEW — WhatsApp Campaign reply → Feasible (Marketing / Sales) or Not Feasible
+//    Fully additive. Creates a Lead with ONLY name + mobile; everything
+//    else stays empty so the marketing / sales user fills it after calling.
+// ══════════════════════════════════════════════════════════════════
+
+// POST /api/campaigns/replies/decision
+// Body: { phone, customerId?, name?, decision: 'feasible'|'not-feasible',
+//         target?: 'marketing'|'sales', remark?, assignedTo? }
+exports.decideReply = async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const Lead = require('../models/leadsModel');
+    const Customer = require('../models/customerModel');
+    const CampaignLead = require('../models/campaignLeadModel');
+
+    const companyId = req.user.company || req.user._id;
+    const { phone, customerId, name, decision, target, remark, assignedTo } = req.body;
+
+    const mobile = last10Digits(phone);
+    if (!mobile || mobile.length !== 10) {
+      return res.status(400).json({ success: false, error: 'A valid 10-digit mobile number is required.' });
+    }
+    if (!['feasible', 'not-feasible'].includes(decision)) {
+      return res.status(400).json({ success: false, error: 'Decision must be Feasible or Not Feasible.' });
+    }
+    if (decision === 'feasible' && !['marketing', 'sales'].includes(target)) {
+      return res.status(400).json({ success: false, error: 'Choose Marketing Master or Sales Master.' });
+    }
+    if (decision === 'not-feasible' && !String(remark || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Remark is required for Not Feasible.' });
+    }
+
+    // One decision per phone — allowed again only if the earlier lead was deleted
+    const existing = await CampaignLead.findOne({ company: companyId, phone: mobile });
+    if (existing) {
+      const leadStillThere = existing.lead ? await Lead.exists({ _id: existing.lead }) : null;
+      if (leadStillThere) {
+        const where = existing.decision === 'not-feasible'
+          ? 'Not Feasible'
+          : existing.target === 'sales' ? 'Sales Master' : 'Marketing Master';
+        return res.status(409).json({ success: false, error: `This customer is already in ${where}.` });
+      }
+      await CampaignLead.deleteOne({ _id: existing._id });
+    }
+
+    let customer = null;
+    if (customerId && mongoose.Types.ObjectId.isValid(customerId)) {
+      customer = await Customer.findOne({ _id: customerId, company: companyId }).select('custName');
+    }
+    const leadName = String(name || '').trim() || customer?.custName || 'WhatsApp Customer';
+
+    // ONLY name + mobile — all other sender/query fields stay empty
+    const leadData = {
+      company: companyId,
+      SOURCE: 'WhatsApp',
+      SENDER_NAME: leadName,
+      SENDER_MOBILE: mobile,
+      QUERY_TIME: new Date(),
+      callHistory: [],
+      isCampaignLead: true,
+      customerType: customer ? 'existing' : 'new',
+      customerId: customer ? customer._id : null,
+    };
+
+    let salesOwner = null;
+
+    if (decision === 'not-feasible') {
+      // Shows in Marketing → "Not Feasible" card with this remark
+      leadData.feasibility = 'not-feasible';
+      leadData.remark = String(remark).trim();
+      leadData.assignedBy = req.user._id;
+      leadData.assignedTime = new Date();
+    } else if (target === 'marketing') {
+      // Shows in Marketing Dashboard list (pending) — marketing assigns it as usual
+      leadData.feasibility = 'none';
+      if (remark) leadData.remark = String(remark).trim();
+    } else {
+      // Goes straight to Sales Master (My Sales Dashboard of the owner)
+      salesOwner = assignedTo && mongoose.Types.ObjectId.isValid(assignedTo) ? assignedTo : req.user._id;
+      leadData.feasibility = 'feasible';
+      leadData.STATUS = 'Pending';
+      leadData.assignedTo = salesOwner;
+      leadData.assignedBy = req.user._id;
+      leadData.assignedTime = new Date();
+      leadData.remark = String(remark || '').trim() || 'From WhatsApp Campaign';
+    }
+
+    const lead = await Lead.create(leadData);
+
+    await CampaignLead.create({
+      company: companyId,
+      customer: customer ? customer._id : null,
+      phone: mobile,
+      name: leadName,
+      decision,
+      target: decision === 'feasible' ? target : undefined,
+      remark: String(remark || '').trim(),
+      lead: lead._id,
+      assignedTo: salesOwner,
+      decidedBy: req.user._id,
+    });
+
+    // Notify the sales employee (same service the lead module already uses)
+    if (salesOwner && String(salesOwner) !== String(req.user._id)) {
+      try {
+        const { notifyLeadAssigned } = require('../services/leadNotificationService');
+        notifyLeadAssigned(lead, salesOwner, req.user);
+      } catch (notifyErr) {
+        console.error('[Campaign Lead] notify failed:', notifyErr.message);
+      }
+    }
+
+    const message = decision === 'not-feasible'
+      ? 'Marked Not Feasible — visible in Marketing → Not Feasible.'
+      : target === 'sales'
+        ? 'Lead sent to Sales Master.'
+        : 'Lead sent to Marketing Master.';
+
+    res.status(201).json({ success: true, message, leadId: lead._id });
+  } catch (err) {
+    console.error('decideReply error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
+
+// GET /api/campaigns/replies/decisions
+exports.listReplyDecisions = async (req, res) => {
+  try {
+    const CampaignLead = require('../models/campaignLeadModel');
+    const companyId = req.user.company || req.user._id;
+
+    const decisions = await CampaignLead.find({ company: companyId })
+      .select('phone name decision target remark lead assignedTo createdAt')
+      .populate('assignedTo', 'name')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({ success: true, decisions });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+};
