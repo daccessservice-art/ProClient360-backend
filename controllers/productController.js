@@ -1,4 +1,6 @@
 const Product = require("../models/productModel");
+// ✅ NEW: keep Inventory Master in sync with every product add / edit / delete
+const inventorySync = require("./inventoryController");
 
 exports.getProduct = async (req, res) => {
   try {
@@ -253,6 +255,8 @@ exports.createProduct = async (req, res) => {
 
     if (newProduct) {
       await newProduct.save();
+      // ✅ NEW: product appears in Inventory Master immediately (same stock, added-by, time)
+      await inventorySync.onProductCreated(newProduct.toObject(), user);
       res.status(201).json({
         success: true,
         message: "Product created successfully",
@@ -284,11 +288,14 @@ exports.deleteProduct = async (req, res) => {
     const product = await Product.findByIdAndDelete(productId);
 
     if (!product) {
-      return res.status(404).json({ 
-        success: false, 
-        error: "Product Not Found!!" 
+      return res.status(404).json({
+        success: false,
+        error: "Product Not Found!!"
       });
     }
+
+    // ✅ NEW: remove / unlink its Inventory Master row
+    await inventorySync.onProductsDeleted([product.toObject()], req.user);
 
     res.status(200).json({ 
       success: true, 
@@ -310,7 +317,11 @@ exports.bulkDeleteProducts = async (req, res) => {
       return res.status(400).json({ success: false, error: "Please provide an array of product ids to delete" });
     }
 
+    const toDelete = await Product.find({ _id: { $in: ids } }).lean();
     const result = await Product.deleteMany({ _id: { $in: ids } });
+
+    // ✅ NEW: remove / unlink their Inventory Master rows
+    await inventorySync.onProductsDeleted(toDelete, req.user);
 
     res.status(200).json({
       success: true,
@@ -343,6 +354,10 @@ exports.updateProduct = async (req, res) => {
       new: true,
       runValidators: true,
     });
+
+    // ✅ NEW: name / brand / model / UOM follow in Inventory Master, and a direct
+    // "Current Stock Qty" edit is recorded in the item's stock history (who + when)
+    await inventorySync.onProductUpdated(existingProduct.toObject(), updatedProduct.toObject(), req.user);
 
     res.status(200).json({ 
       success: true, 

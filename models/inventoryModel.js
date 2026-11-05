@@ -1,38 +1,62 @@
 const mongoose = require('mongoose');
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Manual stock transaction (Incoming / Outgoing done from Inventory Master)
+// ─────────────────────────────────────────────────────────────────────────────
 const transactionSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['incoming', 'outgoing']
+    enum: ['incoming', 'outgoing'],
   },
   quantity: {
     type: Number,
     required: true,
-    min: [1, 'Quantity must be at least 1']
+    min: [0.01, 'Quantity must be greater than 0'],
   },
   reason: {
     type: String,
     required: true,
     trim: true,
-    maxlength: [200, 'Reason cannot exceed 200 characters']
+    maxlength: [200, 'Reason cannot exceed 200 characters'],
   },
   date: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   by: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Employee'
-  }
+    ref: 'Employee',
+  },
+  // 'inventory' = done in Inventory Master, 'product-master' = stock edited in Product Master
+  source: {
+    type: String,
+    enum: ['inventory', 'product-master'],
+    default: 'inventory',
+  },
 }, { _id: true });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Activity log: who created / edited the item and what changed
+// ─────────────────────────────────────────────────────────────────────────────
+const activitySchema = new mongoose.Schema({
+  action: { type: String, required: true, trim: true },       // Created | Updated | Stock In | Stock Out
+  details: { type: String, trim: true, default: '' },
+  changes: { type: [mongoose.Schema.Types.Mixed], default: [] }, // [{ field, label, from, to }]
+  by: { type: mongoose.Schema.Types.ObjectId },                  // employee OR company login id
+  byName: { type: String, trim: true, default: '' },             // name saved at that moment
+  at: { type: Date, default: Date.now },
+}, { _id: true });
+
+const CATEGORY_VALUES =['Raw Material', 'Finished Goods', 'Repairing Material', 'Scrap', 'Asset'];
+
 const inventorySchema = new mongoose.Schema({
-  // Basic inventory fields
+  // ── Basic inventory fields ──
+  // NOTE: materialCode is now unique PER COMPANY (see compound index below),
+  // not globally unique. Two companies can use the same code.
   materialCode: {
     type: String,
     required: [true, 'Material code is required'],
-    unique: true,
     trim: true,
     maxlength: [50, 'Material code cannot exceed 50 characters'],
   },
@@ -44,14 +68,26 @@ const inventorySchema = new mongoose.Schema({
   category: {
     type: String,
     enum: {
-      values: ['Raw Material', 'Finished Goods', 'Repairing Material', 'Scrap', 'Asset'], // Added 'Asset'
+      values: CATEGORY_VALUES,
       message: 'Category must be one of: Raw Material, Finished Goods, Repairing Material, Scrap, Asset',
     },
     trim: true,
+    default: 'Raw Material',
   },
   unitPrice: {
     type: Number,
     min: [0, 'Unit price cannot be negative'],
+    default: 0,
+  },
+
+  // ── Stock ──
+  // openingStock  = stock entered when the item was created (or edited later)
+  // currentStock  = stored mirror; the LIVE value is calculated by the controller:
+  //                 linked item   -> Product Master currentStockQty (updated by GRN / DC)
+  //                 unlinked item -> opening + manual in - manual out + GRN in - DC out
+  openingStock: {
+    type: Number,
+    min: [0, 'Opening stock cannot be negative'],
   },
   currentStock: {
     type: Number,
@@ -61,6 +97,7 @@ const inventorySchema = new mongoose.Schema({
   minStockLevel: {
     type: Number,
     min: [0, 'Minimum stock level cannot be negative'],
+    default: 0,
   },
   warehouseLocation: {
     type: String,
@@ -74,7 +111,7 @@ const inventorySchema = new mongoose.Schema({
     maxlength: [100, 'Location cannot exceed 100 characters'],
     default: '',
   },
-  openingDate: { // New field
+  openingDate: {
     type: Date,
     default: Date.now,
   },
@@ -84,8 +121,20 @@ const inventorySchema = new mongoose.Schema({
     maxlength: [500, 'Description cannot exceed 500 characters'],
     default: '',
   },
-  
-  // Product fields
+
+  // ── Link to Product Master (source of live stock) ──
+  linkedProduct: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    default: null,
+  },
+  // true = row was created automatically because a product was added in Product Master
+  autoCreated: {
+    type: Boolean,
+    default: false,
+  },
+
+  // ── Product fields ──
   productName: {
     type: String,
     trim: true,
@@ -147,8 +196,8 @@ const inventorySchema = new mongoose.Schema({
     min: [0, 'Discount value cannot be negative'],
     default: 0,
   },
-  
-  // Tax fields
+
+  // ── Tax fields ──
   taxType: {
     type: String,
     enum: ['none', 'gst'],
@@ -162,11 +211,14 @@ const inventorySchema = new mongoose.Schema({
   gstEffectiveDate: {
     type: Date,
   },
-  
-  // Transaction history
+
+  // ── Manual transaction history ──
   transactions: [transactionSchema],
-  
-  // Company and user references
+
+  // ── Who did what, and when ──
+  activityLog: [activitySchema],
+
+  // ── Company and user references ──
   company: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Company',
@@ -180,33 +232,42 @@ const inventorySchema = new mongoose.Schema({
   lastUpdatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Employee',
-  }
+  },
 }, {
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
 });
 
-// Virtual for stock status
-inventorySchema.virtual('stockStatus').get(function() {
-  if (this.currentStock === 0) return 'Out of Stock';
-  if (this.currentStock <= this.minStockLevel) return 'Low Stock';
-  return 'In Stock';
-});
-
-// Virtual for total value
-inventorySchema.virtual('totalValue').get(function() {
-  return this.currentStock * this.unitPrice;
-});
-
-// Indexes for faster searches
-inventorySchema.index({ materialCode: 1 });
-inventorySchema.index({ materialName: 1 });
+// ── Indexes ──
+inventorySchema.index({ company: 1, materialCode: 1 }, { unique: true });
+inventorySchema.index({ company: 1, linkedProduct: 1 });
+inventorySchema.index({ company: 1, createdAt: -1 });
 inventorySchema.index({ productName: 1 });
 inventorySchema.index({ category: 1 });
-inventorySchema.index({ currentStock: 1 });
-inventorySchema.index({ company: 1 });
 
 const Inventory = mongoose.model('Inventory', inventorySchema);
+Inventory.CATEGORY_VALUES = CATEGORY_VALUES;
+
+// ── One-time cleanup: the old schema had a GLOBAL unique index on materialCode
+// (materialCode_1). Drop it so the per-company unique index above is used. ──
+const dropLegacyMaterialCodeIndex = async () => {
+  try {
+    const indexes = await Inventory.collection.indexes();
+    const legacy = indexes.find((i) => i.name === 'materialCode_1' && i.unique);
+    if (legacy) {
+      await Inventory.collection.dropIndex('materialCode_1');
+      console.log('✅ [Inventory] Dropped old global unique index materialCode_1');
+    }
+  } catch (e) {
+    if (e?.codeName !== 'NamespaceNotFound') {
+      console.warn('ℹ️ [Inventory] Legacy index check skipped:', e.message);
+    }
+  }
+};
+
+if (mongoose.connection.readyState === 1) {
+  dropLegacyMaterialCodeIndex();
+} else {
+  mongoose.connection.once('open', dropLegacyMaterialCodeIndex);
+}
 
 module.exports = Inventory;
