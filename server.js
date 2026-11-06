@@ -101,6 +101,9 @@ const salesTargetRoutes = require('./routes/salesTargetRoutes');
 const exotelCallingRoutes = require('./routes/exotelCallingRoutes');
 const { attachExotelMediaStream } = require('./services/exotelMediaStream');
 
+// ✅✅ NEW — proclient360 Android push notifications (separate Firebase app, old notifications untouched)
+const proclientRoutes = require('./proclient/proclientRoutes');
+
 
 console.log('Initializing daily Sales Manager report scheduler...');
 initializeDailySalesManagerReportScheduler();
@@ -349,6 +352,11 @@ app.use('/api/sales-target', salesTargetRoutes);
 console.log('Registering /api/exotel-calling routes...');
 app.use('/api/exotel-calling', exotelCallingRoutes);
 console.log('Exotel calling agent routes registered at /api/exotel-calling');
+
+// ✅✅ NEW — proclient360 Android notification routes (old /api/notification untouched)
+console.log('Registering /api/proclient routes...');
+app.use('/api/proclient', proclientRoutes);
+console.log('Proclient360 notification routes registered at /api/proclient');
 
 
 app.use((err, req, res, next) => {  
