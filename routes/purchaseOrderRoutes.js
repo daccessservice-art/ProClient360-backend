@@ -1,6 +1,10 @@
 const express = require('express');
 const { permissionMiddleware } = require('../middlewares/auth');
-const { showAll, createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder, getPurchaseOrder, getPurchaseOrderHistory, getMyCompanyProfile } = require('../controllers/purchaseOrderController');
+const {
+  showAll, createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
+  getPurchaseOrder, getPurchaseOrderHistory, getMyCompanyProfile,
+  getProjectCustomers, getProjectsByCustomer   // ✅ NEW
+} = require('../controllers/purchaseOrderController');
 const { downloadPurchaseOrderPDF } = require('../controllers/purchaseOrderPdfController');
 const upload = require('../middlewares/fileUpload');
 const { bucket } = require('../utils/firebase');
@@ -11,9 +15,10 @@ const router = express.Router();
 
 router.get('/', permissionMiddleware(['viewPurchaseOrder']), showAll);
 
-// ✅ NEW: must stay ABOVE '/:id' route, otherwise Express treats
-// "company-profile" as an :id value and the lookup breaks.
+// ✅ These must stay ABOVE '/:id', otherwise Express treats them as an :id value.
 router.get('/company-profile', permissionMiddleware(['viewPurchaseOrder']), getMyCompanyProfile);
+router.get('/project-customers', permissionMiddleware(['viewPurchaseOrder']), getProjectCustomers);            // ✅ NEW
+router.get('/customer-projects/:custId', permissionMiddleware(['viewPurchaseOrder']), getProjectsByCustomer);   // ✅ NEW
 
 router.get('/:id', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrder);
 router.get('/:id/history', permissionMiddleware(['viewPurchaseOrder']), getPurchaseOrderHistory);

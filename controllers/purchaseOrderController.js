@@ -1,13 +1,27 @@
+const mongoose = require("mongoose");
 const PurchaseOrder = require("../models/purchaseOrderModel");
 const PurchaseOrderHistory = require("../models/purchaseOrderHistoryModel");
 const Company = require("../models/companyModel");
+// ✅ NEW: needed for Customer → Project selection in PO popups
+const Project = require("../models/projectModel");
+const Customer = require("../models/customerModel");
 const { sendPurchaseOrderApprovalMail } = require("../mailsService/purchaseOrderApprovalMail");
+
+// ✅ NEW: only these project statuses can be picked on a Purchase Order
+const PO_ALLOWED_PROJECT_STATUSES = ["Inprocess", "Completed"];
+
+// ✅ NEW: project populate now also brings status + customer (for Update popup prefill)
+const PROJECT_POPULATE = {
+  path: 'project',
+  select: 'name projectStatus purchaseOrderNo custId',
+  populate: { path: 'custId', select: 'custName' },
+};
 
 exports.getPurchaseOrder = async (req, res) => {
   try {
     const purchaseOrder = await PurchaseOrder.findById(req.params.id)
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
-      .populate('project', 'name')
+      .populate(PROJECT_POPULATE)
       .populate('createdBy', 'name email')
       .populate('company', 'name logo GST Address');
 
@@ -83,7 +97,7 @@ exports.showAll = async (req, res) => {
       .skip(skip)
       .limit(limit)
       .populate('vendor', 'vendorName email phoneNumber1 billingAddress manualAddress typeOfVendor GSTNo')
-      .populate('project', 'name')
+      .populate(PROJECT_POPULATE)
       .populate('createdBy', 'name email')
       .populate('company', 'name logo GST Address')
       .sort({ createdAt: -1 })
@@ -337,5 +351,60 @@ exports.getMyCompanyProfile = async (req, res) => {
     res.status(200).json({ success: true, company });
   } catch (error) {
     res.status(500).json({ success: false, error: "Error fetching company profile: " + error.message });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ NEW: Customers that have at least one In-process / Completed project
+// GET /api/purchaseOrder/project-customers
+// ═══════════════════════════════════════════════════════════════════════════
+exports.getProjectCustomers = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company ? user.company : user._id;
+
+    const custIds = await Project.distinct('custId', {
+      company: companyId,
+      projectStatus: { $in: PO_ALLOWED_PROJECT_STATUSES },
+      custId: { $ne: null },
+    });
+
+    const customers = await Customer.find({ _id: { $in: custIds } })
+      .select('custName')
+      .sort({ custName: 1 })
+      .lean();
+
+    res.status(200).json({ success: true, customers });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching customers: " + error.message });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ NEW: In-process / Completed projects of one customer
+// GET /api/purchaseOrder/customer-projects/:custId
+// ═══════════════════════════════════════════════════════════════════════════
+exports.getProjectsByCustomer = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company ? user.company : user._id;
+    const { custId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(custId)) {
+      return res.status(400).json({ success: false, error: "Invalid customer id" });
+    }
+
+    const projects = await Project.find({
+      company: companyId,
+      custId,
+      projectStatus: { $in: PO_ALLOWED_PROJECT_STATUSES },
+    })
+      .select('name projectStatus purchaseOrderNo custId')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({ success: true, projects });
+  } catch (error) {
+    res.status(500).json({ success: false, error: "Error fetching customer projects: " + error.message });
   }
 };
