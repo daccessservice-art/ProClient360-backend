@@ -10,6 +10,31 @@ const Customer = require("../models/customerModel");
 const {bucket} = require('../utils/firebase');
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 
+// ─── ✅ NEW: Project approval helpers ─────────────────────────────────────────
+// Only this designation can approve / reject projects.
+const APPROVER_DESIGNATION = "director customer delight";
+
+const getDesignationName = async (user) => {
+  const d = user?.designation;
+  if (!d) return "";
+  // already populated object
+  if (typeof d === "object" && !(d instanceof ObjectId) && (d.name || d.designation || d.designationName)) {
+    return d.name || d.designation || d.designationName || "";
+  }
+  // plain text designation
+  if (typeof d === "string" && !ObjectId.isValid(d)) return d;
+  // ObjectId → look it up
+  const doc = await Designation.findById(d).lean();
+  return doc?.name || doc?.designation || doc?.designationName || "";
+};
+
+const isProjectApprover = async (user) => {
+  if (!user || !user.company) return false; // company login is not an employee
+  const name = (await getDesignationName(user)).trim().toLowerCase();
+  return name === APPROVER_DESIGNATION;
+};
+// ──────────────────────────────────────────────────────────────────────────────
+
 exports.showAll = async (req, res) => {
   try {
     const user = req.user;
@@ -67,8 +92,12 @@ exports.showAll = async (req, res) => {
       .limit(limit)
       .populate("custId", "custName")
       .populate({ path: 'createdBy', model: 'Employee', select: 'name' })
+      .populate({ path: 'approvedBy', model: 'Employee', select: 'name' }) // ✅ NEW
       .sort({ createdAt: -1 })
       .lean();
+
+    // ✅ NEW: old projects have no approvalStatus → treat as Approved
+    projects.forEach(p => { if (!p.approvalStatus) p.approvalStatus = 'Approved'; });
 
     if (projects.length <= 0) {
       return res.status(200).json({
@@ -253,6 +282,10 @@ exports.create = async (req, res) => {
     }
     // ──────────────────────────────────────────────────────────────────────────
 
+    // ✅ NEW: every new project waits for "Director Customer Delight" approval.
+    // If the Director creates it himself, it is approved straight away.
+    const creatorIsApprover = await isProjectApprover(user);
+
     const newProject = new Project({
       custId,
       name,
@@ -281,6 +314,10 @@ exports.create = async (req, res) => {
           ? "Inprocess"
           : "Completed",
       company: user.company ? user.company : user._id,
+      // ✅ NEW: approval
+      approvalStatus: creatorIsApprover ? 'Approved' : 'Pending',
+      approvedBy: creatorIsApprover ? user._id : null,
+      approvedAt: creatorIsApprover ? new Date() : null,
       createdAt: new Date()
     });
 
@@ -289,7 +326,9 @@ exports.create = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Project Created Successfully",
+      message: creatorIsApprover
+        ? "Project Created Successfully"
+        : "Project Created Successfully. Waiting for approval from Director Customer Delight.",
       project: savedProject
     });
   } catch (error) {
@@ -564,6 +603,21 @@ exports.updateProject = async (req, res) => {
       if (!isNaN(months)) updateData.warrantyMonths = months;
     }
 
+    // ✅ NEW: project not approved → cannot be marked Completed
+    const currentApproval = originalData.approvalStatus || 'Approved';
+    if (currentApproval !== 'Approved' && updateData.projectStatus === 'Completed') {
+      return res.status(400).json({
+        success: false,
+        error: "This project is not approved yet by Director Customer Delight. It cannot be marked Completed.",
+      });
+    }
+
+    // ✅ NEW: a Rejected project that is edited goes back to Pending for re-approval
+    if (currentApproval === 'Rejected') {
+      updateData.approvalStatus = 'Pending';
+      updateData.rejectionReason = '';
+    }
+
     const updatedProjectDoc = await Project.findByIdAndUpdate(
       id,
       { $set: updateData },
@@ -607,5 +661,127 @@ exports.updateProject = async (req, res) => {
   } catch (error) {
     console.error("Error updating project:", error);
     return res.status(500).json({ error: "Error While Updating Project: " + error.message });
+  }
+};
+// ═══════════════════════════════════════════════════════════════════════════════
+// ✅ NEW: PROJECT APPROVAL (Director Customer Delight only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/project/approval/pending  → projects waiting for approval
+exports.pendingApprovals = async (req, res) => {
+  try {
+    const user = req.user;
+
+    if (!(await isProjectApprover(user))) {
+      return res.status(403).json({
+        success: false,
+        error: "Only Director Customer Delight can view projects for approval.",
+      });
+    }
+
+    const projects = await Project.find({
+      company: user.company,
+      approvalStatus: 'Pending',
+    })
+      .populate("custId", "custName email phoneNumber1")
+      .populate({ path: 'createdBy', model: 'Employee', select: 'name email' })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.status(200).json({ success: true, count: projects.length, projects });
+  } catch (error) {
+    console.error("Error in pendingApprovals:", error);
+    res.status(500).json({ success: false, error: "Error while fetching pending projects: " + error.message });
+  }
+};
+
+// PUT /api/project/:id/approve   body: { remark }
+exports.approveProject = async (req, res) => {
+  try {
+    const user = req.user;
+
+    if (!(await isProjectApprover(user))) {
+      return res.status(403).json({
+        success: false,
+        error: "Only Director Customer Delight can approve projects.",
+      });
+    }
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ success: false, error: "Project not found" });
+    }
+    if (String(project.company) !== String(user.company)) {
+      return res.status(403).json({ success: false, error: "Access denied for this project" });
+    }
+    if (project.approvalStatus === 'Approved') {
+      return res.status(400).json({ success: false, error: "Project is already approved" });
+    }
+
+    const oldData = { _id: project._id, approvalStatus: project.approvalStatus };
+
+    project.approvalStatus = 'Approved';
+    project.approvedBy = user._id;
+    project.approvedAt = new Date();
+    project.approvalRemark = (req.body?.remark || '').toString().trim().substring(0, 500);
+    project.rejectionReason = '';
+    await project.save();
+
+    try {
+      await logUpdate(oldData, { _id: project._id, approvalStatus: 'Approved' }, user, req, 'Project');
+    } catch (e) {
+      console.error("approveProject log error:", e.message);
+    }
+
+    res.status(200).json({ success: true, message: "Project approved successfully", project });
+  } catch (error) {
+    console.error("Error in approveProject:", error);
+    res.status(500).json({ success: false, error: "Error while approving project: " + error.message });
+  }
+};
+
+// PUT /api/project/:id/reject   body: { reason }
+exports.rejectProject = async (req, res) => {
+  try {
+    const user = req.user;
+
+    if (!(await isProjectApprover(user))) {
+      return res.status(403).json({
+        success: false,
+        error: "Only Director Customer Delight can reject projects.",
+      });
+    }
+
+    const reason = (req.body?.reason || '').toString().trim();
+    if (!reason) {
+      return res.status(400).json({ success: false, error: "Rejection reason is required" });
+    }
+
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ success: false, error: "Project not found" });
+    }
+    if (String(project.company) !== String(user.company)) {
+      return res.status(403).json({ success: false, error: "Access denied for this project" });
+    }
+
+    const oldData = { _id: project._id, approvalStatus: project.approvalStatus };
+
+    project.approvalStatus = 'Rejected';
+    project.rejectionReason = reason.substring(0, 500);
+    project.approvedBy = user._id;
+    project.approvedAt = new Date();
+    await project.save();
+
+    try {
+      await logUpdate(oldData, { _id: project._id, approvalStatus: 'Rejected' }, user, req, 'Project');
+    } catch (e) {
+      console.error("rejectProject log error:", e.message);
+    }
+
+    res.status(200).json({ success: true, message: "Project rejected", project });
+  } catch (error) {
+    console.error("Error in rejectProject:", error);
+    res.status(500).json({ success: false, error: "Error while rejecting project: " + error.message });
   }
 };

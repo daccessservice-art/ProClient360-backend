@@ -64,6 +64,9 @@ const dcRoutes = require('./routes/dcRoutes');
 
 const mrfRoutes = require('./routes/mrfRoutes');
 
+// ✅ NEW — Project MRF (raised from Project Master, deducts Product Master stock)
+const projectMrfRoutes = require('./routes/projectMrfRoutes');
+
 const activityLogRoutes = require('./routes/activityLogRoutes');
 
 const exhibitionRoutes = require('./routes/exhibitionRoutes');
@@ -323,6 +326,7 @@ app.use('/api/grn', grnRoutes);
 app.use('/api/qc', qcRoutes);
 app.use('/api/dc', dcRoutes);
 app.use('/api/mrf', mrfRoutes);
+app.use('/api/project-mrf', projectMrfRoutes); // ✅ NEW — Project MRF
 app.use('/api/exhibition', exhibitionRoutes);
 app.use('/api/account', accountMasterRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

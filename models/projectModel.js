@@ -180,6 +180,33 @@ const projectSchema = new mongoose.Schema({
         type: Number,
         min: [0, 'Warranty months cannot be negative'],
     },
+
+    // ✅ NEW: Project approval (only "Director Customer Delight" can approve)
+    // default 'Approved' so all OLD projects keep working; new projects are created as 'Pending'
+    approvalStatus: {
+        type: String,
+        enum: ['Pending', 'Approved', 'Rejected'],
+        default: 'Approved',
+    },
+    approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Employee',
+        default: null,
+    },
+    approvedAt: {
+        type: Date,
+        default: null,
+    },
+    approvalRemark: {
+        type: String,
+        maxlength: [500, 'Approval remark cannot exceed 500 characters'],
+        default: '',
+    },
+    rejectionReason: {
+        type: String,
+        maxlength: [500, 'Rejection reason cannot exceed 500 characters'],
+        default: '',
+    },
 }, {
     timestamps: true,
 });
