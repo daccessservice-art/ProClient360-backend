@@ -23,6 +23,18 @@ const PRODUCT_MAP = {
 
 const EMAIL_RE = /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/;
 
+// Optional product filter. Not set in .env -> OFF, all tickets of the API are imported.
+const FILTER_FIELD  = process.env.EXTERNAL_FILTER_FIELD || 'Product_Name';
+const FILTER_VALUES = String(process.env.EXTERNAL_FILTER_VALUES || '')
+  .split(',').map((v) => v.toLowerCase().replace(/[^a-z0-9]/g, '')).filter(Boolean);
+
+const norm = (v) => String(v ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const getAppName = (t) => {
+  const x = t?.ticket || t || {};
+  return x[FILTER_FIELD] ?? t?.[FILTER_FIELD] ?? '';
+};
+const isAllowedApp = (t) => !FILTER_VALUES.length || FILTER_VALUES.includes(norm(getAppName(t)));
+
 const stateCol = () => mongoose.connection.db.collection('externalsyncstates');
 
 // ID is in ticket.Uniqueid (nested), Uniqueid (flat, current API) or id (old format)
@@ -96,6 +108,8 @@ async function importOne(t) {
   }
   const uid = `EXT-${id}`;
   const x = t.ticket || t;   // flat format has fields at top level
+
+  if (!isAllowedApp(t)) return 'skipped';
 
   // keep the full raw external data (used by the eye button)
   await ExternalTicket.updateOne(
@@ -197,9 +211,7 @@ async function syncExternalTickets() {
       if (list.length < PAGE_SIZE) break;
     }
 
-    if (added > 0) {
-      console.log(`External sync: fetched ${fetched}, added ${added}`);
-    }
+    console.log(`External sync: fetched ${fetched}, added ${added}`);
   } catch (e) {
     console.error('External sync error:', e.message);
   } finally {
@@ -207,4 +219,4 @@ async function syncExternalTickets() {
   }
 }
 
-module.exports = { syncExternalTickets };
+module.exports = { syncExternalTickets, isAllowedApp, getAppName };
