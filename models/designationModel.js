@@ -1,4 +1,3 @@
-const { unix } = require('moment');
 const mongoose = require('mongoose');
 
 const designationSchema = new mongoose.Schema({
@@ -63,10 +62,15 @@ const designationSchema = new mongoose.Schema({
             'updateDepartment',
             'deleteDepartment',
 
+            // Service Master — Service Manager only
             'viewService',
             'createService',
             'updateService',
             'deleteService',
+
+            // ✅ NEW — My Service — Service Employee (only own assigned services)
+            'viewMyService',
+            'updateMyService',
 
             "viewFeedback",
             "createFeedback",
@@ -92,7 +96,7 @@ const designationSchema = new mongoose.Schema({
             "createActivityLog",
             "updateActivityLog",
             "deleteActivityLog",
-    
+
             "viewAMC",
             "createAMC",
             "updateAMC",
@@ -108,36 +112,35 @@ const designationSchema = new mongoose.Schema({
             "updateInventory",
             "deleteInventory",
 
-            
-             'createVendor',
-             'updateVendor',
-             'deleteVendor',
-             'viewVendor',
+            'createVendor',
+            'updateVendor',
+            'deleteVendor',
+            'viewVendor',
 
-             "viewProduct",
-             "createProduct",
-             "updateProduct",
-             "deleteProduct",
+            "viewProduct",
+            "createProduct",
+            "updateProduct",
+            "deleteProduct",
 
-             'createPurchaseOrder',
-             'viewPurchaseOrder',
-             'updatePurchaseOrder',
-             'deletePurchaseOrder',
+            'createPurchaseOrder',
+            'viewPurchaseOrder',
+            'updatePurchaseOrder',
+            'deletePurchaseOrder',
 
-             'createGRN',
-             'viewGRN',
-             'updateGRN',
-             'deleteGRN',
+            'createGRN',
+            'viewGRN',
+            'updateGRN',
+            'deleteGRN',
 
-             'createQC',
-             'viewQC',
-             'updateQC',
-             'deleteQC',
+            'createQC',
+            'viewQC',
+            'updateQC',
+            'deleteQC',
 
-             'createDC',
-             'viewDC',
-             'updateDC',
-             'deleteDC', 
+            'createDC',
+            'viewDC',
+            'updateDC',
+            'deleteDC',
 
             'createMRF',
             'viewMRF',
@@ -187,7 +190,7 @@ const designationSchema = new mongoose.Schema({
             'deleteCampaign',
             'sendCampaign',
 
-            // ✅ NEW — Entero Systems WhatsApp Campaign
+            // Entero Systems WhatsApp Campaign
             'createEnteroCampaign',
             'viewEnteroCampaign',
             'updateEnteroCampaign',

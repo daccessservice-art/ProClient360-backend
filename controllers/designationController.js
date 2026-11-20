@@ -167,23 +167,47 @@ exports.create = async (req, res)=>{
   }
 };
 
-exports.update = async ( req, res)=>{
-    try {
-        const designation= await Designation.findByIdAndUpdate(req.params.id,req.body,{ new: true, runValidators: true });
+exports.update = async (req, res) => {
+  try {
+    const user = req.user;
+    const { name, department, permissions } = req.body;
 
-        if(!designation){
-            return res.status(404).json({success: false, error:"Designation not found"});
-        }
-      
-        res.status(200).json({
-            success: true,
-            message: "Designation Updated Successfully",
-        });
-        
-    } catch (error) {
-        res.status(500).json({error: "Error while Updating Designation: "+error.message});
+    if (!name || !department) {
+      return res.status(400).json({ success: false, error: "Name and department are required" });
     }
-}
+    if (!Array.isArray(permissions) || permissions.length === 0) {
+      return res.status(400).json({ success: false, error: "Please select at least one permission" });
+    }
+
+    // Popup can send department as populated object { _id, name } or as plain id
+    const departmentId = department?._id || department;
+
+    const designation = await Designation.findOneAndUpdate(
+      { _id: req.params.id, company: user.company ? user.company : user._id },
+      {
+        name,
+        department: departmentId,
+        permissions: [...new Set(permissions)], // remove duplicates
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!designation) {
+      return res.status(404).json({ success: false, error: "Designation not found" });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Designation Updated Successfully",
+    });
+
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, error: "Designation with this name already exists" });
+    }
+    res.status(500).json({ success: false, error: "Error while Updating Designation: " + error.message });
+  }
+};
 
 exports.delete = async (req, res) => {
   try {
