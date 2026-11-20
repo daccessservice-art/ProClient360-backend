@@ -72,22 +72,34 @@ const computeTotalInvoiceAmount = (account, taxAmountOverride) => {
     return (account.basicAmount || 0) + tax;
 };
 
+// ─── Helper: populate project + the employee who CREATED the project ──
+// Project.createdBy → Employee, so we can show "Created By" in Accounts.
+const PROJECT_POPULATE = {
+    path: 'projectId',
+    select: 'name projectStatus completeLevel createdBy createdAt',
+    populate: { path: 'createdBy', model: 'Employee', select: 'name' }
+};
+
 // ───────────────────────────────────────────────────────────────────
 // GET ALL ACCOUNTS
 // ───────────────────────────────────────────────────────────────────
 exports.getAllAccounts = async (req, res) => {
     try {
         const user = req.user;
-        const page  = parseInt(req.query.page)  || 1;
-        const limit = parseInt(req.query.limit) || 20;
+        const page  = Math.max(1, parseInt(req.query.page)  || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
         const skip  = (page - 1) * limit;
 
-        const { invoiceStatus, search, followUpDue } = req.query;
+        const { invoiceStatus, search, followUpDue, excludePaid } = req.query;
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
         let query = { company: companyId };
 
         if (invoiceStatus && ['Pending', 'Partial', 'Paid', 'Overdue'].includes(invoiceStatus)) {
             query['accountActions.invoiceStatus'] = invoiceStatus;
+        } else if (excludePaid === 'true') {
+            // ✅ Follow-Up page: filter Paid on the SERVER so every page has
+            // exactly `limit` rows and totalPages / totalRecords are correct.
+            query['accountActions.invoiceStatus'] = { $ne: 'Paid' };
         }
 
         if (followUpDue === 'today') {
@@ -108,16 +120,24 @@ exports.getAllAccounts = async (req, res) => {
             ];
         }
 
-        const accounts = await AccountMaster.find(query)
-            .skip(skip)
-            .limit(limit)
-            .populate('projectId', 'name projectStatus completeLevel')
-            .populate('createdBy', 'name')
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean();
+        const [accounts, totalRecords] = await Promise.all([
+            AccountMaster.find(query)
+                // sort BEFORE skip/limit; _id tie-breaker keeps pages stable
+                // (no rows repeated / skipped between pages)
+                .sort({ updatedAt: -1, createdAt: -1, _id: -1 })
+                .skip(skip)
+                .limit(limit)
+                .populate(PROJECT_POPULATE)
+                .lean(),
+            AccountMaster.countDocuments(query)
+        ]);
 
-        const totalRecords = await AccountMaster.countDocuments(query);
-        const totalPages   = Math.ceil(totalRecords / limit);
+        // flat field for the UI: name of the employee who created the project
+        accounts.forEach(a => {
+            a.projectCreatedBy = a.projectId?.createdBy?.name || 'N/A';
+        });
+
+        const totalPages = Math.ceil(totalRecords / limit);
 
         res.status(200).json({
             success: true,
@@ -147,16 +167,20 @@ exports.getAccountByProject = async (req, res) => {
         const companyId = new mongoose.Types.ObjectId(getCompanyId(user));
 
         let account = await AccountMaster.findOne({ projectId, company: companyId })
-            .populate('projectId', 'name projectStatus completeLevel')
-            .populate('createdBy', 'name')
+            .populate(PROJECT_POPULATE)
             .lean();
 
         if (!account) {
-            account = await exports.createAccountFromProject(projectId, user);
-            if (!account) {
+            const created = await exports.createAccountFromProject(projectId, user);
+            if (!created) {
                 return res.status(404).json({ success: false, error: 'Account not found' });
             }
+            account = await AccountMaster.findById(created._id)
+                .populate(PROJECT_POPULATE)
+                .lean();
         }
+
+        account.projectCreatedBy = account.projectId?.createdBy?.name || 'N/A';
 
         res.status(200).json({ success: true, account });
     } catch (error) {
@@ -398,17 +422,27 @@ exports.addFollowUp = async (req, res) => {
             return res.status(404).json({ success: false, error: 'Account not found' });
         }
 
+        if (!nextFollowUpDate) {
+            return res.status(400).json({ success: false, error: 'Next follow-up date is required' });
+        }
+        if (!remark || !String(remark).trim()) {
+            return res.status(400).json({ success: false, error: 'Remark is required' });
+        }
+
+        // Contacts are OPTIONAL — keep only rows that have at least one value
         let sanitizedContacts = [];
         if (contacts && Array.isArray(contacts)) {
-            sanitizedContacts = contacts.map(c => ({
-                contactPerson: c.contactPerson || '',
-                contactEmail:  c.contactEmail  || '',
-                contactPhone:  c.contactPhone  || ''
-            }));
+            sanitizedContacts = contacts
+                .map(c => ({
+                    contactPerson: (c.contactPerson || '').trim(),
+                    contactEmail:  (c.contactEmail  || '').trim(),
+                    contactPhone:  (c.contactPhone  || '').trim()
+                }))
+                .filter(c => c.contactPerson || c.contactEmail || c.contactPhone);
         }
 
         const followUpEntry = {
-            followUpDate:     new Date(followUpDate),
+            followUpDate:     followUpDate ? new Date(followUpDate) : new Date(),
             nextFollowUpDate: new Date(nextFollowUpDate),
             remark,
             contactPerson: sanitizedContacts.length > 0
@@ -424,7 +458,7 @@ exports.addFollowUp = async (req, res) => {
                 $push: { followUpHistory: followUpEntry },
                 $set:  {
                     'accountActions.nextFollowUpDate': new Date(nextFollowUpDate),
-                    'accountActions.lastFollowUpDate': new Date(followUpDate)
+                    'accountActions.lastFollowUpDate': followUpEntry.followUpDate
                 }
             },
             { new: true }
