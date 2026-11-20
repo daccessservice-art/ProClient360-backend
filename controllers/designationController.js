@@ -1,4 +1,3 @@
-
 const Designation = require('../models/designationModel');
 const Employee = require('../models/employeeModel');
 const Department = require('../models/departmentModel');
