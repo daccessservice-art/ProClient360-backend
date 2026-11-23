@@ -362,6 +362,8 @@ console.log('Registering /api/proclient routes...');
 app.use('/api/proclient', proclientRoutes);
 console.log('Proclient360 notification routes registered at /api/proclient');
 
+app.use('/api/location', require('./routes/locationRoutes'));
+
 
 app.use((err, req, res, next) => {  
   console.error('Error:', err);
