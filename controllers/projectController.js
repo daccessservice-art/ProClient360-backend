@@ -9,6 +9,8 @@ const TaskSheet = require("../models/taskSheetModel");
 const Customer = require("../models/customerModel");
 const {bucket} = require('../utils/firebase');
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
+// ✅ NEW: new project mail — mail to management when a new project is created
+const { sendNewProjectMail } = require('../mailsService/newProjectMail');
 
 // ─── ✅ NEW: Project approval helpers ─────────────────────────────────────────
 // Only this designation can approve / reject projects.
@@ -323,6 +325,12 @@ exports.create = async (req, res) => {
 
     const savedProject = await newProject.save();
     await logCreation(savedProject, user, req, 'Project');
+
+    // ✅ NEW: new project mail — sent in the background to management
+    // (does not slow down or break project creation if the mail fails)
+    sendNewProjectMail(savedProject._id).catch(err =>
+      console.error('[create] New project mail failed:', err.message)
+    );
 
     res.status(201).json({
       success: true,
