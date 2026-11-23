@@ -231,6 +231,17 @@ const leadSchema = new Schema({
     default: false,
   },
 
+  // ✅ NEW — who created this lead (employee OR company login)
+  createdBy: {
+    type: Schema.Types.ObjectId,
+    default: null,
+  },
+  createdByName: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+
   callUnansweredMailSent: {
     type: Boolean,
     default: false,

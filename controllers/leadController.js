@@ -686,6 +686,9 @@ exports.createLead = async (req, res) => {
       assignedTo:  assignedTo  ? new Types.ObjectId(assignedTo)  : new Types.ObjectId(user._id),
       assignedBy:  assignedBy  ? new Types.ObjectId(assignedBy)  : new Types.ObjectId(user._id),
       assignedTime: assignedTime || new Date(),
+      // ✅ NEW — save who created this lead
+      createdBy:     new Types.ObjectId(user._id),
+      createdByName: user.name || (user.user === 'company' ? 'Company Admin' : 'Unknown'),
     };
 
     if (customerType) leadData.customerType = customerType;
