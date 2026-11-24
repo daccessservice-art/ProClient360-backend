@@ -3,6 +3,8 @@
 // Financial Year = April → March. Index 0 = April ... 11 = March.
 // "Achieved" = sum of Project.purchaseOrderValue (without GST) of projects the
 // employee created (createdBy), bucketed by purchaseOrderDate (IST).
+// Incentive on achieved amount is CAPPED at 100% of target (management decision):
+// achieving more than the target does not give extra incentive.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -185,8 +187,10 @@ const buildSummary = ({ fy, targetDoc, projects }) => {
     const target = round2(monthlyTargets[i]);
     const ach = achieved[i];
     const eligibleAch = incentive.monthlyRequireAdvance ? achievedWithAdvance[i] : ach;
+    // ✅ monthly incentive only when 100% of the month's target is achieved
     const met = target > 0 && eligibleAch >= target;
-    const base = incentive.basis === 'achieved' ? eligibleAch : target;
+    // ✅ max 100% of target — no extra incentive above target
+    const base = incentive.basis === 'achieved' ? Math.min(eligibleAch, target) : target;
     return {
       index: i,
       label,
@@ -209,7 +213,7 @@ const buildSummary = ({ fy, targetDoc, projects }) => {
     const ach = round2(slice.reduce((s, m) => s + m.achieved, 0));
     const need = round2((target * incentive.quarterlyThreshold) / 100);
     const met = target > 0 && ach >= need;
-    const base = incentive.basis === 'achieved' ? ach : target;
+    const base = incentive.basis === 'achieved' ? Math.min(ach, target) : target; // ✅ max 100%
     return {
       index: q,
       label,
@@ -227,7 +231,7 @@ const buildSummary = ({ fy, targetDoc, projects }) => {
   const yearlyAchieved = round2(achieved.reduce((s, n) => s + n, 0));
   const yearlyNeed = round2((yearlyTarget * incentive.yearlyThreshold) / 100);
   const yearlyMet = yearlyTarget > 0 && yearlyAchieved >= yearlyNeed;
-  const yearlyBase = incentive.basis === 'achieved' ? yearlyAchieved : yearlyTarget;
+  const yearlyBase = incentive.basis === 'achieved' ? Math.min(yearlyAchieved, yearlyTarget) : yearlyTarget; // ✅ max 100%
 
   const yearly = {
     target: yearlyTarget,

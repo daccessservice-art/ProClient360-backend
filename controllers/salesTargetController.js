@@ -52,7 +52,7 @@ const fetchCreditedProjects = async (companyId, employeeIds, fy) => {
     createdBy: { $in: [...creators] },
     purchaseOrderDate: { $gte: start, $lt: end },
   })
-    .select('createdBy custId name purchaseOrderNo purchaseOrderDate purchaseOrderValue advancePay projectStatus category')
+    .select('createdBy custId name purchaseOrderNo purchaseOrderDate purchaseOrderValue advancePay projectStatus category approvalStatus')
     .populate('custId', 'custName')
     .sort({ purchaseOrderDate: -1 })
     .lean();
@@ -75,6 +75,8 @@ const poRow = (p) => ({
   splitWith: p.splitWith || [],
   advancePay: Number(p.advancePay) || 0,
   status: p.projectStatus,
+  // ✅ NEW: HR sees Pending / Rejected POs before paying (old projects = Approved)
+  approvalStatus: p.approvalStatus || 'Approved',
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
