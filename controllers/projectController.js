@@ -7,6 +7,7 @@ const Tasksheet = require("../models/taskSheetModel");
 const ProjectHistory = require("../models/projectHistoryModel");
 const TaskSheet = require("../models/taskSheetModel");
 const Customer = require("../models/customerModel");
+const AccountMaster = require("../models/accountMasterModel"); // ✅ NEW: sync PO Value to Account Master
 const {bucket} = require('../utils/firebase');
 const { logCreation, logUpdate, logDeletion } = require('../helpers/activityLogHelper');
 // ✅ NEW: new project mail — mail to management when a new project is created
@@ -664,6 +665,51 @@ exports.updateProject = async (req, res) => {
     };
 
     await logUpdate(oldProjectData, updatedProject, user, req, 'Project');
+
+    // ─── ✅ NEW: PO Value changed → update Account Master basicAmount ───────────
+    try {
+      const oldPOValue = Number(originalData.purchaseOrderValue) || 0;
+      const newPOValue = Number(updatedProjectDoc.purchaseOrderValue) || 0;
+
+      if (oldPOValue !== newPOValue) {
+        const account = await AccountMaster.findOne({ projectId: updatedProjectDoc._id });
+
+        if (account) {
+          const accountSet = { basicAmount: newPOValue };
+
+          // If no invoice is raised yet, the total is PO + tax, so recalculate
+          // the pending amount and status with the new PO value.
+          // (If invoices exist, their total is used, so nothing else changes.)
+          const invoicedTotal = (account.invoiceHistory || []).reduce(
+            (sum, inv) => sum + (inv.totalAmount || 0), 0
+          );
+          const actions = account.accountActions || {};
+
+          if (invoicedTotal <= 0 && Number(actions.totalInvoiceAmount) > 0) {
+            const taxAmount = Number(actions.taxAmount) || 0;
+            const receivedAmount = Number(actions.receivedAmount) || 0;
+            const totalInvoiceAmount = newPOValue + taxAmount;
+            const pendingAmount = Math.max(0, totalInvoiceAmount - receivedAmount);
+
+            let invoiceStatus = 'Pending';
+            if (totalInvoiceAmount > 0) {
+              if (pendingAmount <= 0) invoiceStatus = 'Paid';
+              else if (receivedAmount > 0) invoiceStatus = 'Partial';
+            }
+
+            accountSet['accountActions.totalInvoiceAmount'] = totalInvoiceAmount;
+            accountSet['accountActions.pendingAmount'] = pendingAmount;
+            accountSet['accountActions.invoiceStatus'] = invoiceStatus;
+          }
+
+          await AccountMaster.updateOne({ _id: account._id }, { $set: accountSet });
+        }
+      }
+    } catch (syncErr) {
+      // Do not fail the project update if the account sync fails
+      console.error("Account Master PO Value sync failed:", syncErr);
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
 
     return res.status(200).json({ success: true, message: "Project Updated Successfully" });
   } catch (error) {
