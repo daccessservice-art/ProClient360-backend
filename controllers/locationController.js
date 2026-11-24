@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const EngineerLocation = require('../models/engineerLocationModel');
 const EngineerDuty = require('../models/engineerDutyModel');
 const Employee = require('../models/employeeModel');
+const { checkPointAgainstOpenVisit } = require('./serviceVisitController'); // ✅ NEW — 100 m site check
 
 // ---------- Helpers ----------
 
@@ -158,7 +159,15 @@ exports.savePoints = async (req, res) => {
             await EngineerLocation.insertMany(docs, { ordered: false });
         }
 
-        res.status(201).json({ success: true, saved: docs.length, skipped });
+        // ✅ NEW — if engineer has started work on an onsite service, check the newest point
+        // against the 100 m site radius. App shows "geofence.warning" when outside.
+        let geofence = null;
+        if (docs.length > 0) {
+            const newest = docs.reduce((a, b) => (a.recordedAt > b.recordedAt ? a : b));
+            geofence = await checkPointAgainstOpenVisit(user._id, { lat: newest.lat, lng: newest.lng, accuracy: newest.accuracy });
+        }
+
+        res.status(201).json({ success: true, saved: docs.length, skipped, geofence });
     } catch (error) {
         res.status(500).json({ success: false, error: 'Error while saving location: ' + error.message });
     }
