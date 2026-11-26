@@ -50,8 +50,20 @@ const oldAMCHistorySchema = new mongoose.Schema({
   sentToSalesAt: { type: Date, default: null },
   sentToSalesByName: { type: String, default: '' },
 
-  // ── NEW: Link to the Project (Project Master) this AMC record was created from.
-  // Used so the "Project AMC Alerts" panel stops showing a project once its AMC is created. ──
+  // ── NEW: real link to the Sales Lead created from this AMC (Sales Master) ──
+  salesLead: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'lead',
+    default: null,
+  },
+  salesAssignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null, // Employee _id (or Company _id when company admin self-assigns)
+  },
+  salesAssignedToName: { type: String, default: '' },
+  salesAssignType: { type: String, enum: ['self', 'employee', ''], default: '' },
+
+  // Link to the Project (Project Master) this AMC record was created from.
   sourceProject: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
@@ -73,6 +85,7 @@ const oldAMCHistorySchema = new mongoose.Schema({
 oldAMCHistorySchema.index({ company: 1 });
 oldAMCHistorySchema.index({ custName: 1 });
 oldAMCHistorySchema.index({ importBatch: 1 });
-oldAMCHistorySchema.index({ sourceProject: 1 }); // ── NEW ──
+oldAMCHistorySchema.index({ sourceProject: 1 });
+oldAMCHistorySchema.index({ salesLead: 1 }); // ── NEW ──
 
 module.exports = mongoose.model('OldAMCHistory', oldAMCHistorySchema);

@@ -231,6 +231,17 @@ const leadSchema = new Schema({
     default: false,
   },
 
+  // ✅ NEW — true for leads created from Old AMC History (AMC renewal)
+  isAMCLead: {
+    type: Boolean,
+    default: false,
+  },
+  sourceAMC: {
+    type: Schema.Types.ObjectId,
+    ref: 'OldAMCHistory',
+    default: null,
+  },
+
   // ✅ NEW — who created this lead (employee OR company login)
   createdBy: {
     type: Schema.Types.ObjectId,
@@ -375,6 +386,8 @@ const leadSchema = new Schema({
     }
   }]
 }, { timestamps: true });
+
+leadSchema.index({ sourceAMC: 1 });
 
 const Lead = mongoose.model('lead', leadSchema);
 module.exports = Lead;

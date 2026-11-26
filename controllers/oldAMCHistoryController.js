@@ -4,6 +4,30 @@ const OldAMCHistory = require('../models/oldAMCHistoryModel');
 // ── NEW: needed for "Project AMC Alerts" (read-only, Project Master is NOT changed) ──
 const Project = require('../models/projectModel');
 require('../models/customerModel'); // make sure Customer model is registered for populate()
+// ── NEW: needed for "Assign AMC to Sales" (creates a real lead in Sales Master) ──
+const { Types } = require('mongoose');
+const Lead = require('../models/leadsModel');
+const Employee = require('../models/employeeModel');
+const { logLeadCreation } = require('../middlewares/activityLogger');
+const { notifyLeadAssigned, notifyLeadReassigned } = require('../services/leadNotificationService');
+
+// Lead SOURCE used for AMC renewal leads (also added to Sales Master source filter)
+const AMC_LEAD_SOURCE = 'AMC Renewal';
+
+const LEAD_INDUSTRY_TYPES = [
+  'IT & Software', 'Manufacturing', 'Construction & Infrastructure', 'Healthcare',
+  'Education', 'Retail', 'Banking & Finance', 'Logistics & Supply Chain', 'Hospitality',
+  'Real Estate', 'Government & Public Sector', 'Energy & Utilities', 'Telecom',
+  'Pharmaceuticals', 'Automotive', 'Dealer', 'Hotel', 'Gym & Club', 'Facility Services',
+  'Labour Contractor', 'Security Systems Dealer', 'Other',
+];
+const LEAD_CALL_TYPES = ['Hot Leads', 'Warm Leads', 'Cold Leads', 'Invalid Leads'];
+
+// Fields that belong to the Sales assignment — only the assign endpoint may change them
+const SALES_LOCKED_FIELDS = [
+  'salesLead', 'salesAssignedTo', 'salesAssignedToName', 'salesAssignType',
+  'sentToSales', 'sentToSalesAt', 'sentToSalesByName',
+];
 
 // ── NEW: show a project in the AMC alert list starting 2 months (60 days) before its End Date ──
 const PROJECT_AMC_ALERT_DAYS = 30;
@@ -377,23 +401,19 @@ exports.updateOldAMCHistory = async (req, res) => {
       if (!finalInProcess) finalFollowUp = null;
     }
 
-    const finalSentToSales = typeof updatedData.sentToSales === 'boolean' ? updatedData.sentToSales : !!existing.sentToSales;
-    let finalSentToSalesAt = null;
-    let finalSentToSalesByName = '';
-    if (finalSentToSales) {
-      if (existing.sentToSales) {
-        finalSentToSalesAt = existing.sentToSalesAt;
-        finalSentToSalesByName = existing.sentToSalesByName;
-      } else {
-        finalSentToSalesAt = new Date();
-        finalSentToSalesByName = user?.name || '';
-      }
-    }
+    // ── NEW: Sales assignment is managed ONLY by POST /:id/assign-sales.
+    //    Strip those fields from a normal edit (the grid sends a populated salesLead object). ──
+    const cleanData = { ...updatedData };
+    SALES_LOCKED_FIELDS.forEach((f) => delete cleanData[f]);
+    delete cleanData._id;
+    delete cleanData.company;
+    delete cleanData.createdAt;
+    delete cleanData.updatedAt;
 
     const updated = await OldAMCHistory.findByIdAndUpdate(
       id,
       {
-        ...updatedData,
+        ...cleanData,
         email: updatedData.email ? updatedData.email.toLowerCase().trim() : '',
         customerContactPersonEmail1: updatedData.customerContactPersonEmail1
           ? updatedData.customerContactPersonEmail1.toLowerCase().trim() : '',
@@ -405,10 +425,7 @@ exports.updateOldAMCHistory = async (req, res) => {
         nextFollowUpDate: finalFollowUp,
         lost: finalLost,
         lostAt: finalLost ? (existing.lost ? existing.lostAt : new Date()) : null,
-        sentToSales: finalSentToSales,
-        sentToSalesAt: finalSentToSalesAt,
-        sentToSalesByName: finalSentToSalesByName,
-        // ── NEW: never let an edit break the project link ──
+        // ── never let an edit break the project link ──
         sourceProject: existing.sourceProject || null,
         sourceProjectName: existing.sourceProjectName || '',
       },
@@ -423,6 +440,183 @@ exports.updateOldAMCHistory = async (req, res) => {
   } catch (error) {
     console.error('Error updating old AMC history record:', error);
     res.status(500).json({ success: false, error: 'Error updating record: ' + error.message });
+  }
+};
+
+// ══════════════════════════════════════════════════════════════════════
+// ── NEW: Assign an AMC to Sales (Self OR another Sales Employee) ──
+//    Creates a real Lead in Sales Master (feasible, so it shows in "My Sales Dashboard").
+//    If an open lead already exists for this AMC → it is RE-ASSIGNED (no duplicate).
+//    If the previous lead is Won / Lost → a NEW lead is created (next renewal cycle).
+//
+//    POST /api/old-amc-history/:id/assign-sales
+//    body: { assignmentType: 'self' | 'employee', assignedTo, products,
+//            callLeads, nextFollowUpDate, remark }
+// ══════════════════════════════════════════════════════════════════════
+exports.assignAMCToSales = async (req, res) => {
+  try {
+    const user = req.user;
+    const companyId = user.company || user._id;
+    const { id } = req.params;
+    const {
+      assignmentType = 'self',
+      assignedTo,
+      products,
+      callLeads,
+      nextFollowUpDate,
+      remark,
+    } = req.body || {};
+
+    if (!Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid AMC record id' });
+    }
+
+    const record = await OldAMCHistory.findOne({ _id: id, company: companyId });
+    if (!record) {
+      return res.status(404).json({ success: false, error: 'AMC record not found' });
+    }
+    if (record.lost) {
+      return res.status(400).json({ success: false, error: 'This AMC is marked as Lost. Remove "Lost" before assigning it to Sales.' });
+    }
+
+    // ── Resolve who the lead goes to ──
+    let ownerId;
+    let ownerName;
+    if (assignmentType === 'employee') {
+      if (!assignedTo || !Types.ObjectId.isValid(assignedTo)) {
+        return res.status(400).json({ success: false, error: 'Please select a Sales Employee' });
+      }
+      const emp = await Employee.findOne({ _id: assignedTo, company: companyId }).select('name');
+      if (!emp) {
+        return res.status(404).json({ success: false, error: 'Selected employee not found in your company' });
+      }
+      ownerId = emp._id;
+      ownerName = emp.name || '';
+    } else {
+      ownerId = new Types.ObjectId(user._id);
+      ownerName = user.name || (user.user === 'company' ? 'Company Admin' : '');
+    }
+
+    const followUp = nextFollowUpDate ? new Date(nextFollowUpDate) : null;
+    if (followUp && isNaN(followUp.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid follow-up date' });
+    }
+
+    // ── Existing OPEN lead → re-assign instead of creating a duplicate ──
+    let lead = null;
+    let isReassign = false;
+    if (record.salesLead) {
+      const existingLead = await Lead.findOne({ _id: record.salesLead, company: companyId });
+      if (existingLead && !['Won', 'Lost'].includes(existingLead.STATUS)) {
+        const oldOwner = existingLead.assignedTo ? String(existingLead.assignedTo) : '';
+        existingLead.assignedTo = ownerId;
+        existingLead.assignedBy = new Types.ObjectId(user._id);
+        existingLead.assignedTime = new Date();
+        existingLead.feasibility = 'feasible';
+        if (callLeads && LEAD_CALL_TYPES.includes(callLeads)) existingLead.callLeads = callLeads;
+        if (followUp) existingLead.nextFollowUpDate = followUp;
+        if (products && String(products).trim()) existingLead.QUERY_PRODUCT_NAME = String(products).trim();
+        await existingLead.save();
+        lead = existingLead;
+        isReassign = true;
+
+        if (oldOwner !== String(ownerId)) {
+          notifyLeadReassigned(lead, ownerId, user);
+        }
+      }
+    }
+
+    // ── No open lead → create a new one ──
+    if (!lead) {
+      const fmt = (d) => (d ? new Date(d).toLocaleDateString('en-IN') : 'N/A');
+      const messageLines = [
+        'AMC Renewal lead created from Old AMC History.',
+        `Customer: ${record.custName || 'N/A'}`,
+        `System: ${record.system || 'N/A'}`,
+        `AMC Start: ${fmt(record.startDate)}  |  AMC End: ${fmt(record.endDate)}`,
+        `Zone: ${record.zone || 'N/A'}  |  Owned By: ${record.ownedBy || 'N/A'}`,
+        record.GSTNo ? `GST: ${record.GSTNo}` : '',
+        record.remark ? `AMC Remark: ${record.remark}` : '',
+        remark ? `Assign Remark: ${remark}` : '',
+      ].filter(Boolean);
+
+      const leadData = {
+        company: new Types.ObjectId(companyId),
+        SOURCE: AMC_LEAD_SOURCE,
+        STATUS: 'Pending',
+        feasibility: 'feasible', // ── must be feasible to appear in My Sales Dashboard ──
+        callLeads: callLeads && LEAD_CALL_TYPES.includes(callLeads) ? callLeads : 'Warm Leads',
+        customerType: 'existing',
+        SENDER_COMPANY: record.custName || '',
+        SENDER_NAME: record.customerContactPersonName1 || record.custName || '',
+        SENDER_EMAIL: record.customerContactPersonEmail1 || record.email || '',
+        SENDER_MOBILE: record.phoneNumber1 || '',
+        SENDER_CITY: record.billingAddress?.city || '',
+        SENDER_STATE: record.billingAddress?.state || '',
+        SENDER_PINCODE: record.billingAddress?.pincode || '',
+        SENDER_COUNTRY_ISO: 'India',
+        SENDER_ADDRESS: [record.billingAddress?.city, record.billingAddress?.state].filter(Boolean).join(', '),
+        SUBJECT: `AMC Renewal - ${record.custName || ''}`.trim(),
+        QUERY_PRODUCT_NAME: (products && String(products).trim()) || record.system || 'AMC Renewal',
+        QUERY_MESSAGE: messageLines.join('\n'),
+        QUERY_TIME: new Date(),
+        callHistory: [],
+        assignedTo: ownerId,
+        assignedBy: new Types.ObjectId(user._id),
+        assignedTime: new Date(),
+        nextFollowUpDate: followUp || undefined,
+        createdBy: new Types.ObjectId(user._id),
+        createdByName: user.name || (user.user === 'company' ? 'Company Admin' : 'Unknown'),
+        isAMCLead: true,
+        sourceAMC: record._id,
+      };
+
+      if (['P1', 'P2', 'P3'].includes(String(record.customerPriority || '').toUpperCase())) {
+        leadData.customerPriority = String(record.customerPriority).toUpperCase();
+      }
+      if (record.industryType) {
+        if (LEAD_INDUSTRY_TYPES.includes(record.industryType)) {
+          leadData.industryType = record.industryType;
+        } else {
+          leadData.industryType = 'Other';
+          leadData.industryTypeOther = record.industryType;
+        }
+      }
+
+      lead = new Lead(leadData);
+      await lead.save();
+
+      try { await logLeadCreation(lead, user, req); } catch (e) { console.error('logLeadCreation failed:', e.message); }
+      notifyLeadAssigned(lead, ownerId, user); // service skips self-assign
+    }
+
+    // ── Update the AMC record ──
+    record.salesLead = lead._id;
+    record.salesAssignedTo = ownerId;
+    record.salesAssignedToName = ownerName;
+    record.salesAssignType = assignmentType === 'employee' ? 'employee' : 'self';
+    if (!record.sentToSales || !isReassign) {
+      record.sentToSalesAt = new Date();
+    }
+    record.sentToSales = true;
+    record.sentToSalesByName = user.name || '';
+    // AMC is now being worked on by Sales → mark In Process
+    record.inProcess = true;
+    if (followUp) record.nextFollowUpDate = followUp;
+    await record.save();
+
+    res.status(200).json({
+      success: true,
+      message: isReassign
+        ? `Sales lead re-assigned to ${ownerName || 'selected employee'}`
+        : `Sales lead created and assigned to ${assignmentType === 'self' ? 'you' : (ownerName || 'selected employee')}`,
+      record,
+      leadId: lead._id,
+      reassigned: isReassign,
+    });
+  } catch (error) {
+    console.error('Error assigning AMC to sales:', error);
+    res.status(500).json({ success: false, error: 'Error assigning AMC to Sales: ' + error.message });
   }
 };
 
@@ -500,6 +694,12 @@ exports.showAll = async (req, res) => {
       .skip(skip)
       .limit(limit)
       .sort({ custName: 1 })
+      // ── NEW: live status of the Sales lead created from this AMC ──
+      .populate({
+        path: 'salesLead',
+        select: 'STATUS step complated quotation nextFollowUpDate assignedTo',
+        populate: { path: 'assignedTo', select: 'name' },
+      })
       .lean();
 
     res.status(200).json({
@@ -588,6 +788,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
       { header: 'Sent To Sales', key: 'sentToSales', width: 14 },
       { header: 'Sent To Sales On', key: 'sentToSalesAt', width: 18 },
       { header: 'Sent To Sales By', key: 'sentToSalesBy', width: 20 },
+      { header: 'Sales Assigned To', key: 'salesAssignedToName', width: 22 }, // ── NEW ──
       { header: 'From Project', key: 'sourceProjectName', width: 28 }, // ── NEW ──
       { header: 'Imported On', key: 'importedOn', width: 18 },
     ];
@@ -628,6 +829,7 @@ exports.exportOldAMCHistoryExcel = async (req, res) => {
         sentToSales: r.sentToSales ? 'Yes' : 'No',
         sentToSalesAt: r.sentToSalesAt ? new Date(r.sentToSalesAt).toLocaleDateString() : '',
         sentToSalesBy: r.sentToSalesByName || '',
+        salesAssignedToName: r.salesAssignedToName || '',
         sourceProjectName: r.sourceProjectName || '', // ── NEW ──
         importedOn: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : '',
       });
