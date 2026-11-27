@@ -114,9 +114,23 @@ async function queueMarketingLead(mLead, { companyId } = {}) {
   if (!elig.ok) return { queued: false, reason: elig.reason };
   const ai = await syncAiLead(mLead, elig.phone);
   const camp = await getAutoCampaign();
-  const open = await CampaignLead.findOne({ campaign: camp._id, lead: ai._id, status: { $in: ['pending', 'calling'] } });
-  if (open) return { queued: false, reason: 'Already in the call queue' };
-  await CampaignLead.create({ campaign: camp._id, lead: ai._id, status: 'pending' });
+  // One queue entry per customer: re-use it (a customer can enquire again later)
+  const existing = await CampaignLead.findOne({ campaign: camp._id, lead: ai._id });
+  const stuck = existing && existing.status === 'calling' && existing.updatedAt && existing.updatedAt < new Date(Date.now() - 30 * 60000);
+  if (existing && (existing.status === 'pending' || (existing.status === 'calling' && !stuck))) {
+    return { queued: false, reason: 'Already in the call queue' };
+  }
+  if (existing) {
+    Object.assign(existing, { status: 'pending', attempts: 0, nextAttemptAt: null, skipReason: null, lastOutcome: null });
+    await existing.save();
+  } else {
+    try {
+      await CampaignLead.create({ campaign: camp._id, lead: ai._id, status: 'pending' });
+    } catch (e) {
+      if (e && e.code === 11000) return { queued: false, reason: 'Already in the call queue' };
+      throw e;
+    }
+  }
   return { queued: true, reason: 'Queued - Tripti will call within calling hours' };
 }
 
@@ -170,14 +184,14 @@ async function statusForLeads(mLeads) {
   const agg = await Call.aggregate([
     { $match: { lead: { $in: ids } } },
     { $sort: { createdAt: -1 } },
-    { $group: { _id: '$lead', calls: { $sum: 1 }, lastStatus: { $first: '$status' }, lastOutcome: { $first: '$outcome' }, lastAt: { $first: '$createdAt' } } },
+    { $group: { _id: '$lead', calls: { $sum: 1 }, lastStatus: { $first: '$status' }, lastOutcome: { $first: '$outcome' }, lastAt: { $first: '$createdAt' }, lastProviderId: { $first: '$providerCallId' } } },
   ]);
   const byLead = new Map(agg.map((a) => [String(a._id), a]));
   const out = {};
   for (const [mid, phone] of phoneOf) {
     const a = byPhone.get(phone);
     const s = a && byLead.get(String(a._id));
-    if (s) out[mid] = { calls: s.calls, lastStatus: s.lastStatus, lastOutcome: s.lastOutcome, lastAt: s.lastAt, stage: a.stage };
+    if (s) out[mid] = { calls: s.calls, lastStatus: s.lastStatus, lastOutcome: s.lastOutcome, lastAt: s.lastAt, stage: a.stage, dryRun: String(s.lastProviderId || '').startsWith('dryrun-') };
   }
   return out;
 }
