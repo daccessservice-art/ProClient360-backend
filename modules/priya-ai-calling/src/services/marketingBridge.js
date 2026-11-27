@@ -131,7 +131,7 @@ async function queueMarketingLead(mLead, { companyId } = {}) {
       throw e;
     }
   }
-  return { queued: true, reason: 'Queued - Tripti will call within calling hours' };
+  return { queued: true, reason: 'Queued - Arohi will call within calling hours' };
 }
 
 // Hook for leadController.createLead - never throws, never blocks lead creation

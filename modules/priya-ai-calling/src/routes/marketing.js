@@ -60,7 +60,7 @@ function createMarketingRouter() {
     const { call } = await bridge.callMarketingLead(req.params.leadId, req.user, { ignoreHours: !!req.body?.ignoreHours });
     res.json({
       success: true,
-      message: cfg.DRY_RUN ? 'Test mode (DRY_RUN=true): call recorded, no real phone call made' : 'Tripti is calling the customer now',
+      message: cfg.DRY_RUN ? 'Test mode (DRY_RUN=true): call recorded, no real phone call made' : 'Arohi is calling the customer now',
       call,
     });
   }));
@@ -77,7 +77,7 @@ function createMarketingRouter() {
       if (r2.queued) queued += 1;
       results.push({ leadId: id, name: mLead?.SENDER_NAME || '', ...r2 });
     }
-    res.json({ success: true, message: `${queued} of ${ids.length} lead(s) queued for Tripti`, queued, results });
+    res.json({ success: true, message: `${queued} of ${ids.length} lead(s) queued for Arohi`, queued, results });
   }));
 
   // Recent AI calls + today's numbers for the AI Agent dashboard popup
