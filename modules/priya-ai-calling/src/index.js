@@ -17,6 +17,7 @@ const models = require('./models');
 
 function mountAiCalling(app, { auth = (req, res, next) => next(), basePath = '/api/ai-calling', dashboardPath = '/ai-calling', startWorker = cfg.ENABLE_WORKER, marketingLeadModel = null } = {}) {
   app.use(createBolnaWebhookRouter()); // public (token protected) -> /webhooks/bolna
+  app.use(basePath, createBolnaWebhookRouter()); // same webhook under /api (works behind nginx): /api/ai-calling/webhooks/bolna
   if (marketingLeadModel) {
     marketingBridge.setMarketingLeadModel(marketingLeadModel);
     app.use(`${basePath}/marketing`, auth, createMarketingRouter()); // Marketing Master popup API
