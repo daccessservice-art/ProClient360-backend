@@ -11,6 +11,10 @@ const {
   notifySurveySubmitted,
 } = require('../services/leadNotificationService');
 
+// AI CALLING – NEW — Tripti auto-call hook (if the module is missing, leads work exactly as before)
+let aiCalling = null;
+try { aiCalling = require('../modules/priya-ai-calling/src'); } catch (e) { console.warn('[ai-calling] module not loaded:', e.message); }
+
 // ══════════════════════════════════════════════════════════════
 //  HELPER: Get Current Financial Year Start Date
 // ══════════════════════════════════════════════════════════════
@@ -725,6 +729,11 @@ exports.createLead = async (req, res) => {
     const lead = new Lead(leadData);
     await lead.save();
     await logLeadCreation(lead, user, req);
+
+    // AI CALLING – NEW — queue Marketing lead for Tripti (only allowed sources; never blocks or fails lead creation)
+    if (aiCalling && aiCalling.onMarketingLeadCreated) {
+      aiCalling.onMarketingLeadCreated(lead).catch(() => {});
+    }
 
     // ✅ NEW: notify sales employee when a lead is created & assigned to someone else
     //    (self-assigned leads are skipped inside the service)

@@ -1,0 +1,21 @@
+{
+  "name": "priya-ai-calling",
+  "version": "1.0.0",
+  "description": "DAccess Priya AI calling (Bolna) for Node.js + MongoDB CRM",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "mongoose": "^9.13.1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}

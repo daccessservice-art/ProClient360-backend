@@ -364,6 +364,21 @@ console.log('Proclient360 notification routes registered at /api/proclient');
 
 app.use('/api/location', require('./routes/locationRoutes'));
 
+// AI CALLING – NEW — Tripti (Bolna) AI calling agent for Marketing Master
+// API: /api/ai-calling/marketing/*   Bolna webhook: /webhooks/bolna?token=WEBHOOK_SECRET
+try {
+  const { mountAiCalling } = require('./modules/priya-ai-calling/src');
+  const { isLoggedIn } = require('./middlewares/auth');
+  mountAiCalling(app, {
+    auth: isLoggedIn,
+    marketingLeadModel: require('./models/leadsModel'),
+    dashboardPath: null,
+  });
+  console.log('AI calling agent (Tripti) registered at /api/ai-calling');
+} catch (e) {
+  console.error('[ai-calling] module not loaded:', e.message);
+}
+
 
 app.use((err, req, res, next) => {  
   console.error('Error:', err);
